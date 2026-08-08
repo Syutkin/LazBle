@@ -22,6 +22,14 @@
         <Filename Value="src\core\lazblebackend.pas"/>
         <UnitName Value="LazBleBackend"/>
       </Item>
+      <Item>
+        <Filename Value="src\core\lazblegattsession.pas"/>
+        <UnitName Value="LazBleGattSession"/>
+      </Item>
+      <Item>
+        <Filename Value="src\core\lazblecentralmanager.pas"/>
+        <UnitName Value="LazBleCentralManager"/>
+      </Item>
     </Files>
     <RequiredPkgs>
       <Item>

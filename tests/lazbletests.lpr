@@ -7,7 +7,9 @@ uses
   cthreads,
   {$ENDIF}
   consoletestrunner,
-  LazBleBackendTests;
+  LazBleBackendTests,
+  LazBleBackendConformanceTests,
+  LazBleCentralManagerTests;
 
 var
   Runner: TTestRunner;

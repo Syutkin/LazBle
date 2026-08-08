@@ -14,7 +14,7 @@
       <UseAppBundle Value="False"/>
       <ResourceType Value="res"/>
     </General>
-    <Units Count="3">
+    <Units Count="5">
       <Unit0>
         <Filename Value="lazbletests.lpr"/>
         <IsPartOfProject Value="True"/>
@@ -29,6 +29,16 @@
         <IsPartOfProject Value="True"/>
         <UnitName Value="FakeLazBleBackend"/>
       </Unit2>
+      <Unit3>
+        <Filename Value="backend\lazblebackendconformancetests.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="LazBleBackendConformanceTests"/>
+      </Unit3>
+      <Unit4>
+        <Filename Value="core\lazblecentralmanagertests.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="LazBleCentralManagerTests"/>
+      </Unit4>
     </Units>
   </ProjectOptions>
   <CompilerOptions>
@@ -38,7 +48,7 @@
       <Filename Value="bin\lazbletests"/>
     </Target>
     <SearchPaths>
-      <OtherUnitFiles Value="..\src;..\src\core;backend;support"/>
+      <OtherUnitFiles Value="..\src;..\src\core;backend;core;support"/>
       <UnitOutputDirectory Value="lib\$(TargetOS)-$(TargetCPU)"/>
     </SearchPaths>
     <Linking>

@@ -35,6 +35,7 @@ type
 
   TLazBleBackendCommand = record
     Kind: TLazBleBackendCommandKind;
+    Generation: QWord;
     AdapterId: string;
     DeviceId: string;
     ServiceUuid: string;

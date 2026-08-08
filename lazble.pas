@@ -8,7 +8,7 @@ unit LazBle;
 interface
 
 uses
-  LazBleTypes, LazBleBackend;
+  LazBleTypes, LazBleBackend, LazBleGattSession, LazBleCentralManager;
 
 implementation
 

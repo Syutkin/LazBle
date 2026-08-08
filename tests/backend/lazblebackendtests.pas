@@ -129,10 +129,15 @@ end;
 procedure TLazBleBackendTest.EmitPreservesEventIdentityAndPayload;
 var
   BackendEvent: TLazBleBackendEvent;
+  Command: TLazBleBackendCommand;
+  OperationId: TBleOperationId;
 begin
+  Command := Default(TLazBleBackendCommand);
+  Command.Kind := lbckSubscribe;
+  OperationId := FBackend.Submit(Command);
   BackendEvent := Default(TLazBleBackendEvent);
   BackendEvent.Kind := lbekNotification;
-  BackendEvent.OperationId := 7;
+  BackendEvent.OperationId := OperationId;
   BackendEvent.SubscriptionId := 11;
   BackendEvent.Generation := 3;
   BackendEvent.DeviceId := 'device-1';
@@ -146,7 +151,7 @@ begin
   AssertEquals(1, FEventSinkObject.EventCount);
   AssertEquals(Ord(lbekNotification),
     Ord(FEventSinkObject.Events[0].Kind));
-  AssertTrue(FEventSinkObject.Events[0].OperationId = 7);
+  AssertTrue(FEventSinkObject.Events[0].OperationId = OperationId);
   AssertTrue(FEventSinkObject.Events[0].SubscriptionId = 11);
   AssertTrue(FEventSinkObject.Events[0].Generation = 3);
   AssertEquals('device-1', FEventSinkObject.Events[0].DeviceId);
@@ -155,11 +160,19 @@ begin
 end;
 
 procedure TLazBleBackendTest.CancelOnlyRecordsTheRequestedOperation;
+var
+  Command: TLazBleBackendCommand;
+  OperationId: TBleOperationId;
 begin
-  FBackend.Cancel(42);
+  Command := Default(TLazBleBackendCommand);
+  Command.Kind := lbckRead;
+  OperationId := FBackend.Submit(Command);
+
+  FBackend.Cancel(OperationId);
+  FBackend.Cancel(OperationId);
 
   AssertEquals(1, FBackendObject.CancelledOperationCount);
-  AssertTrue(FBackendObject.CancelledOperationIds[0] = 42);
+  AssertTrue(FBackendObject.CancelledOperationIds[0] = OperationId);
   AssertEquals(0, FEventSinkObject.EventCount);
 end;
 
