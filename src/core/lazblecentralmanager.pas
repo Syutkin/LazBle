@@ -207,7 +207,6 @@ begin
     for Index := 0 to FSessions.Count - 1 do
       TBleGattSession(FSessions[Index]).HandleBackendShutdown;
     FBackend.SetEventSink(nil);
-    FBackend := nil;
     FEventSinkObject.Detach;
     FState := lbcsShutdown;
     Exit;

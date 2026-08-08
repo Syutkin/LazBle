@@ -14,6 +14,21 @@ uses
   FakeLazBleBackend;
 
 type
+  TBackendLifetimeObserver = class
+  private
+    FDestroyed: Boolean;
+  public
+    property Destroyed: Boolean read FDestroyed;
+  end;
+
+  TTrackedFakeLazBleBackend = class(TFakeLazBleBackend)
+  private
+    FObserver: TBackendLifetimeObserver;
+  public
+    constructor Create(const AObserver: TBackendLifetimeObserver);
+    destructor Destroy; override;
+  end;
+
   TCentralObserver = class
   private
     FScanResultCount: Integer;
@@ -62,11 +77,25 @@ type
     procedure SessionIgnoresEventsFromOldGeneration;
     procedure ScanCancellationDoesNotInterruptShutdown;
     procedure ShutdownWaitsForTerminalEventAndDetachesBackend;
+    procedure ShutdownRetainsBackendUntilManagerIsDestroyed;
     procedure ScanPublishesResultsAndCompletion;
     procedure SessionPublishesStateChanges;
   end;
 
 implementation
+
+constructor TTrackedFakeLazBleBackend.Create(
+  const AObserver: TBackendLifetimeObserver);
+begin
+  inherited Create;
+  FObserver := AObserver;
+end;
+
+destructor TTrackedFakeLazBleBackend.Destroy;
+begin
+  FObserver.FDestroyed := True;
+  inherited Destroy;
+end;
 
 procedure TCentralObserver.ScanResult(Sender: TObject;
   const ADeviceId, ADeviceName: string; const ARssi: SmallInt);
@@ -260,6 +289,39 @@ begin
   AssertEquals(Ord(lbcsShutdown), Ord(FManager.State));
   AssertFalse(FBackendObject.HasEventSink);
   AssertTrue(FManager.StartScan('hci0', 1000) = InvalidBleOperationId);
+end;
+
+procedure TLazBleCentralManagerTest.ShutdownRetainsBackendUntilManagerIsDestroyed;
+var
+  Backend: ILazBleBackend;
+  BackendObject: TTrackedFakeLazBleBackend;
+  Manager: TBleCentralManager;
+  Observer: TBackendLifetimeObserver;
+begin
+  FManager.Free;
+  FManager := nil;
+  FBackend := nil;
+  FBackendObject := nil;
+
+  Observer := TBackendLifetimeObserver.Create;
+  try
+    BackendObject := TTrackedFakeLazBleBackend.Create(Observer);
+    Backend := BackendObject;
+    Manager := TBleCentralManager.Create(Backend);
+    try
+      Manager.BeginShutdown;
+      AssertTrue(BackendObject.CompleteShutdown);
+      Backend := nil;
+
+      AssertFalse(Observer.Destroyed);
+    finally
+      Manager.Free;
+    end;
+    AssertTrue(Observer.Destroyed);
+  finally
+    Backend := nil;
+    Observer.Free;
+  end;
 end;
 
 procedure TLazBleCentralManagerTest.ScanCancellationDoesNotInterruptShutdown;

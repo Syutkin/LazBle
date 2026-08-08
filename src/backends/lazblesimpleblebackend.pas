@@ -277,6 +277,7 @@ begin
     Result := SimpleBleLoadLibrary;
   if Result then
   begin
+    SimpleBlePinLibrary;
     FLoaded := True;
     AErrorMessage := '';
   end
