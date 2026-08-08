@@ -14,6 +14,33 @@ uses
   FakeLazBleBackend;
 
 type
+  TCentralObserver = class
+  private
+    FScanResultCount: Integer;
+    FDeviceId: string;
+    FDeviceName: string;
+    FRssi: SmallInt;
+    FScanCompletedCount: Integer;
+    FScanSucceeded: Boolean;
+    FSessionStateCount: Integer;
+    FLastSessionState: TLazBleSessionState;
+  public
+    procedure ScanResult(Sender: TObject; const ADeviceId,
+      ADeviceName: string; const ARssi: SmallInt);
+    procedure ScanCompleted(Sender: TObject; const ASucceeded: Boolean;
+      const AErrorCode: Integer; const AErrorMessage: string);
+    procedure SessionStateChanged(Sender: TObject;
+      const AState: TLazBleSessionState);
+    property ScanResultCount: Integer read FScanResultCount;
+    property DeviceId: string read FDeviceId;
+    property DeviceName: string read FDeviceName;
+    property Rssi: SmallInt read FRssi;
+    property ScanCompletedCount: Integer read FScanCompletedCount;
+    property ScanSucceeded: Boolean read FScanSucceeded;
+    property SessionStateCount: Integer read FSessionStateCount;
+    property LastSessionState: TLazBleSessionState read FLastSessionState;
+  end;
+
   TLazBleCentralManagerTest = class(TTestCase)
   private
     FBackend: ILazBleBackend;
@@ -35,9 +62,35 @@ type
     procedure SessionIgnoresEventsFromOldGeneration;
     procedure ScanCancellationDoesNotInterruptShutdown;
     procedure ShutdownWaitsForTerminalEventAndDetachesBackend;
+    procedure ScanPublishesResultsAndCompletion;
+    procedure SessionPublishesStateChanges;
   end;
 
 implementation
+
+procedure TCentralObserver.ScanResult(Sender: TObject;
+  const ADeviceId, ADeviceName: string; const ARssi: SmallInt);
+begin
+  Inc(FScanResultCount);
+  FDeviceId := ADeviceId;
+  FDeviceName := ADeviceName;
+  FRssi := ARssi;
+end;
+
+procedure TCentralObserver.ScanCompleted(Sender: TObject;
+  const ASucceeded: Boolean; const AErrorCode: Integer;
+  const AErrorMessage: string);
+begin
+  Inc(FScanCompletedCount);
+  FScanSucceeded := ASucceeded;
+end;
+
+procedure TCentralObserver.SessionStateChanged(Sender: TObject;
+  const AState: TLazBleSessionState);
+begin
+  Inc(FSessionStateCount);
+  FLastSessionState := AState;
+end;
 
 procedure TLazBleCentralManagerTest.EmitOperationEvent(
   const AKind: TLazBleBackendEventKind;
@@ -222,6 +275,67 @@ begin
   AssertEquals(Ord(lbcsShuttingDown), Ord(FManager.State));
   AssertTrue(FBackendObject.CompleteShutdown);
   AssertEquals(Ord(lbcsShutdown), Ord(FManager.State));
+end;
+
+procedure TLazBleCentralManagerTest.ScanPublishesResultsAndCompletion;
+var
+  BackendEvent: TLazBleBackendEvent;
+  Observer: TCentralObserver;
+  ScanId: TBleOperationId;
+begin
+  Observer := TCentralObserver.Create;
+  try
+    FManager.OnScanResult := @Observer.ScanResult;
+    FManager.OnScanCompleted := @Observer.ScanCompleted;
+    ScanId := FManager.StartScan('', 1000);
+
+    BackendEvent := Default(TLazBleBackendEvent);
+    BackendEvent.Kind := lbekScanResult;
+    BackendEvent.OperationId := ScanId;
+    BackendEvent.DeviceId := 'AA:BB:CC:DD:EE:FF';
+    BackendEvent.DeviceName := 'ENTime';
+    BackendEvent.Rssi := -42;
+    AssertTrue(FBackendObject.EmitProgress(BackendEvent));
+    AssertTrue(FBackendObject.CompleteOperation(ScanId,
+      lbekOperationSucceeded));
+
+    AssertEquals(1, Observer.ScanResultCount);
+    AssertEquals('AA:BB:CC:DD:EE:FF', Observer.DeviceId);
+    AssertEquals('ENTime', Observer.DeviceName);
+    AssertEquals(-42, Integer(Observer.Rssi));
+    AssertEquals(1, Observer.ScanCompletedCount);
+    AssertTrue(Observer.ScanSucceeded);
+  finally
+    FManager.OnScanResult := nil;
+    FManager.OnScanCompleted := nil;
+    Observer.Free;
+  end;
+end;
+
+procedure TLazBleCentralManagerTest.SessionPublishesStateChanges;
+var
+  Observer: TCentralObserver;
+  Session: TBleGattSession;
+begin
+  Observer := TCentralObserver.Create;
+  try
+    Session := FManager.CreateSession('device-1');
+    Session.OnStateChanged := @Observer.SessionStateChanged;
+    Session.Connect;
+    AssertEquals(Ord(lbssConnecting), Ord(Observer.LastSessionState));
+
+    EmitOperationEvent(lbekConnected, FBackendObject.OperationIds[0],
+      Session.DeviceId, Session.Generation);
+    AssertEquals(Ord(lbssDiscovering), Ord(Observer.LastSessionState));
+    EmitOperationEvent(lbekServicesDiscovered,
+      FBackendObject.OperationIds[1], Session.DeviceId, Session.Generation);
+
+    AssertEquals(3, Observer.SessionStateCount);
+    AssertEquals(Ord(lbssConnected), Ord(Observer.LastSessionState));
+  finally
+    Session.OnStateChanged := nil;
+    Observer.Free;
+  end;
 end;
 
 initialization

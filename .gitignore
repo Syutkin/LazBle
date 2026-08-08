@@ -24,3 +24,5 @@ backup/
 /lib/
 /tests/bin/
 /tests/lib/
+/examples/bin/
+/examples/lib/

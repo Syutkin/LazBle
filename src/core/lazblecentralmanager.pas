@@ -19,6 +19,12 @@ type
     lbcsShutdown
   );
 
+  TLazBleScanResultEvent = procedure(Sender: TObject; const ADeviceId,
+    ADeviceName: string; const ARssi: SmallInt) of object;
+  TLazBleScanCompletedEvent = procedure(Sender: TObject;
+    const ASucceeded: Boolean; const AErrorCode: Integer;
+    const AErrorMessage: string) of object;
+
   TBleCentralManager = class;
 
   TLazBleManagerEventSink = class(TInterfacedObject,
@@ -40,6 +46,8 @@ type
     FState: TLazBleCentralState;
     FScanOperationId: TBleOperationId;
     FShutdownOperationId: TBleOperationId;
+    FOnScanResult: TLazBleScanResultEvent;
+    FOnScanCompleted: TLazBleScanCompletedEvent;
     function SubmitCommand(
       const ACommand: TLazBleBackendCommand): TBleOperationId;
     procedure CancelOperation(const AOperationId: TBleOperationId);
@@ -52,6 +60,10 @@ type
     function CreateSession(const ADeviceId: string): TBleGattSession;
     function BeginShutdown: TBleOperationId;
     property State: TLazBleCentralState read FState;
+    property OnScanResult: TLazBleScanResultEvent read FOnScanResult
+      write FOnScanResult;
+    property OnScanCompleted: TLazBleScanCompletedEvent read FOnScanCompleted
+      write FOnScanCompleted;
   end;
 
 implementation
@@ -184,6 +196,10 @@ begin
   if FState = lbcsShutdown then
     Exit;
 
+  if (AEvent.Kind = lbekScanResult) and
+    (AEvent.OperationId = FScanOperationId) and Assigned(FOnScanResult) then
+    FOnScanResult(Self, AEvent.DeviceId, AEvent.DeviceName, AEvent.Rssi);
+
   if (FState = lbcsShuttingDown) and
     (AEvent.Kind = lbekShutdownCompleted) and
     (AEvent.OperationId = FShutdownOperationId) then
@@ -206,6 +222,9 @@ begin
     FScanOperationId := InvalidBleOperationId;
     if FState = lbcsScanning then
       FState := lbcsIdle;
+    if Assigned(FOnScanCompleted) then
+      FOnScanCompleted(Self, AEvent.Kind = lbekOperationSucceeded,
+        AEvent.ErrorCode, AEvent.ErrorMessage);
   end;
 end;
 

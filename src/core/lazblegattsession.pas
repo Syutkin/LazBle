@@ -21,6 +21,9 @@ type
     lbssError
   );
 
+  TLazBleSessionStateChangedEvent = procedure(Sender: TObject;
+    const AState: TLazBleSessionState) of object;
+
   TLazBleSubmitCommand = function(
     const ACommand: TLazBleBackendCommand): TBleOperationId of object;
   TLazBleCancelOperation = procedure(
@@ -38,6 +41,8 @@ type
     FCancelOperation: TLazBleCancelOperation;
     FOperations: TList;
     FSubscriptions: TList;
+    FOnStateChanged: TLazBleSessionStateChangedEvent;
+    procedure SetState(const AState: TLazBleSessionState);
     function Submit(const AKind: TLazBleBackendCommandKind): TBleOperationId;
     function SubmitGattCommand(const ACommand: TLazBleBackendCommand):
       TBleGattOperation;
@@ -66,9 +71,20 @@ type
     property DeviceId: string read FDeviceId;
     property Generation: QWord read FGeneration;
     property State: TLazBleSessionState read FState;
+    property OnStateChanged: TLazBleSessionStateChangedEvent
+      read FOnStateChanged write FOnStateChanged;
   end;
 
 implementation
+
+procedure TBleGattSession.SetState(const AState: TLazBleSessionState);
+begin
+  if FState = AState then
+    Exit;
+  FState := AState;
+  if Assigned(FOnStateChanged) then
+    FOnStateChanged(Self, FState);
+end;
 
 constructor TBleGattSession.Create(const ADeviceId: string;
   const ASubmitCommand: TLazBleSubmitCommand;
@@ -225,11 +241,11 @@ begin
   Result := Submit(lbckConnect);
   if Result = InvalidBleOperationId then
   begin
-    FState := lbssError;
+    SetState(lbssError);
     Exit;
   end;
   FConnectOperationId := Result;
-  FState := lbssConnecting;
+  SetState(lbssConnecting);
 end;
 
 function TBleGattSession.Disconnect: TBleOperationId;
@@ -243,7 +259,7 @@ begin
   if Result = InvalidBleOperationId then
     Exit;
   FDisconnectOperationId := Result;
-  FState := lbssDisconnecting;
+  SetState(lbssDisconnecting);
 end;
 
 procedure TBleGattSession.HandleTerminalEvent(
@@ -256,16 +272,16 @@ begin
     (AEvent.OperationId = FDiscoveryOperationId) then
   begin
     if AEvent.Kind = lbekOperationCancelled then
-      FState := lbssDisconnected
+      SetState(lbssDisconnected)
     else
-      FState := lbssError;
+      SetState(lbssError);
   end
   else if AEvent.OperationId = FDisconnectOperationId then
   begin
     if AEvent.Kind = lbekOperationFailed then
-      FState := lbssError
+      SetState(lbssError)
     else
-      FState := lbssDisconnected;
+      SetState(lbssDisconnected);
   end;
 end;
 
@@ -291,19 +307,19 @@ begin
       begin
         FDiscoveryOperationId := Submit(lbckDiscoverServices);
         if FDiscoveryOperationId = InvalidBleOperationId then
-          FState := lbssError
+          SetState(lbssError)
         else
-          FState := lbssDiscovering;
+          SetState(lbssDiscovering);
       end;
     lbekServicesDiscovered:
       if (FState = lbssDiscovering) and
         (AEvent.OperationId = FDiscoveryOperationId) then
-        FState := lbssConnected;
+        SetState(lbssConnected);
     lbekDisconnected:
       if FState <> lbssDisconnected then
       begin
         InvalidateGattState;
-        FState := lbssDisconnected;
+        SetState(lbssDisconnected);
       end;
     lbekOperationSucceeded,
     lbekOperationFailed,
@@ -317,7 +333,7 @@ begin
   InvalidateGattState;
   FSubmitCommand := nil;
   FCancelOperation := nil;
-  FState := lbssDisconnected;
+  SetState(lbssDisconnected);
 end;
 
 end.
