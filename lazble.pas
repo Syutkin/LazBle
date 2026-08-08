@@ -9,7 +9,8 @@ interface
 
 uses
   LazBleTypes, LazBleBackend, LazBleGattOperation, LazBleGattSubscription,
-  LazBleGattSession, LazBleByteChannel, LazBleCentralManager, LazBleNus;
+  LazBleGattSession, LazBleByteChannel, LazBleCentralManager, LazBleNus,
+  LazBleBattery;
 
 implementation
 

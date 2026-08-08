@@ -23,6 +23,8 @@ type
 
   TLazBleSubmitCommand = function(
     const ACommand: TLazBleBackendCommand): TBleOperationId of object;
+  TLazBleCancelOperation = procedure(
+    const AOperationId: TBleOperationId) of object;
 
   TBleGattSession = class
   private
@@ -33,6 +35,7 @@ type
     FDiscoveryOperationId: TBleOperationId;
     FDisconnectOperationId: TBleOperationId;
     FSubmitCommand: TLazBleSubmitCommand;
+    FCancelOperation: TLazBleCancelOperation;
     FOperations: TList;
     FSubscriptions: TList;
     function Submit(const AKind: TLazBleBackendCommandKind): TBleOperationId;
@@ -44,7 +47,8 @@ type
     procedure HandleTerminalEvent(const AEvent: TLazBleBackendEvent);
   public
     constructor Create(const ADeviceId: string;
-      const ASubmitCommand: TLazBleSubmitCommand);
+      const ASubmitCommand: TLazBleSubmitCommand;
+      const ACancelOperation: TLazBleCancelOperation);
     destructor Destroy; override;
     function Connect: TBleOperationId;
     function Disconnect: TBleOperationId;
@@ -55,6 +59,8 @@ type
       TBleGattOperation;
     function SubscribeAsync(const AServiceUuid, ACharacteristicUuid: string):
       TBleSubscription;
+    procedure CancelOperation(const AOperation: TBleGattOperation);
+    procedure CancelSubscription(const ASubscription: TBleSubscription);
     procedure HandleBackendEvent(const AEvent: TLazBleBackendEvent);
     procedure HandleBackendShutdown;
     property DeviceId: string read FDeviceId;
@@ -65,14 +71,32 @@ type
 implementation
 
 constructor TBleGattSession.Create(const ADeviceId: string;
-  const ASubmitCommand: TLazBleSubmitCommand);
+  const ASubmitCommand: TLazBleSubmitCommand;
+  const ACancelOperation: TLazBleCancelOperation);
 begin
   inherited Create;
   FDeviceId := ADeviceId;
   FSubmitCommand := ASubmitCommand;
+  FCancelOperation := ACancelOperation;
   FState := lbssDisconnected;
   FOperations := TList.Create;
   FSubscriptions := TList.Create;
+end;
+
+procedure TBleGattSession.CancelOperation(
+  const AOperation: TBleGattOperation);
+begin
+  if Assigned(AOperation) and (AOperation.State = lbosPending) and
+    Assigned(FCancelOperation) then
+    FCancelOperation(AOperation.OperationId);
+end;
+
+procedure TBleGattSession.CancelSubscription(
+  const ASubscription: TBleSubscription);
+begin
+  if Assigned(ASubscription) and
+    (ASubscription.State = lbsubPending) and Assigned(FCancelOperation) then
+    FCancelOperation(ASubscription.OperationId);
 end;
 
 destructor TBleGattSession.Destroy;
@@ -292,6 +316,7 @@ procedure TBleGattSession.HandleBackendShutdown;
 begin
   InvalidateGattState;
   FSubmitCommand := nil;
+  FCancelOperation := nil;
   FState := lbssDisconnected;
 end;
 

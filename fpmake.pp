@@ -28,6 +28,7 @@ begin
     Package.Targets.AddUnit('lazblebytechannel.pas');
     Package.Targets.AddUnit('lazblecentralmanager.pas');
     Package.Targets.AddUnit('lazblenus.pas');
+    Package.Targets.AddUnit('lazblebattery.pas');
     Package.Targets.AddUnit('lazble.pas');
     Run;
   end;

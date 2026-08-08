@@ -42,6 +42,7 @@ type
     FShutdownOperationId: TBleOperationId;
     function SubmitCommand(
       const ACommand: TLazBleBackendCommand): TBleOperationId;
+    procedure CancelOperation(const AOperationId: TBleOperationId);
     procedure HandleBackendEvent(const AEvent: TLazBleBackendEvent);
   public
     constructor Create(const ABackend: ILazBleBackend);
@@ -60,6 +61,14 @@ constructor TLazBleManagerEventSink.Create(
 begin
   inherited Create;
   FManager := AManager;
+end;
+
+procedure TBleCentralManager.CancelOperation(
+  const AOperationId: TBleOperationId);
+begin
+  if Assigned(FBackend) and
+    not (FState in [lbcsShuttingDown, lbcsShutdown]) then
+    FBackend.Cancel(AOperationId);
 end;
 
 procedure TLazBleManagerEventSink.Detach;
@@ -151,7 +160,8 @@ begin
     if Result.DeviceId = ADeviceId then
       Exit;
   end;
-  Result := TBleGattSession.Create(ADeviceId, @SubmitCommand);
+  Result := TBleGattSession.Create(ADeviceId, @SubmitCommand,
+    @CancelOperation);
   FSessions.Add(Result);
 end;
 

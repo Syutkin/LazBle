@@ -12,7 +12,8 @@ uses
   LazBleCentralManagerTests,
   LazBleGattSessionTests,
   LazBleByteChannelTests,
-  LazBleNusTests;
+  LazBleNusTests,
+  LazBleBatteryTests;
 
 var
   Runner: TTestRunner;

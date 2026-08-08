@@ -46,6 +46,10 @@
         <Filename Value="src\profiles\lazblenus.pas"/>
         <UnitName Value="LazBleNus"/>
       </Item>
+      <Item>
+        <Filename Value="src\profiles\lazblebattery.pas"/>
+        <UnitName Value="LazBleBattery"/>
+      </Item>
     </Files>
     <RequiredPkgs>
       <Item>
