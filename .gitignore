@@ -13,6 +13,7 @@
 *.bak
 *.lps
 backup/
+/packagefiles.xml
 
 # FPPkg output
 /fpmake

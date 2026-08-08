@@ -9,6 +9,7 @@ uses
   consoletestrunner,
   LazBleBackendTests,
   LazBleBackendConformanceTests,
+  LazBleSimpleBleBackendTests,
   LazBleCentralManagerTests,
   LazBleGattSessionTests,
   LazBleByteChannelTests,

@@ -16,8 +16,10 @@ begin
     Package.License := 'MIT';
     Package.Description :=
       'Asynchronous BLE Central and GATT Client library for Free Pascal';
+    Package.Dependencies.Add('simpleblepascal');
     Package.SourcePath.Add('.');
     Package.SourcePath.Add('src');
+    Package.SourcePath.Add('src/backends');
     Package.SourcePath.Add('src/core');
     Package.SourcePath.Add('src/profiles');
     Package.Targets.AddUnit('lazbletypes.pas');
@@ -29,6 +31,7 @@ begin
     Package.Targets.AddUnit('lazblecentralmanager.pas');
     Package.Targets.AddUnit('lazblenus.pas');
     Package.Targets.AddUnit('lazblebattery.pas');
+    Package.Targets.AddUnit('lazblesimpleblebackend.pas');
     Package.Targets.AddUnit('lazble.pas');
     Run;
   end;

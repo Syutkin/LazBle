@@ -14,7 +14,7 @@
       <UseAppBundle Value="False"/>
       <ResourceType Value="res"/>
     </General>
-    <Units Count="9">
+    <Units Count="10">
       <Unit0>
         <Filename Value="lazbletests.lpr"/>
         <IsPartOfProject Value="True"/>
@@ -59,6 +59,11 @@
         <IsPartOfProject Value="True"/>
         <UnitName Value="LazBleBatteryTests"/>
       </Unit8>
+      <Unit9>
+        <Filename Value="backend\lazblesimpleblebackendtests.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="LazBleSimpleBleBackendTests"/>
+      </Unit9>
     </Units>
   </ProjectOptions>
   <CompilerOptions>
@@ -68,7 +73,7 @@
       <Filename Value="bin\lazbletests"/>
     </Target>
     <SearchPaths>
-      <OtherUnitFiles Value="..\src;..\src\core;..\src\profiles;backend;battery;core;nus;support"/>
+      <OtherUnitFiles Value="..\src;..\src\backends;..\src\core;..\src\profiles;..\..\simpleble_pascal\SimpleBleUnit;backend;battery;core;nus;support"/>
       <UnitOutputDirectory Value="lib\$(TargetOS)-$(TargetCPU)"/>
     </SearchPaths>
     <Linking>

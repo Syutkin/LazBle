@@ -9,7 +9,7 @@
       <Version Value="11"/>
       <PathDelim Value="\"/>
       <SearchPaths>
-        <OtherUnitFiles Value="src;src\core;src\profiles"/>
+        <OtherUnitFiles Value="src;src\backends;src\core;src\profiles"/>
         <UnitOutputDirectory Value="lib\$(TargetCPU)-$(TargetOS)"/>
       </SearchPaths>
     </CompilerOptions>
@@ -50,10 +50,17 @@
         <Filename Value="src\profiles\lazblebattery.pas"/>
         <UnitName Value="LazBleBattery"/>
       </Item>
+      <Item>
+        <Filename Value="src\backends\lazblesimpleblebackend.pas"/>
+        <UnitName Value="LazBleSimpleBleBackend"/>
+      </Item>
     </Files>
     <RequiredPkgs>
       <Item>
         <PackageName Value="FCL"/>
+      </Item>
+      <Item>
+        <PackageName Value="SimpleBlePascal"/>
       </Item>
     </RequiredPkgs>
     <UsageOptions>
