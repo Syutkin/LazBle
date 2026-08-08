@@ -23,6 +23,14 @@
         <UnitName Value="LazBleBackend"/>
       </Item>
       <Item>
+        <Filename Value="src\core\lazblegattoperation.pas"/>
+        <UnitName Value="LazBleGattOperation"/>
+      </Item>
+      <Item>
+        <Filename Value="src\core\lazblegattsubscription.pas"/>
+        <UnitName Value="LazBleGattSubscription"/>
+      </Item>
+      <Item>
         <Filename Value="src\core\lazblegattsession.pas"/>
         <UnitName Value="LazBleGattSession"/>
       </Item>

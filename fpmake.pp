@@ -21,6 +21,8 @@ begin
     Package.SourcePath.Add('src/core');
     Package.Targets.AddUnit('lazbletypes.pas');
     Package.Targets.AddUnit('lazblebackend.pas');
+    Package.Targets.AddUnit('lazblegattoperation.pas');
+    Package.Targets.AddUnit('lazblegattsubscription.pas');
     Package.Targets.AddUnit('lazblegattsession.pas');
     Package.Targets.AddUnit('lazblecentralmanager.pas');
     Package.Targets.AddUnit('lazble.pas');

@@ -9,7 +9,8 @@ uses
   consoletestrunner,
   LazBleBackendTests,
   LazBleBackendConformanceTests,
-  LazBleCentralManagerTests;
+  LazBleCentralManagerTests,
+  LazBleGattSessionTests;
 
 var
   Runner: TTestRunner;
