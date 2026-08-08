@@ -19,6 +19,7 @@ begin
     Package.SourcePath.Add('.');
     Package.SourcePath.Add('src');
     Package.SourcePath.Add('src/core');
+    Package.SourcePath.Add('src/profiles');
     Package.Targets.AddUnit('lazbletypes.pas');
     Package.Targets.AddUnit('lazblebackend.pas');
     Package.Targets.AddUnit('lazblegattoperation.pas');
@@ -26,6 +27,7 @@ begin
     Package.Targets.AddUnit('lazblegattsession.pas');
     Package.Targets.AddUnit('lazblebytechannel.pas');
     Package.Targets.AddUnit('lazblecentralmanager.pas');
+    Package.Targets.AddUnit('lazblenus.pas');
     Package.Targets.AddUnit('lazble.pas');
     Run;
   end;

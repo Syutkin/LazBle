@@ -11,7 +11,8 @@ uses
   LazBleBackendConformanceTests,
   LazBleCentralManagerTests,
   LazBleGattSessionTests,
-  LazBleByteChannelTests;
+  LazBleByteChannelTests,
+  LazBleNusTests;
 
 var
   Runner: TTestRunner;

@@ -14,7 +14,7 @@
       <UseAppBundle Value="False"/>
       <ResourceType Value="res"/>
     </General>
-    <Units Count="7">
+    <Units Count="8">
       <Unit0>
         <Filename Value="lazbletests.lpr"/>
         <IsPartOfProject Value="True"/>
@@ -49,6 +49,11 @@
         <IsPartOfProject Value="True"/>
         <UnitName Value="LazBleByteChannelTests"/>
       </Unit6>
+      <Unit7>
+        <Filename Value="nus\lazblenustests.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="LazBleNusTests"/>
+      </Unit7>
     </Units>
   </ProjectOptions>
   <CompilerOptions>
@@ -58,7 +63,7 @@
       <Filename Value="bin\lazbletests"/>
     </Target>
     <SearchPaths>
-      <OtherUnitFiles Value="..\src;..\src\core;backend;core;support"/>
+      <OtherUnitFiles Value="..\src;..\src\core;..\src\profiles;backend;core;nus;support"/>
       <UnitOutputDirectory Value="lib\$(TargetOS)-$(TargetCPU)"/>
     </SearchPaths>
     <Linking>

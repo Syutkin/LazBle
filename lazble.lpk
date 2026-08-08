@@ -9,7 +9,7 @@
       <Version Value="11"/>
       <PathDelim Value="\"/>
       <SearchPaths>
-        <OtherUnitFiles Value="src;src\core"/>
+        <OtherUnitFiles Value="src;src\core;src\profiles"/>
         <UnitOutputDirectory Value="lib\$(TargetCPU)-$(TargetOS)"/>
       </SearchPaths>
     </CompilerOptions>
@@ -41,6 +41,10 @@
       <Item>
         <Filename Value="src\core\lazblecentralmanager.pas"/>
         <UnitName Value="LazBleCentralManager"/>
+      </Item>
+      <Item>
+        <Filename Value="src\profiles\lazblenus.pas"/>
+        <UnitName Value="LazBleNus"/>
       </Item>
     </Files>
     <RequiredPkgs>
