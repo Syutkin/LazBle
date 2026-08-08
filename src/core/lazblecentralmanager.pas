@@ -24,6 +24,8 @@ type
   TLazBleScanCompletedEvent = procedure(Sender: TObject;
     const ASucceeded: Boolean; const AErrorCode: Integer;
     const AErrorMessage: string) of object;
+  TLazBleCentralStateChangedEvent = procedure(Sender: TObject;
+    const AState: TLazBleCentralState) of object;
 
   TBleCentralManager = class;
 
@@ -48,6 +50,8 @@ type
     FShutdownOperationId: TBleOperationId;
     FOnScanResult: TLazBleScanResultEvent;
     FOnScanCompleted: TLazBleScanCompletedEvent;
+    FOnStateChanged: TLazBleCentralStateChangedEvent;
+    procedure SetState(const AState: TLazBleCentralState);
     function SubmitCommand(
       const ACommand: TLazBleBackendCommand): TBleOperationId;
     procedure CancelOperation(const AOperationId: TBleOperationId);
@@ -57,6 +61,7 @@ type
     destructor Destroy; override;
     function StartScan(const AAdapterId: string;
       const ATimeoutMs: Cardinal): TBleOperationId;
+    procedure CancelScan;
     function CreateSession(const ADeviceId: string): TBleGattSession;
     function BeginShutdown: TBleOperationId;
     property State: TLazBleCentralState read FState;
@@ -64,9 +69,20 @@ type
       write FOnScanResult;
     property OnScanCompleted: TLazBleScanCompletedEvent read FOnScanCompleted
       write FOnScanCompleted;
+    property OnStateChanged: TLazBleCentralStateChangedEvent
+      read FOnStateChanged write FOnStateChanged;
   end;
 
 implementation
+
+procedure TBleCentralManager.SetState(const AState: TLazBleCentralState);
+begin
+  if FState = AState then
+    Exit;
+  FState := AState;
+  if Assigned(FOnStateChanged) then
+    FOnStateChanged(Self, FState);
+end;
 
 constructor TLazBleManagerEventSink.Create(
   const AManager: TBleCentralManager);
@@ -154,8 +170,15 @@ begin
   if Result <> InvalidBleOperationId then
   begin
     FScanOperationId := Result;
-    FState := lbcsScanning;
+    SetState(lbcsScanning);
   end;
+end;
+
+procedure TBleCentralManager.CancelScan;
+begin
+  if (FState = lbcsScanning) and
+    (FScanOperationId <> InvalidBleOperationId) then
+    CancelOperation(FScanOperationId);
 end;
 
 function TBleCentralManager.CreateSession(
@@ -183,7 +206,7 @@ begin
     Exit(FShutdownOperationId);
   if FState = lbcsShuttingDown then
     Exit(FShutdownOperationId);
-  FState := lbcsShuttingDown;
+  SetState(lbcsShuttingDown);
   FShutdownOperationId := FBackend.BeginShutdown;
   Result := FShutdownOperationId;
 end;
@@ -208,7 +231,7 @@ begin
       TBleGattSession(FSessions[Index]).HandleBackendShutdown;
     FBackend.SetEventSink(nil);
     FEventSinkObject.Detach;
-    FState := lbcsShutdown;
+    SetState(lbcsShutdown);
     Exit;
   end;
 
@@ -220,7 +243,7 @@ begin
   begin
     FScanOperationId := InvalidBleOperationId;
     if FState = lbcsScanning then
-      FState := lbcsIdle;
+      SetState(lbcsIdle);
     if Assigned(FOnScanCompleted) then
       FOnScanCompleted(Self, AEvent.Kind = lbekOperationSucceeded,
         AEvent.ErrorCode, AEvent.ErrorMessage);

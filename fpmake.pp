@@ -29,6 +29,8 @@ begin
     Package.Targets.AddUnit('lazblegattsession.pas');
     Package.Targets.AddUnit('lazblebytechannel.pas');
     Package.Targets.AddUnit('lazblecentralmanager.pas');
+    Package.Targets.AddUnit('lazbleclient.pas');
+    Package.Targets.AddUnit('lazbleclientsync.pas');
     Package.Targets.AddUnit('lazblenus.pas');
     Package.Targets.AddUnit('lazblebattery.pas');
     Package.Targets.AddUnit('lazblesimpleblebackend.pas');

@@ -8,42 +8,17 @@ uses
   {$ENDIF}
   Classes,
   SysUtils,
-  SyncObjs,
   CustApp,
   LazBleTypes,
-  LazBleBackend,
   LazBleGattSession,
-  LazBleCentralManager,
-  LazBleSimpleBleBackend;
+  LazBleClientSync,
+  BleExampleUtils;
 
 type
-  TInspectDevice = record
-    DeviceId: string;
-    DeviceName: string;
-    Rssi: SmallInt;
-  end;
-  TInspectDevices = array of TInspectDevice;
-
   TGattInspectApplication = class(TCustomApplication)
   private
-    FManager: TBleCentralManager;
+    FClientSync: TBleClientSync;
     FSession: TBleGattSession;
-    FDevicesLock: TRTLCriticalSection;
-    FDevices: TInspectDevices;
-    FScanCompletedEvent: TEvent;
-    FSessionStateEvent: TEvent;
-    FScanSucceeded: Boolean;
-    FScanErrorMessage: string;
-    procedure ScanResult(Sender: TObject; const ADeviceId,
-      ADeviceName: string; const ARssi: SmallInt);
-    procedure ScanCompleted(Sender: TObject; const ASucceeded: Boolean;
-      const AErrorCode: Integer; const AErrorMessage: string);
-    procedure SessionStateChanged(Sender: TObject;
-      const AState: TLazBleSessionState);
-    function ParseTimeout(out ATimeoutMs: Cardinal): Boolean;
-    function SelectDevice(const ARequestedDeviceId: string;
-      out ADeviceId: string): Boolean;
-    function WaitForSessionConnected(const ATimeoutMs: Cardinal): Boolean;
     procedure PrintGattSnapshot;
     procedure ShutdownBle;
     procedure Fail(const AMessage: string);
@@ -97,143 +72,12 @@ constructor TGattInspectApplication.Create(AOwner: TComponent);
 begin
   inherited Create(AOwner);
   StopOnException := True;
-  InitCriticalSection(FDevicesLock);
-  FScanCompletedEvent := TEvent.Create(nil, True, False, '');
-  FSessionStateEvent := TEvent.Create(nil, True, False, '');
 end;
 
 destructor TGattInspectApplication.Destroy;
 begin
   ShutdownBle;
-  FSessionStateEvent.Free;
-  FScanCompletedEvent.Free;
-  DoneCriticalSection(FDevicesLock);
   inherited Destroy;
-end;
-
-procedure TGattInspectApplication.ScanResult(Sender: TObject;
-  const ADeviceId, ADeviceName: string; const ARssi: SmallInt);
-var
-  Index: Integer;
-begin
-  EnterCriticalSection(FDevicesLock);
-  try
-    for Index := 0 to High(FDevices) do
-      if SameText(FDevices[Index].DeviceId, ADeviceId) then
-      begin
-        FDevices[Index].DeviceName := ADeviceName;
-        FDevices[Index].Rssi := ARssi;
-        Exit;
-      end;
-    Index := Length(FDevices);
-    SetLength(FDevices, Index + 1);
-    FDevices[Index].DeviceId := ADeviceId;
-    FDevices[Index].DeviceName := ADeviceName;
-    FDevices[Index].Rssi := ARssi;
-  finally
-    LeaveCriticalSection(FDevicesLock);
-  end;
-end;
-
-procedure TGattInspectApplication.ScanCompleted(Sender: TObject;
-  const ASucceeded: Boolean; const AErrorCode: Integer;
-  const AErrorMessage: string);
-begin
-  FScanSucceeded := ASucceeded;
-  FScanErrorMessage := AErrorMessage;
-  FScanCompletedEvent.SetEvent;
-end;
-
-procedure TGattInspectApplication.SessionStateChanged(Sender: TObject;
-  const AState: TLazBleSessionState);
-begin
-  FSessionStateEvent.SetEvent;
-end;
-
-function TGattInspectApplication.ParseTimeout(
-  out ATimeoutMs: Cardinal): Boolean;
-var
-  ParsedValue: QWord;
-  TimeoutText: string;
-begin
-  TimeoutText := GetOptionValue('t', 'timeout');
-  if TimeoutText = '' then
-  begin
-    ATimeoutMs := 5000;
-    Exit(True);
-  end;
-  Result := TryStrToQWord(TimeoutText, ParsedValue) and
-    (ParsedValue > 0) and (ParsedValue <= High(Cardinal));
-  if Result then
-    ATimeoutMs := ParsedValue;
-end;
-
-function TGattInspectApplication.SelectDevice(
-  const ARequestedDeviceId: string; out ADeviceId: string): Boolean;
-var
-  Devices: TInspectDevices;
-  Index: Integer;
-  Selection: Integer;
-  SelectionText: string;
-begin
-  EnterCriticalSection(FDevicesLock);
-  try
-    Devices := Copy(FDevices);
-  finally
-    LeaveCriticalSection(FDevicesLock);
-  end;
-
-  if ARequestedDeviceId <> '' then
-  begin
-    for Index := 0 to High(Devices) do
-      if SameText(Devices[Index].DeviceId, ARequestedDeviceId) then
-      begin
-        ADeviceId := Devices[Index].DeviceId;
-        Exit(True);
-      end;
-    WriteLn('Device was not found during scan: ', ARequestedDeviceId);
-    Exit(False);
-  end;
-
-  if Length(Devices) = 0 then
-  begin
-    WriteLn('No BLE devices were found.');
-    Exit(False);
-  end;
-  WriteLn('The following devices were found:');
-  for Index := 0 to High(Devices) do
-    WriteLn('[', Index, '] ', Devices[Index].DeviceName, ' [',
-      Devices[Index].DeviceId, '] ', Devices[Index].Rssi, ' dBm');
-  Write('Please select a device: ');
-  ReadLn(SelectionText);
-  Result := TryStrToInt(Trim(SelectionText), Selection) and
-    (Selection >= 0) and (Selection < Length(Devices));
-  if Result then
-    ADeviceId := Devices[Selection].DeviceId
-  else
-    WriteLn('Invalid device selection.');
-end;
-
-function TGattInspectApplication.WaitForSessionConnected(
-  const ATimeoutMs: Cardinal): Boolean;
-var
-  Deadline: QWord;
-  RemainingMs: QWord;
-begin
-  Deadline := GetTickCount64 + ATimeoutMs;
-  repeat
-    if FSession.State = lbssConnected then
-      Exit(True);
-    if FSession.State in [lbssDisconnected, lbssError] then
-      Exit(False);
-    if GetTickCount64 >= Deadline then
-      Exit(False);
-    RemainingMs := Deadline - GetTickCount64;
-    if RemainingMs > 100 then
-      RemainingMs := 100;
-    FSessionStateEvent.WaitFor(RemainingMs);
-    FSessionStateEvent.ResetEvent;
-  until False;
 end;
 
 procedure TGattInspectApplication.PrintGattSnapshot;
@@ -267,35 +111,14 @@ end;
 
 procedure TGattInspectApplication.ShutdownBle;
 var
-  Deadline: QWord;
+  ErrorMessage: string;
 begin
-  if Assigned(FSession) and
-    (FSession.State in [lbssConnecting, lbssDiscovering, lbssConnected,
-      lbssError]) then
-  begin
-    FSession.Disconnect;
-    Deadline := GetTickCount64 + 5000;
-    while (FSession.State <> lbssDisconnected) and
-      (GetTickCount64 < Deadline) do
-    begin
-      FSessionStateEvent.WaitFor(100);
-      FSessionStateEvent.ResetEvent;
-    end;
-  end;
-  if Assigned(FSession) then
-    FSession.OnStateChanged := nil;
+  if Assigned(FClientSync) and Assigned(FSession) then
+    FClientSync.Disconnect(FSession, 5000, ErrorMessage);
   FSession := nil;
-  if Assigned(FManager) then
-  begin
-    FManager.OnScanResult := nil;
-    FManager.OnScanCompleted := nil;
-    FManager.BeginShutdown;
-    Deadline := GetTickCount64 + 5000;
-    while (FManager.State <> lbcsShutdown) and
-      (GetTickCount64 < Deadline) do
-      Sleep(10);
-    FreeAndNil(FManager);
-  end;
+  if Assigned(FClientSync) then
+    FClientSync.Shutdown(5000, ErrorMessage);
+  FreeAndNil(FClientSync);
 end;
 
 procedure TGattInspectApplication.Fail(const AMessage: string);
@@ -308,18 +131,14 @@ end;
 procedure TGattInspectApplication.DoRun;
 var
   AdapterId: string;
-  Backend: ILazBleBackend;
   DeviceId: string;
+  Devices: TBleDeviceInfos;
   ErrorMessage: string;
   RequestedDeviceId: string;
   ScanTimeoutMs: Cardinal;
 begin
   ErrorMessage := CheckOptions('ha:d:t:', [
-    'help',
-    'adapter:',
-    'device:',
-    'timeout:'
-  ]);
+    'help', 'adapter:', 'device:', 'timeout:']);
   if ErrorMessage <> '' then
   begin
     Fail(ErrorMessage);
@@ -331,7 +150,8 @@ begin
     Terminate;
     Exit;
   end;
-  if not ParseTimeout(ScanTimeoutMs) then
+  if not TryParseBleTimeout(GetOptionValue('t', 'timeout'), 5000,
+    ScanTimeoutMs) then
   begin
     Fail('Invalid scan timeout.');
     Exit;
@@ -339,47 +159,30 @@ begin
 
   AdapterId := GetOptionValue('a', 'adapter');
   RequestedDeviceId := GetOptionValue('d', 'device');
-  Backend := TLazBleSimpleBleBackend.Create;
-  FManager := TBleCentralManager.Create(Backend);
-  Backend := nil;
-  FManager.OnScanResult := @ScanResult;
-  FManager.OnScanCompleted := @ScanCompleted;
+  FClientSync := TBleClientSync.Create;
 
   WriteLn('Scanning for BLE devices...');
-  if FManager.StartScan(AdapterId, ScanTimeoutMs) = InvalidBleOperationId then
+  if not FClientSync.Scan(AdapterId, ScanTimeoutMs, Devices,
+    ErrorMessage) then
   begin
-    Fail('Could not start BLE scan.');
+    if ErrorMessage = '' then
+      ErrorMessage := 'BLE scan failed.';
+    Fail(ErrorMessage);
     Exit;
   end;
-  if FScanCompletedEvent.WaitFor(ScanTimeoutMs + 10000) <> wrSignaled then
-  begin
-    Fail('BLE scan timed out.');
-    Exit;
-  end;
-  if not FScanSucceeded then
-  begin
-    if FScanErrorMessage = '' then
-      FScanErrorMessage := 'BLE scan failed.';
-    Fail(FScanErrorMessage);
-    Exit;
-  end;
-  if not SelectDevice(RequestedDeviceId, DeviceId) then
+  if not SelectBleDevice(Devices, RequestedDeviceId, DeviceId) then
   begin
     Fail('No device was selected.');
     Exit;
   end;
 
-  FSession := FManager.CreateSession(DeviceId);
-  FSession.OnStateChanged := @SessionStateChanged;
   WriteLn('Connecting to ', DeviceId, '...');
-  if FSession.Connect = InvalidBleOperationId then
+  if not FClientSync.Connect(DeviceId, 15000, FSession,
+    ErrorMessage) then
   begin
-    Fail('Could not start BLE connection.');
-    Exit;
-  end;
-  if not WaitForSessionConnected(15000) then
-  begin
-    Fail('Could not connect and discover GATT services.');
+    if ErrorMessage = '' then
+      ErrorMessage := 'Could not connect and discover GATT services.';
+    Fail(ErrorMessage);
     Exit;
   end;
 

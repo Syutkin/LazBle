@@ -43,6 +43,14 @@
         <UnitName Value="LazBleCentralManager"/>
       </Item>
       <Item>
+        <Filename Value="src\core\lazbleclient.pas"/>
+        <UnitName Value="LazBleClient"/>
+      </Item>
+      <Item>
+        <Filename Value="src\core\lazbleclientsync.pas"/>
+        <UnitName Value="LazBleClientSync"/>
+      </Item>
+      <Item>
         <Filename Value="src\profiles\lazblenus.pas"/>
         <UnitName Value="LazBleNus"/>
       </Item>

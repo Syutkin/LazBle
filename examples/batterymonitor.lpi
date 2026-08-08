@@ -14,11 +14,16 @@
       <UseAppBundle Value="False"/>
       <ResourceType Value="res"/>
     </General>
-    <Units Count="1">
+    <Units Count="2">
       <Unit0>
         <Filename Value="batterymonitor.lpr"/>
         <IsPartOfProject Value="True"/>
       </Unit0>
+      <Unit1>
+        <Filename Value="bleexampleutils.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="BleExampleUtils"/>
+      </Unit1>
     </Units>
     <RequiredPackages Count="1">
       <Item1>

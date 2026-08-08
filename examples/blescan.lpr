@@ -8,36 +8,16 @@ uses
   {$ENDIF}
   Classes,
   SysUtils,
-  SyncObjs,
   CustApp,
   LazBleTypes,
-  LazBleBackend,
-  LazBleCentralManager,
-  LazBleSimpleBleBackend;
+  LazBleClientSync,
+  BleExampleUtils;
 
 type
-  TScanDevice = record
-    DeviceId: string;
-    DeviceName: string;
-    Rssi: SmallInt;
-  end;
-  TScanDevices = array of TScanDevice;
-
   TBleScanApplication = class(TCustomApplication)
   private
-    FManager: TBleCentralManager;
-    FDevicesLock: TRTLCriticalSection;
-    FDevices: TScanDevices;
-    FScanCompletedEvent: TEvent;
-    FScanSucceeded: Boolean;
-    FScanErrorMessage: string;
-    procedure ScanResult(Sender: TObject; const ADeviceId,
-      ADeviceName: string; const ARssi: SmallInt);
-    procedure ScanCompleted(Sender: TObject; const ASucceeded: Boolean;
-      const AErrorCode: Integer; const AErrorMessage: string);
-    function ParseTimeout(out ATimeoutMs: Cardinal): Boolean;
-    function GetSortedDevices: TScanDevices;
-    procedure PrintDevices;
+    FClientSync: TBleClientSync;
+    procedure PrintDevices(const ADevices: TBleDeviceInfos);
     procedure ShutdownBle;
     procedure Fail(const AMessage: string);
   protected
@@ -52,107 +32,40 @@ constructor TBleScanApplication.Create(AOwner: TComponent);
 begin
   inherited Create(AOwner);
   StopOnException := True;
-  InitCriticalSection(FDevicesLock);
-  FScanCompletedEvent := TEvent.Create(nil, True, False, '');
 end;
 
 destructor TBleScanApplication.Destroy;
 begin
   ShutdownBle;
-  FScanCompletedEvent.Free;
-  DoneCriticalSection(FDevicesLock);
   inherited Destroy;
 end;
 
-procedure TBleScanApplication.ScanResult(Sender: TObject;
-  const ADeviceId, ADeviceName: string; const ARssi: SmallInt);
+procedure TBleScanApplication.PrintDevices(const ADevices: TBleDeviceInfos);
 var
-  Index: Integer;
-begin
-  EnterCriticalSection(FDevicesLock);
-  try
-    for Index := 0 to High(FDevices) do
-      if SameText(FDevices[Index].DeviceId, ADeviceId) then
-      begin
-        FDevices[Index].DeviceName := ADeviceName;
-        FDevices[Index].Rssi := ARssi;
-        Exit;
-      end;
-    Index := Length(FDevices);
-    SetLength(FDevices, Index + 1);
-    FDevices[Index].DeviceId := ADeviceId;
-    FDevices[Index].DeviceName := ADeviceName;
-    FDevices[Index].Rssi := ARssi;
-  finally
-    LeaveCriticalSection(FDevicesLock);
-  end;
-end;
-
-procedure TBleScanApplication.ScanCompleted(Sender: TObject;
-  const ASucceeded: Boolean; const AErrorCode: Integer;
-  const AErrorMessage: string);
-begin
-  FScanSucceeded := ASucceeded;
-  FScanErrorMessage := AErrorMessage;
-  FScanCompletedEvent.SetEvent;
-end;
-
-function TBleScanApplication.ParseTimeout(
-  out ATimeoutMs: Cardinal): Boolean;
-var
-  ParsedValue: QWord;
-  TimeoutText: string;
-begin
-  TimeoutText := GetOptionValue('t', 'timeout');
-  if TimeoutText = '' then
-  begin
-    ATimeoutMs := 5000;
-    Exit(True);
-  end;
-  Result := TryStrToQWord(TimeoutText, ParsedValue) and
-    (ParsedValue > 0) and (ParsedValue <= High(Cardinal));
-  if Result then
-    ATimeoutMs := ParsedValue;
-end;
-
-function TBleScanApplication.GetSortedDevices: TScanDevices;
-var
-  Current: TScanDevice;
+  Current: TBleDeviceInfo;
+  Devices: TBleDeviceInfos;
   Index: Integer;
   InsertAt: Integer;
 begin
-  EnterCriticalSection(FDevicesLock);
-  try
-    Result := Copy(FDevices);
-  finally
-    LeaveCriticalSection(FDevicesLock);
-  end;
-
-  for Index := 1 to High(Result) do
+  Devices := Copy(ADevices);
+  for Index := 1 to High(Devices) do
   begin
-    Current := Result[Index];
+    Current := Devices[Index];
     InsertAt := Index;
-    while (InsertAt > 0) and (Result[InsertAt - 1].Rssi < Current.Rssi) do
+    while (InsertAt > 0) and
+      (Devices[InsertAt - 1].Rssi < Current.Rssi) do
     begin
-      Result[InsertAt] := Result[InsertAt - 1];
+      Devices[InsertAt] := Devices[InsertAt - 1];
       Dec(InsertAt);
     end;
-    Result[InsertAt] := Current;
+    Devices[InsertAt] := Current;
   end;
-end;
 
-procedure TBleScanApplication.PrintDevices;
-var
-  Devices: TScanDevices;
-  Index: Integer;
-begin
-  Devices := GetSortedDevices;
   if Length(Devices) = 0 then
   begin
     WriteLn('No BLE devices were found.');
     Exit;
   end;
-
   WriteLn('The following devices were found:');
   for Index := 0 to High(Devices) do
     WriteLn('[', Index, '] ', Devices[Index].DeviceName, ' [',
@@ -161,18 +74,11 @@ end;
 
 procedure TBleScanApplication.ShutdownBle;
 var
-  Deadline: QWord;
+  ErrorMessage: string;
 begin
-  if not Assigned(FManager) then
-    Exit;
-  FManager.OnScanResult := nil;
-  FManager.OnScanCompleted := nil;
-  FManager.BeginShutdown;
-  Deadline := GetTickCount64 + 5000;
-  while (FManager.State <> lbcsShutdown) and
-    (GetTickCount64 < Deadline) do
-    Sleep(10);
-  FreeAndNil(FManager);
+  if Assigned(FClientSync) then
+    FClientSync.Shutdown(5000, ErrorMessage);
+  FreeAndNil(FClientSync);
 end;
 
 procedure TBleScanApplication.Fail(const AMessage: string);
@@ -185,15 +91,11 @@ end;
 procedure TBleScanApplication.DoRun;
 var
   AdapterId: string;
-  Backend: ILazBleBackend;
+  Devices: TBleDeviceInfos;
   ErrorMessage: string;
   ScanTimeoutMs: Cardinal;
 begin
-  ErrorMessage := CheckOptions('ha:t:', [
-    'help',
-    'adapter:',
-    'timeout:'
-  ]);
+  ErrorMessage := CheckOptions('ha:t:', ['help', 'adapter:', 'timeout:']);
   if ErrorMessage <> '' then
   begin
     Fail(ErrorMessage);
@@ -205,39 +107,26 @@ begin
     Terminate;
     Exit;
   end;
-  if not ParseTimeout(ScanTimeoutMs) then
+  if not TryParseBleTimeout(GetOptionValue('t', 'timeout'), 5000,
+    ScanTimeoutMs) then
   begin
     Fail('Invalid scan timeout.');
     Exit;
   end;
 
   AdapterId := GetOptionValue('a', 'adapter');
-  Backend := TLazBleSimpleBleBackend.Create;
-  FManager := TBleCentralManager.Create(Backend);
-  Backend := nil;
-  FManager.OnScanResult := @ScanResult;
-  FManager.OnScanCompleted := @ScanCompleted;
-
+  FClientSync := TBleClientSync.Create;
   WriteLn('Scanning for BLE devices...');
-  if FManager.StartScan(AdapterId, ScanTimeoutMs) = InvalidBleOperationId then
+  if not FClientSync.Scan(AdapterId, ScanTimeoutMs, Devices,
+    ErrorMessage) then
   begin
-    Fail('Could not start BLE scan.');
-    Exit;
-  end;
-  if FScanCompletedEvent.WaitFor(ScanTimeoutMs + 10000) <> wrSignaled then
-  begin
-    Fail('BLE scan timed out.');
-    Exit;
-  end;
-  if not FScanSucceeded then
-  begin
-    if FScanErrorMessage = '' then
-      FScanErrorMessage := 'BLE scan failed.';
-    Fail(FScanErrorMessage);
+    if ErrorMessage = '' then
+      ErrorMessage := 'BLE scan failed.';
+    Fail(ErrorMessage);
     Exit;
   end;
 
-  PrintDevices;
+  PrintDevices(Devices);
   ShutdownBle;
   Terminate;
 end;

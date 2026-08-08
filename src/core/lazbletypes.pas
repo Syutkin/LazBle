@@ -11,6 +11,13 @@ type
   TBleOperationId = type QWord;
   TBleSubscriptionId = type QWord;
 
+  TBleDeviceInfo = record
+    DeviceId: string;
+    DeviceName: string;
+    Rssi: SmallInt;
+  end;
+  TBleDeviceInfos = array of TBleDeviceInfo;
+
 const
   InvalidBleOperationId: TBleOperationId = 0;
   InvalidBleSubscriptionId: TBleSubscriptionId = 0;
