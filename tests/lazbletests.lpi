@@ -14,7 +14,7 @@
       <UseAppBundle Value="False"/>
       <ResourceType Value="res"/>
     </General>
-    <Units Count="6">
+    <Units Count="7">
       <Unit0>
         <Filename Value="lazbletests.lpr"/>
         <IsPartOfProject Value="True"/>
@@ -44,6 +44,11 @@
         <IsPartOfProject Value="True"/>
         <UnitName Value="LazBleGattSessionTests"/>
       </Unit5>
+      <Unit6>
+        <Filename Value="core\lazblebytechanneltests.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="LazBleByteChannelTests"/>
+      </Unit6>
     </Units>
   </ProjectOptions>
   <CompilerOptions>

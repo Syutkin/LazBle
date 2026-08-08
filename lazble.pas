@@ -9,7 +9,7 @@ interface
 
 uses
   LazBleTypes, LazBleBackend, LazBleGattOperation, LazBleGattSubscription,
-  LazBleGattSession, LazBleCentralManager;
+  LazBleGattSession, LazBleByteChannel, LazBleCentralManager;
 
 implementation
 

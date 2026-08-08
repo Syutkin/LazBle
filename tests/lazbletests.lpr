@@ -10,7 +10,8 @@ uses
   LazBleBackendTests,
   LazBleBackendConformanceTests,
   LazBleCentralManagerTests,
-  LazBleGattSessionTests;
+  LazBleGattSessionTests,
+  LazBleByteChannelTests;
 
 var
   Runner: TTestRunner;
