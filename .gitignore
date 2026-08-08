@@ -1,0 +1,25 @@
+# Free Pascal compiler output
+*.a
+*.compiled
+*.dbg
+*.o
+*.or
+*.ppu
+*.res
+*.rst
+*.rsj
+
+# Lazarus local and backup files
+*.bak
+*.lps
+backup/
+
+# FPPkg output
+/fpmake
+/*.fpm
+/units/
+
+# Lazarus and test output
+/lib/
+/tests/bin/
+/tests/lib/

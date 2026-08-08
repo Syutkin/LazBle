@@ -1,0 +1,16 @@
+<?xml version="1.0"?>
+<packages>
+<package name="lazble">
+ <version major="0" minor="1" micro="0"/>
+ <filename>lazble-0.1.0.source.zip</filename>
+ <author>Andrey Syutkin</author>
+ <license>MIT</license>
+ <email></email>
+ <description>Asynchronous BLE Central and GATT Client library for Free Pascal</description>
+ <dependencies>
+  <dependency>
+   <package packagename="rtl"/>
+  </dependency>
+ </dependencies>
+</package>
+</packages>
