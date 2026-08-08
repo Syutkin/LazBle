@@ -37,6 +37,7 @@ type
       const AOperationId: TBleOperationId;
       const ASubscriptionId: TBleSubscriptionId;
       const AValue: array of Byte);
+    procedure EmitServicesDiscovered(const AOperationId: TBleOperationId);
     function Subscribe: TBleSubscription;
   protected
     procedure SetUp; override;
@@ -48,9 +49,35 @@ type
     procedure SubscribeFailureMarksTokenFailed;
     procedure UnsubscribeIsIdempotent;
     procedure DisconnectInvalidatesSubscriptionAndIgnoresOldNotification;
+    procedure DiscoveryPublishesAnIndependentGattSnapshot;
   end;
 
 implementation
+
+procedure TLazBleGattSessionTest.EmitServicesDiscovered(
+  const AOperationId: TBleOperationId);
+var
+  BackendEvent: TLazBleBackendEvent;
+begin
+  BackendEvent := Default(TLazBleBackendEvent);
+  BackendEvent.Kind := lbekServicesDiscovered;
+  BackendEvent.OperationId := AOperationId;
+  BackendEvent.DeviceId := FSession.DeviceId;
+  BackendEvent.Generation := FSession.Generation;
+  SetLength(BackendEvent.Services, 1);
+  BackendEvent.Services[0].Uuid := 'service-1';
+  BackendEvent.Services[0].Data := [$10, $20];
+  SetLength(BackendEvent.Services[0].Characteristics, 1);
+  BackendEvent.Services[0].Characteristics[0].Uuid := 'characteristic-1';
+  BackendEvent.Services[0].Characteristics[0].Properties := [
+    lbgcpRead,
+    lbgcpNotify
+  ];
+  SetLength(BackendEvent.Services[0].Characteristics[0].Descriptors, 1);
+  BackendEvent.Services[0].Characteristics[0].Descriptors[0].Uuid :=
+    'descriptor-1';
+  AssertTrue(FBackendObject.EmitProgress(BackendEvent));
+end;
 
 procedure TDataObserver.DataReceived(Sender: TObject; const AValue: TBytes);
 begin
@@ -100,8 +127,33 @@ begin
   ConnectId := FSession.Connect;
   EmitEvent(lbekConnected, ConnectId, InvalidBleSubscriptionId, []);
   DiscoveryId := FBackendObject.OperationIds[1];
-  EmitEvent(lbekServicesDiscovered, DiscoveryId,
-    InvalidBleSubscriptionId, []);
+  EmitServicesDiscovered(DiscoveryId);
+end;
+
+procedure TLazBleGattSessionTest.DiscoveryPublishesAnIndependentGattSnapshot;
+var
+  Services: TLazBleGattServices;
+begin
+  Services := FSession.Services;
+
+  AssertEquals(1, Length(Services));
+  AssertEquals('service-1', Services[0].Uuid);
+  AssertEquals(2, Length(Services[0].Data));
+  AssertEquals(1, Length(Services[0].Characteristics));
+  AssertTrue(lbgcpRead in Services[0].Characteristics[0].Properties);
+  AssertTrue(lbgcpNotify in Services[0].Characteristics[0].Properties);
+  AssertEquals('descriptor-1',
+    Services[0].Characteristics[0].Descriptors[0].Uuid);
+
+  Services[0].Uuid := 'changed';
+  Services[0].Data[0] := $FF;
+  Services[0].Characteristics[0].Descriptors[0].Uuid := 'changed';
+  Services := FSession.Services;
+
+  AssertEquals('service-1', Services[0].Uuid);
+  AssertEquals($10, Integer(Services[0].Data[0]));
+  AssertEquals('descriptor-1',
+    Services[0].Characteristics[0].Descriptors[0].Uuid);
 end;
 
 procedure TLazBleGattSessionTest.TearDown;
@@ -210,6 +262,7 @@ begin
       InvalidBleSubscriptionId, []);
 
     AssertEquals(Ord(lbsubInactive), Ord(Subscription.State));
+    AssertEquals(0, Length(FSession.Services));
     EmitEvent(lbekNotification, InvalidBleOperationId,
       Subscription.SubscriptionId, [$44]);
     AssertEquals(0, Observer.CallCount);

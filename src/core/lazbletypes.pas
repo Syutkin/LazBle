@@ -21,6 +21,35 @@ type
     lbwmCommand
   );
 
+  TLazBleGattCharacteristicProperty = (
+    lbgcpRead,
+    lbgcpWriteRequest,
+    lbgcpWriteCommand,
+    lbgcpNotify,
+    lbgcpIndicate
+  );
+  TLazBleGattCharacteristicProperties = set of
+    TLazBleGattCharacteristicProperty;
+
+  TLazBleGattDescriptor = record
+    Uuid: string;
+  end;
+  TLazBleGattDescriptors = array of TLazBleGattDescriptor;
+
+  TLazBleGattCharacteristic = record
+    Uuid: string;
+    Properties: TLazBleGattCharacteristicProperties;
+    Descriptors: TLazBleGattDescriptors;
+  end;
+  TLazBleGattCharacteristics = array of TLazBleGattCharacteristic;
+
+  TLazBleGattService = record
+    Uuid: string;
+    Data: TBytes;
+    Characteristics: TLazBleGattCharacteristics;
+  end;
+  TLazBleGattServices = array of TLazBleGattService;
+
   TLazBleBackendCommandKind = (
     lbckStartScan,
     lbckStopScan,
@@ -78,10 +107,13 @@ type
     Value: TBytes;
     ErrorCode: Integer;
     ErrorMessage: string;
+    Services: TLazBleGattServices;
   end;
 
 function LazBleBackendEventIsTerminal(
   const AEvent: TLazBleBackendEvent): Boolean;
+function LazBleCopyGattServices(
+  const AServices: TLazBleGattServices): TLazBleGattServices;
 
 implementation
 
@@ -94,6 +126,34 @@ begin
     lbekOperationCancelled,
     lbekShutdownCompleted
   ];
+end;
+
+function LazBleCopyGattServices(
+  const AServices: TLazBleGattServices): TLazBleGattServices;
+var
+  CharacteristicIndex: Integer;
+  ServiceIndex: Integer;
+begin
+  Result := nil;
+  SetLength(Result, Length(AServices));
+  for ServiceIndex := 0 to High(AServices) do
+  begin
+    Result[ServiceIndex].Uuid := AServices[ServiceIndex].Uuid;
+    Result[ServiceIndex].Data := Copy(AServices[ServiceIndex].Data);
+    SetLength(Result[ServiceIndex].Characteristics,
+      Length(AServices[ServiceIndex].Characteristics));
+    for CharacteristicIndex := 0 to
+      High(AServices[ServiceIndex].Characteristics) do
+    begin
+      Result[ServiceIndex].Characteristics[CharacteristicIndex].Uuid :=
+        AServices[ServiceIndex].Characteristics[CharacteristicIndex].Uuid;
+      Result[ServiceIndex].Characteristics[CharacteristicIndex].Properties :=
+        AServices[ServiceIndex].Characteristics[CharacteristicIndex].Properties;
+      Result[ServiceIndex].Characteristics[CharacteristicIndex].Descriptors :=
+        Copy(AServices[ServiceIndex].Characteristics[
+          CharacteristicIndex].Descriptors);
+    end;
+  end;
 end;
 
 end.

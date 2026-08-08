@@ -205,6 +205,76 @@ begin
     Move(NormalizedValue[1], ANativeUuid.Value[0], Length(NormalizedValue));
 end;
 
+function CopyNativeUuid(const AValue: TSimpleBleUuid): string;
+var
+  ValueLength: Integer;
+begin
+  ValueLength := 0;
+  while (ValueLength < SIMPLEBLE_UUID_STR_LEN) and
+    (AValue.Value[ValueLength] <> #0) do
+    Inc(ValueLength);
+  SetString(Result, PChar(@AValue.Value[0]), ValueLength);
+end;
+
+procedure CopyNativeService(const ASource: TSimpleBleService;
+  out ADestination: TLazBleGattService);
+var
+  CharacteristicCount: NativeUInt;
+  CharacteristicIndex: NativeUInt;
+  DataLength: NativeUInt;
+  DescriptorCount: NativeUInt;
+  DescriptorIndex: NativeUInt;
+  NativeCharacteristic: TSimpleBleCharacteristic;
+begin
+  ADestination := Default(TLazBleGattService);
+  ADestination.Uuid := CopyNativeUuid(ASource.Uuid);
+
+  DataLength := ASource.DataLength;
+  if DataLength > Length(ASource.Data) then
+    DataLength := Length(ASource.Data);
+  SetLength(ADestination.Data, DataLength);
+  if DataLength > 0 then
+    Move(ASource.Data[0], ADestination.Data[0], DataLength);
+
+  CharacteristicCount := ASource.CharacteristicCount;
+  if CharacteristicCount > Length(ASource.Characteristics) then
+    CharacteristicCount := Length(ASource.Characteristics);
+  SetLength(ADestination.Characteristics, CharacteristicCount);
+  if CharacteristicCount > 0 then
+    for CharacteristicIndex := 0 to CharacteristicCount - 1 do
+    begin
+      NativeCharacteristic := ASource.Characteristics[CharacteristicIndex];
+      ADestination.Characteristics[CharacteristicIndex].Uuid :=
+        CopyNativeUuid(NativeCharacteristic.Uuid);
+      if NativeCharacteristic.CanRead then
+        Include(ADestination.Characteristics[
+          CharacteristicIndex].Properties, lbgcpRead);
+      if NativeCharacteristic.CanWriteRequest then
+        Include(ADestination.Characteristics[
+          CharacteristicIndex].Properties, lbgcpWriteRequest);
+      if NativeCharacteristic.CanWriteCommand then
+        Include(ADestination.Characteristics[
+          CharacteristicIndex].Properties, lbgcpWriteCommand);
+      if NativeCharacteristic.CanNotify then
+        Include(ADestination.Characteristics[
+          CharacteristicIndex].Properties, lbgcpNotify);
+      if NativeCharacteristic.CanIndicate then
+        Include(ADestination.Characteristics[
+          CharacteristicIndex].Properties, lbgcpIndicate);
+
+      DescriptorCount := NativeCharacteristic.DescriptorCount;
+      if DescriptorCount > Length(NativeCharacteristic.Descriptors) then
+        DescriptorCount := Length(NativeCharacteristic.Descriptors);
+      SetLength(ADestination.Characteristics[
+        CharacteristicIndex].Descriptors, DescriptorCount);
+      if DescriptorCount > 0 then
+        for DescriptorIndex := 0 to DescriptorCount - 1 do
+          ADestination.Characteristics[CharacteristicIndex].Descriptors[
+            DescriptorIndex].Uuid := CopyNativeUuid(
+              NativeCharacteristic.Descriptors[DescriptorIndex].Uuid);
+    end;
+end;
+
 procedure NativeScanStarted(AAdapter: TSimpleBleAdapter;
   AUserData: Pointer); cdecl;
 begin
@@ -660,7 +730,12 @@ begin
     Exit(False);
   end;
   ServiceCount := SimpleBlePeripheralServicesCount(Entry.Handle);
-  NativeError := SIMPLEBLE_SUCCESS;
+  BackendEvent := Default(TLazBleBackendEvent);
+  BackendEvent.Kind := lbekServicesDiscovered;
+  BackendEvent.OperationId := FOperationId;
+  BackendEvent.Generation := Entry.Generation;
+  BackendEvent.DeviceId := Entry.DeviceId;
+  SetLength(BackendEvent.Services, ServiceCount);
   if ServiceCount > 0 then
     for Index := 0 to ServiceCount - 1 do
     begin
@@ -668,20 +743,15 @@ begin
       NativeError := SimpleBlePeripheralServicesGet(Entry.Handle, Index,
         Service);
       if NativeError <> SIMPLEBLE_SUCCESS then
-        Break;
+      begin
+        AErrorCode := Ord(NativeError);
+        AErrorMessage := 'SimpleBLE service discovery failed';
+        Exit(False);
+      end;
+      CopyNativeService(Service, BackendEvent.Services[Index]);
     end;
-  AErrorCode := Ord(NativeError);
-  Result := NativeError = SIMPLEBLE_SUCCESS;
-  if not Result then
-  begin
-    AErrorMessage := 'SimpleBLE service discovery failed';
-    Exit;
-  end;
-  BackendEvent := Default(TLazBleBackendEvent);
-  BackendEvent.Kind := lbekServicesDiscovered;
-  BackendEvent.OperationId := FOperationId;
-  BackendEvent.Generation := Entry.Generation;
-  BackendEvent.DeviceId := Entry.DeviceId;
+  AErrorCode := Ord(SIMPLEBLE_SUCCESS);
+  Result := True;
   FEventSink.Emit(BackendEvent);
 end;
 

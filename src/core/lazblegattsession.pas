@@ -41,8 +41,10 @@ type
     FCancelOperation: TLazBleCancelOperation;
     FOperations: TList;
     FSubscriptions: TList;
+    FServices: TLazBleGattServices;
     FOnStateChanged: TLazBleSessionStateChangedEvent;
     procedure SetState(const AState: TLazBleSessionState);
+    function GetServices: TLazBleGattServices;
     function Submit(const AKind: TLazBleBackendCommandKind): TBleOperationId;
     function SubmitGattCommand(const ACommand: TLazBleBackendCommand):
       TBleGattOperation;
@@ -71,11 +73,17 @@ type
     property DeviceId: string read FDeviceId;
     property Generation: QWord read FGeneration;
     property State: TLazBleSessionState read FState;
+    property Services: TLazBleGattServices read GetServices;
     property OnStateChanged: TLazBleSessionStateChangedEvent
       read FOnStateChanged write FOnStateChanged;
   end;
 
 implementation
+
+function TBleGattSession.GetServices: TLazBleGattServices;
+begin
+  Result := LazBleCopyGattServices(FServices);
+end;
 
 procedure TBleGattSession.SetState(const AState: TLazBleSessionState);
 begin
@@ -225,6 +233,7 @@ procedure TBleGattSession.InvalidateGattState;
 var
   Index: Integer;
 begin
+  FServices := nil;
   for Index := 0 to FOperations.Count - 1 do
     TBleGattOperation(FOperations[Index]).CancelLocally;
   for Index := 0 to FSubscriptions.Count - 1 do
@@ -237,6 +246,7 @@ begin
   if not (FState in [lbssDisconnected, lbssError]) then
     Exit;
 
+  FServices := nil;
   Inc(FGeneration);
   Result := Submit(lbckConnect);
   if Result = InvalidBleOperationId then
@@ -314,7 +324,10 @@ begin
     lbekServicesDiscovered:
       if (FState = lbssDiscovering) and
         (AEvent.OperationId = FDiscoveryOperationId) then
+      begin
+        FServices := LazBleCopyGattServices(AEvent.Services);
         SetState(lbssConnected);
+      end;
     lbekDisconnected:
       if FState <> lbssDisconnected then
       begin
