@@ -427,9 +427,9 @@ begin
   Index := FClients.IndexOf(AClient);
   if Index < 0 then
     raise EArgumentException.Create('Client does not belong to this LazBle');
-  if AClient.State <> lbcstDisconnected then
+  if not (AClient.State in [lbcstDisconnected, lbcstError]) then
     raise EInvalidOperation.Create(
-      'BLE client must be disconnected before it can be removed');
+      'BLE client must be disconnected or in error before it can be removed');
   FClients.Delete(Index);
   AClient.Free;
 end;

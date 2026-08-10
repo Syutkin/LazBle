@@ -143,7 +143,7 @@ type
     procedure ReconnectSettingsChanged(Sender: TObject);
     procedure ApplyReconnectSettings;
     procedure EnsureCoreClient;
-    procedure RemoveDisconnectedCoreClient;
+    procedure RemoveReplaceableCoreClient;
     procedure DetachCoreClient;
     procedure CoreStateChanged(Sender: TObject;
       const AState: TLazBleClientState);
@@ -574,7 +574,7 @@ begin
     Exit;
   if Assigned(AValue) then
     AValue.ValidateClientDeviceId(Self, FDeviceId);
-  RemoveDisconnectedCoreClient;
+  RemoveReplaceableCoreClient;
   if Assigned(FLazBle) then
   begin
     FLazBle.UnregisterClient(Self);
@@ -594,7 +594,7 @@ begin
     Exit;
   if Assigned(FLazBle) then
     FLazBle.ValidateClientDeviceId(Self, AValue);
-  RemoveDisconnectedCoreClient;
+  RemoveReplaceableCoreClient;
   FDeviceId := AValue;
   FDeviceName := '';
 end;
@@ -678,15 +678,15 @@ begin
   end;
 end;
 
-procedure TLazBleLclClient.RemoveDisconnectedCoreClient;
+procedure TLazBleLclClient.RemoveReplaceableCoreClient;
 var
   OldCoreClient: TBleClient;
 begin
   if not Assigned(FCoreClient) then
     Exit;
-  if FCoreClient.State <> lbcstDisconnected then
+  if not (FCoreClient.State in [lbcstDisconnected, lbcstError]) then
     raise EInvalidOperation.Create(
-      'BLE device can only be changed while disconnected');
+      'BLE device can only be changed while disconnected or in error');
   FDispatch.NextGeneration;
   OldCoreClient := FCoreClient;
   DetachCoreClient;

@@ -121,6 +121,7 @@ type
     procedure FindClientReturnsRegisteredClient;
     procedure RemoveClientReleasesDeviceRegistration;
     procedure RemoveClientRejectsActiveClient;
+    procedure RemoveClientReleasesClientInErrorState;
     procedure ProfileCannotBeAddedToTwoClients;
     procedure ProfileCannotBeAddedAfterConnectStarts;
     procedure ClientExposesGattOperations;
@@ -755,6 +756,24 @@ begin
 
   AssertTrue(RaisedExpectedException);
   AssertTrue(Client = FBle.FindClient('device-a'));
+end;
+
+procedure TLazBleClientTest.RemoveClientReleasesClientInErrorState;
+var
+  Client: TBleClient;
+  OperationId: TBleOperationId;
+begin
+  Client := FBle.CreateClient('device-a');
+  Client.ConnectAsync;
+  OperationId := FBackendObject.OperationIds[
+    FBackendObject.CommandCount - 1];
+  AssertTrue(FBackendObject.CompleteOperation(OperationId,
+    lbekOperationFailed, 42, 'Connection failed'));
+  AssertEquals(Ord(lbcstError), Ord(Client.State));
+
+  FBle.RemoveClient(Client);
+
+  AssertNull(FBle.FindClient('device-a'));
 end;
 
 procedure TLazBleClientTest.ProfileCannotBeAddedToTwoClients;

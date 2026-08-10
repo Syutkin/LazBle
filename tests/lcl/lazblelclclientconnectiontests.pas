@@ -83,6 +83,7 @@ type
     procedure ConnectLazilyCreatesCoreAndDeliversMainThreadEvents;
     procedure ConnectFailureDeliversTerminalError;
     procedure DisconnectAllowsDeviceReplacementAndReconfiguration;
+    procedure ErrorStateAllowsDeviceReplacementAndReconfiguration;
     procedure ActiveConnectionRejectsDeviceChange;
     procedure DestroyDropsQueuedConnectionCallbacks;
   end;
@@ -382,6 +383,42 @@ begin
   AssertTrue(Raised);
   AssertEquals('device-a', FClient.DeviceId);
   AssertEquals('device-a', FClient.CoreClient.DeviceId);
+end;
+
+procedure TLazBleLclClientConnectionTest.ErrorStateAllowsDeviceReplacementAndReconfiguration;
+var
+  ConnectedHandler: TNotifyEvent;
+  DeviceInfo: TBleDeviceInfo;
+  Thread: TClientBackendThread;
+begin
+  FClient.Connect;
+  Thread := StartBackendAction(cbtaConnectFailure);
+  try
+    WaitForAction(Thread);
+    CheckSynchronize;
+  finally
+    Thread.Free;
+  end;
+  AssertEquals(Ord(lbcstError), Ord(FClient.State));
+  ConnectedHandler := FClient.OnConnected;
+
+  DeviceInfo := Default(TBleDeviceInfo);
+  DeviceInfo.DeviceId := 'device-b';
+  DeviceInfo.DeviceName := 'Replacement';
+  FClient.SelectDevice(DeviceInfo);
+
+  AssertEquals('device-b', FClient.DeviceId);
+  AssertEquals('Replacement', FClient.DeviceName);
+  AssertNull(FClient.CoreClient);
+  AssertNull(FLazBle.Facade.FindClient('device-a'));
+  AssertTrue(TMethod(FClient.OnConnected).Code =
+    TMethod(ConnectedHandler).Code);
+  AssertTrue(TMethod(FClient.OnConnected).Data =
+    TMethod(ConnectedHandler).Data);
+
+  FClient.Connect;
+  AssertEquals(2, FConfigureCount);
+  AssertEquals('device-b', FClient.CoreClient.DeviceId);
 end;
 
 procedure TLazBleLclClientConnectionTest.DestroyDropsQueuedConnectionCallbacks;

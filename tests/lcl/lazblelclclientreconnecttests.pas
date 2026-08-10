@@ -31,6 +31,7 @@ type
     FClient: TLazBleLclClient;
     procedure AssertCoreOptions(const AInitialDelayMs, AMaximumDelayMs,
       AMaximumAttempts: Cardinal);
+    procedure EnterWaitingReconnect;
   protected
     procedure SetUp; override;
     procedure TearDown; override;
@@ -41,6 +42,7 @@ type
     procedure SettingsChangesApplyToExistingCoreClient;
     procedure ReplacementCoreReceivesTheSameSettings;
     procedure AttemptAndDelayReflectCoreReconnectState;
+    procedure WaitingReconnectRequiresDisconnectBeforeDeviceChange;
   end;
 
 implementation
@@ -96,6 +98,42 @@ begin
   AssertEquals(Int64(AInitialDelayMs), Int64(Options.InitialDelayMs));
   AssertEquals(Int64(AMaximumDelayMs), Int64(Options.MaximumDelayMs));
   AssertEquals(Int64(AMaximumAttempts), Int64(Options.MaximumAttempts));
+end;
+
+procedure TLazBleLclClientReconnectTest.EnterWaitingReconnect;
+var
+  BackendEvent: TLazBleBackendEvent;
+  Generation: QWord;
+  OperationId: TBleOperationId;
+begin
+  FClient.ReconnectOptions.MaximumDelayMs := 60000;
+  FClient.ReconnectOptions.InitialDelayMs := 60000;
+  FClient.ReconnectOptions.MaximumAttempts := 2;
+  FClient.AutoReconnect := True;
+  FClient.AddProfile(TPassiveGattProfile.Create);
+  FClient.Connect;
+  Generation := TBleClientGenerationAccess(
+    FClient.CoreClient).ExposedGeneration;
+
+  OperationId := FBackendObject.OperationIds[
+    FBackendObject.CommandCount - 1];
+  BackendEvent := Default(TLazBleBackendEvent);
+  BackendEvent.Kind := lbekConnected;
+  BackendEvent.OperationId := OperationId;
+  BackendEvent.DeviceId := FClient.DeviceId;
+  BackendEvent.Generation := Generation;
+  AssertTrue(FBackendObject.EmitProgress(BackendEvent));
+
+  OperationId := FBackendObject.OperationIds[
+    FBackendObject.CommandCount - 1];
+  BackendEvent.Kind := lbekServicesDiscovered;
+  BackendEvent.OperationId := OperationId;
+  AssertTrue(FBackendObject.EmitProgress(BackendEvent));
+  AssertEquals(Ord(lbcstReady), Ord(FClient.State));
+
+  BackendEvent.Kind := lbekDisconnected;
+  AssertTrue(FBackendObject.EmitProgress(BackendEvent));
+  AssertEquals(Ord(lbcstWaitingToReconnect), Ord(FClient.State));
 end;
 
 procedure TLazBleLclClientReconnectTest.DefaultsDoNotCreateCoreClient;
@@ -202,46 +240,46 @@ begin
 end;
 
 procedure TLazBleLclClientReconnectTest.AttemptAndDelayReflectCoreReconnectState;
-var
-  BackendEvent: TLazBleBackendEvent;
-  Generation: QWord;
-  OperationId: TBleOperationId;
 begin
-  FClient.ReconnectOptions.MaximumDelayMs := 60000;
-  FClient.ReconnectOptions.InitialDelayMs := 60000;
-  FClient.ReconnectOptions.MaximumAttempts := 2;
-  FClient.AutoReconnect := True;
-  FClient.AddProfile(TPassiveGattProfile.Create);
-  FClient.Connect;
-  Generation := TBleClientGenerationAccess(
-    FClient.CoreClient).ExposedGeneration;
-
-  OperationId := FBackendObject.OperationIds[
-    FBackendObject.CommandCount - 1];
-  BackendEvent := Default(TLazBleBackendEvent);
-  BackendEvent.Kind := lbekConnected;
-  BackendEvent.OperationId := OperationId;
-  BackendEvent.DeviceId := FClient.DeviceId;
-  BackendEvent.Generation := Generation;
-  AssertTrue(FBackendObject.EmitProgress(BackendEvent));
-
-  OperationId := FBackendObject.OperationIds[
-    FBackendObject.CommandCount - 1];
-  BackendEvent.Kind := lbekServicesDiscovered;
-  BackendEvent.OperationId := OperationId;
-  AssertTrue(FBackendObject.EmitProgress(BackendEvent));
-  AssertEquals(Ord(lbcstReady), Ord(FClient.State));
-
-  BackendEvent.Kind := lbekDisconnected;
-  AssertTrue(FBackendObject.EmitProgress(BackendEvent));
-
-  AssertEquals(Ord(lbcstWaitingToReconnect), Ord(FClient.State));
+  EnterWaitingReconnect;
   AssertEquals(1, Integer(FClient.ReconnectAttempt));
   AssertEquals(60000, Integer(FClient.ReconnectDelayMs));
 
   FClient.Disconnect;
   CheckSynchronize;
   AssertEquals(Ord(lbcstDisconnected), Ord(FClient.State));
+  AssertEquals(0, Integer(FClient.ReconnectAttempt));
+  AssertEquals(0, Integer(FClient.ReconnectDelayMs));
+end;
+
+procedure TLazBleLclClientReconnectTest.WaitingReconnectRequiresDisconnectBeforeDeviceChange;
+var
+  DeviceInfo: TBleDeviceInfo;
+  Raised: Boolean;
+begin
+  EnterWaitingReconnect;
+  DeviceInfo := Default(TBleDeviceInfo);
+  DeviceInfo.DeviceId := 'device-b';
+  DeviceInfo.DeviceName := 'Replacement';
+
+  Raised := False;
+  try
+    FClient.SelectDevice(DeviceInfo);
+  except
+    on EInvalidOperation do
+      Raised := True;
+  end;
+  AssertTrue(Raised);
+  AssertEquals('device-a', FClient.DeviceId);
+  AssertNotNull(FClient.CoreClient);
+
+  FClient.Disconnect;
+  CheckSynchronize;
+  AssertEquals(Ord(lbcstDisconnected), Ord(FClient.State));
+  FClient.SelectDevice(DeviceInfo);
+
+  AssertEquals('device-b', FClient.DeviceId);
+  AssertNull(FClient.CoreClient);
   AssertEquals(0, Integer(FClient.ReconnectAttempt));
   AssertEquals(0, Integer(FClient.ReconnectDelayMs));
 end;
