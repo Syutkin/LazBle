@@ -15,7 +15,7 @@ begin
     Package.Author := 'Andrey Syutkin';
     Package.License := 'MIT';
     Package.Description :=
-      'Asynchronous BLE Central and GATT Client library for Free Pascal';
+      'Asynchronous BLE and GATT client library for Free Pascal';
     Package.Dependencies.Add('simpleblepascal');
     Package.SourcePath.Add('.');
     Package.SourcePath.Add('src');
@@ -32,7 +32,7 @@ begin
     Package.Targets.AddUnit('lazblecentralmanager.pas');
     Package.Targets.AddUnit('lazbleclient.pas');
     Package.Targets.AddUnit('lazblefacade.pas');
-    Package.Targets.AddUnit('lazbleclientsync.pas');
+    Package.Targets.AddUnit('lazblesync.pas');
     Package.Targets.AddUnit('lazblenus.pas');
     Package.Targets.AddUnit('lazblebattery.pas');
     Package.Targets.AddUnit('lazblesimpleblebackend.pas');

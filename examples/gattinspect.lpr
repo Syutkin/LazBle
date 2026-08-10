@@ -10,15 +10,15 @@ uses
   SysUtils,
   CustApp,
   LazBleTypes,
-  LazBleGattSession,
-  LazBleClientSync,
+  LazBleClient,
+  LazBleSync,
   BleExampleUtils;
 
 type
   TGattInspectApplication = class(TCustomApplication)
   private
-    FClientSync: TBleClientSync;
-    FSession: TBleGattSession;
+    FBleSync: TLazBleSync;
+    FClient: TBleClient;
     procedure PrintGattSnapshot;
     procedure ShutdownBle;
     procedure Fail(const AMessage: string);
@@ -87,7 +87,7 @@ var
   ServiceIndex: Integer;
   Services: TLazBleGattServices;
 begin
-  Services := FSession.Services;
+  Services := FClient.Services;
   WriteLn('GATT services: ', Length(Services));
   for ServiceIndex := 0 to High(Services) do
   begin
@@ -113,12 +113,12 @@ procedure TGattInspectApplication.ShutdownBle;
 var
   ErrorMessage: string;
 begin
-  if Assigned(FClientSync) and Assigned(FSession) then
-    FClientSync.Disconnect(FSession, 5000, ErrorMessage);
-  FSession := nil;
-  if Assigned(FClientSync) then
-    FClientSync.Shutdown(5000, ErrorMessage);
-  FreeAndNil(FClientSync);
+  if Assigned(FBleSync) and Assigned(FClient) then
+    FBleSync.Disconnect(FClient, 5000, ErrorMessage);
+  FClient := nil;
+  if Assigned(FBleSync) then
+    FBleSync.Shutdown(5000, ErrorMessage);
+  FreeAndNil(FBleSync);
 end;
 
 procedure TGattInspectApplication.Fail(const AMessage: string);
@@ -159,10 +159,10 @@ begin
 
   AdapterId := GetOptionValue('a', 'adapter');
   RequestedDeviceId := GetOptionValue('d', 'device');
-  FClientSync := TBleClientSync.Create;
+  FBleSync := TLazBleSync.Create;
 
   WriteLn('Scanning for BLE devices...');
-  if not FClientSync.Scan(AdapterId, ScanTimeoutMs, Devices,
+  if not FBleSync.Scan(AdapterId, ScanTimeoutMs, Devices,
     ErrorMessage) then
   begin
     if ErrorMessage = '' then
@@ -177,8 +177,8 @@ begin
   end;
 
   WriteLn('Connecting to ', DeviceId, '...');
-  if not FClientSync.Connect(DeviceId, 15000, FSession,
-    ErrorMessage) then
+  FClient := FBleSync.CreateClient(DeviceId);
+  if not FBleSync.Connect(FClient, 15000, ErrorMessage) then
   begin
     if ErrorMessage = '' then
       ErrorMessage := 'Could not connect and discover GATT services.';

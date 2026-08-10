@@ -10,7 +10,7 @@ interface
 uses
   LazBleTypes, LazBleBackend, LazBleGattOperation, LazBleGattSubscription,
   LazBleGattSession, LazBleGattProfile, LazBleByteChannel,
-  LazBleCentralManager, LazBleClient, LazBleFacade, LazBleClientSync, LazBleNus,
+  LazBleCentralManager, LazBleClient, LazBleFacade, LazBleSync, LazBleNus,
   LazBleBattery, LazBleSimpleBleBackend;
 
 implementation

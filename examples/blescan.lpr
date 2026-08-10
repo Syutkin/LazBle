@@ -10,13 +10,13 @@ uses
   SysUtils,
   CustApp,
   LazBleTypes,
-  LazBleClientSync,
+  LazBleSync,
   BleExampleUtils;
 
 type
   TBleScanApplication = class(TCustomApplication)
   private
-    FClientSync: TBleClientSync;
+    FBleSync: TLazBleSync;
     procedure PrintDevices(const ADevices: TBleDeviceInfos);
     procedure ShutdownBle;
     procedure Fail(const AMessage: string);
@@ -76,9 +76,9 @@ procedure TBleScanApplication.ShutdownBle;
 var
   ErrorMessage: string;
 begin
-  if Assigned(FClientSync) then
-    FClientSync.Shutdown(5000, ErrorMessage);
-  FreeAndNil(FClientSync);
+  if Assigned(FBleSync) then
+    FBleSync.Shutdown(5000, ErrorMessage);
+  FreeAndNil(FBleSync);
 end;
 
 procedure TBleScanApplication.Fail(const AMessage: string);
@@ -115,9 +115,9 @@ begin
   end;
 
   AdapterId := GetOptionValue('a', 'adapter');
-  FClientSync := TBleClientSync.Create;
+  FBleSync := TLazBleSync.Create;
   WriteLn('Scanning for BLE devices...');
-  if not FClientSync.Scan(AdapterId, ScanTimeoutMs, Devices,
+  if not FBleSync.Scan(AdapterId, ScanTimeoutMs, Devices,
     ErrorMessage) then
   begin
     if ErrorMessage = '' then

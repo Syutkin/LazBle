@@ -55,8 +55,8 @@
         <UnitName Value="LazBleFacade"/>
       </Item>
       <Item>
-        <Filename Value="src\core\lazbleclientsync.pas"/>
-        <UnitName Value="LazBleClientSync"/>
+        <Filename Value="src\core\lazblesync.pas"/>
+        <UnitName Value="LazBleSync"/>
       </Item>
       <Item>
         <Filename Value="src\profiles\lazblenus.pas"/>

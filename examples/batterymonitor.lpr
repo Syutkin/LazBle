@@ -10,15 +10,16 @@ uses
   SysUtils,
   CustApp,
   LazBleTypes,
-  LazBleClientSync,
+  LazBleClient,
+  LazBleSync,
   LazBleBattery,
   BleExampleUtils;
 
 type
   TBatteryMonitorApplication = class(TCustomApplication)
   private
-    FClientSync: TBleClientSync;
-    FConnection: TBleClient;
+    FBleSync: TLazBleSync;
+    FClient: TBleClient;
     FProfile: TBleBatteryProfile;
     procedure BatteryLevelChanged(Sender: TObject; const ADeviceId: string;
       const ALevelPercent: Integer);
@@ -56,13 +57,13 @@ var
 begin
   if Assigned(FProfile) then
     FProfile.OnLevelChanged := nil;
-  if Assigned(FClientSync) and Assigned(FConnection) then
-    FClientSync.Disconnect(FConnection, 5000, ErrorMessage);
+  if Assigned(FBleSync) and Assigned(FClient) then
+    FBleSync.Disconnect(FClient, 5000, ErrorMessage);
   FProfile := nil;
-  FConnection := nil;
-  if Assigned(FClientSync) then
-    FClientSync.Shutdown(5000, ErrorMessage);
-  FreeAndNil(FClientSync);
+  FClient := nil;
+  if Assigned(FBleSync) then
+    FBleSync.Shutdown(5000, ErrorMessage);
+  FreeAndNil(FBleSync);
 end;
 
 procedure TBatteryMonitorApplication.Fail(const AMessage: string);
@@ -103,10 +104,10 @@ begin
 
   AdapterId := GetOptionValue('a', 'adapter');
   RequestedDeviceId := GetOptionValue('d', 'device');
-  FClientSync := TBleClientSync.Create;
+  FBleSync := TLazBleSync.Create;
 
   WriteLn('Scanning for BLE devices...');
-  if not FClientSync.Scan(AdapterId, ScanTimeoutMs, Devices,
+  if not FBleSync.Scan(AdapterId, ScanTimeoutMs, Devices,
     ErrorMessage) then
   begin
     if ErrorMessage = '' then
@@ -120,13 +121,13 @@ begin
     Exit;
   end;
 
-  FConnection := FClientSync.CreateClient(DeviceId);
+  FClient := FBleSync.CreateClient(DeviceId);
   FProfile := TBleBatteryProfile.Create;
   FProfile.OnLevelChanged := @BatteryLevelChanged;
-  FConnection.AddProfile(FProfile, True);
+  FClient.AddProfile(FProfile, True);
 
   WriteLn('Connecting to ', DeviceId, '...');
-  if not FClientSync.Connect(FConnection, 15000, ErrorMessage) then
+  if not FBleSync.Connect(FClient, 15000, ErrorMessage) then
   begin
     if ErrorMessage = '' then
       ErrorMessage := 'Could not connect and discover GATT services.';

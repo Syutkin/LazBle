@@ -1,8 +1,27 @@
 # LazBle
 
-LazBle is an asynchronous BLE Central and GATT Client library for Free Pascal.
+LazBle is an asynchronous BLE and GATT client library for Free Pascal.
 Lazarus is supported through `lazble.lpk`, but the source units do not depend on
 LCL, LazUtils, or a widgetset.
+
+## Usage
+
+```pascal
+uses
+  LazBleClient,
+  LazBleFacade,
+  LazBleNus;
+
+Ble := TLazBle.Create;
+Client := Ble.CreateClient(DeviceId);
+Nus := TNusProfile.Create;
+Client.AddProfile(Nus);
+Operation := Client.ConnectAsync;
+```
+
+`TLazBle` owns its clients, and each `TBleClient` owns its registered profiles.
+Console applications can use `TLazBleSync` from `LazBleSync`; GUI applications
+should use the asynchronous API.
 
 ## Build and test
 

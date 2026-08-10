@@ -9,6 +9,8 @@ uses
   SysUtils,
   LazBleTypes,
   LazBleBackend,
+  LazBleGattOperation,
+  LazBleGattSubscription,
   LazBleGattSession,
   LazBleGattProfile,
   LazBleCentralManager;
@@ -117,6 +119,8 @@ type
     FSessionDisconnectOperation: TBleSessionOperation;
     FOnStateChanged: TLazBleClientStateChangedEvent;
     function GetDeviceId: string;
+    function GetGeneration: QWord;
+    function GetServices: TLazBleGattServices;
     function GetProfileCount: Integer;
     function GetProfile(const AIndex: Integer): TBleGattProfile;
     procedure SetState(const AState: TLazBleClientState);
@@ -131,6 +135,7 @@ type
     procedure DetachProfiles;
     procedure EvaluateProfiles;
   public
+    { Applications obtain clients from TLazBle.CreateClient. }
     constructor Create(const ABle: TLazBle;
       const ASession: TBleGattSession);
     destructor Destroy; override;
@@ -138,8 +143,16 @@ type
       const ARequired: Boolean = True);
     function ConnectAsync: TBleOperation;
     function DisconnectAsync: TBleOperation;
+    function ReadAsync(const AServiceUuid, ACharacteristicUuid: string):
+      TBleGattOperation;
+    function WriteAsync(const AServiceUuid, ACharacteristicUuid: string;
+      const AValue: TBytes; const AWriteMode: TLazBleWriteMode):
+      TBleGattOperation;
+    function SubscribeAsync(const AServiceUuid,
+      ACharacteristicUuid: string): TBleSubscription;
     property DeviceId: string read GetDeviceId;
-    property Session: TBleGattSession read FSession;
+    property Generation: QWord read GetGeneration;
+    property Services: TLazBleGattServices read GetServices;
     property Profiles[const AIndex: Integer]: TBleGattProfile read GetProfile;
     property ProfileCount: Integer read GetProfileCount;
     property State: TLazBleClientState read FState;
@@ -165,6 +178,9 @@ type
       const AState: TLazBleCentralState);
     procedure CompleteSessionOperations(const ASession: TBleGattSession;
       const AState: TLazBleSessionState);
+    function ConnectAsync(const ADeviceId: string): TBleSessionOperation;
+    function DisconnectAsync(const ASession: TBleGattSession):
+      TBleSessionOperation;
   public
     constructor Create; overload;
     constructor Create(const ABackend: ILazBleBackend); overload;
@@ -174,11 +190,7 @@ type
     function CreateClient(const ADeviceId: string): TBleClient;
     function FindClient(const ADeviceId: string): TBleClient;
     procedure RemoveClient(const AClient: TBleClient);
-    function ConnectAsync(const ADeviceId: string): TBleSessionOperation;
-    function DisconnectAsync(const ASession: TBleGattSession):
-      TBleSessionOperation;
     function ShutdownAsync: TBleOperation;
-    property Manager: TBleCentralManager read FManager;
   end;
 
 implementation
@@ -463,6 +475,22 @@ begin
     Result := '';
 end;
 
+function TBleClient.GetGeneration: QWord;
+begin
+  if Assigned(FSession) then
+    Result := FSession.Generation
+  else
+    Result := 0;
+end;
+
+function TBleClient.GetServices: TLazBleGattServices;
+begin
+  if Assigned(FSession) then
+    Result := FSession.Services
+  else
+    Result := nil;
+end;
+
 function TBleClient.GetProfileCount: Integer;
 begin
   Result := FProfiles.Count;
@@ -701,6 +729,26 @@ begin
   DetachProfiles;
   FSessionDisconnectOperation := FBle.DisconnectAsync(FSession);
   FSessionDisconnectOperation.OnCompleted := @SessionDisconnectCompleted;
+end;
+
+function TBleClient.ReadAsync(const AServiceUuid,
+  ACharacteristicUuid: string): TBleGattOperation;
+begin
+  Result := FSession.ReadAsync(AServiceUuid, ACharacteristicUuid);
+end;
+
+function TBleClient.WriteAsync(const AServiceUuid,
+  ACharacteristicUuid: string; const AValue: TBytes;
+  const AWriteMode: TLazBleWriteMode): TBleGattOperation;
+begin
+  Result := FSession.WriteAsync(AServiceUuid, ACharacteristicUuid, AValue,
+    AWriteMode);
+end;
+
+function TBleClient.SubscribeAsync(const AServiceUuid,
+  ACharacteristicUuid: string): TBleSubscription;
+begin
+  Result := FSession.SubscribeAsync(AServiceUuid, ACharacteristicUuid);
 end;
 
 constructor TLazBle.Create;

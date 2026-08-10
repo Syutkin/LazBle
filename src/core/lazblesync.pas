@@ -1,4 +1,4 @@
-unit LazBleClientSync;
+unit LazBleSync;
 
 {$mode objfpc}{$H+}
 
@@ -8,15 +8,13 @@ uses
   SysUtils,
   LazBleTypes,
   LazBleBackend,
-  LazBleGattSession,
-  LazBleClient;
+  LazBleClient,
+  LazBleFacade;
 
 type
-  TBleClient = LazBleClient.TBleClient;
-
-  TBleClientSync = class
+  TLazBleSync = class
   private
-    FClient: TLazBle;
+    FBle: TLazBle;
     function WaitForOperation(const AOperation: TBleOperation;
       const ATimeoutMs: Cardinal): Boolean;
   public
@@ -26,18 +24,10 @@ type
     function Scan(const AAdapterId: string; const ATimeoutMs: Cardinal;
       out ADevices: TBleDeviceInfos; out AErrorMessage: string): Boolean;
     function CreateClient(const ADeviceId: string): TBleClient;
-    function Connect(const ADeviceId: string; const ATimeoutMs: Cardinal;
-      out ASession: TBleGattSession; out AErrorMessage: string): Boolean;
-      overload;
-    function Connect(const AConnection: TBleClient;
+    function Connect(const AClient: TBleClient;
       const ATimeoutMs: Cardinal; out AErrorMessage: string): Boolean;
-      overload;
-    function Disconnect(const ASession: TBleGattSession;
+    function Disconnect(const AClient: TBleClient;
       const ATimeoutMs: Cardinal; out AErrorMessage: string): Boolean;
-      overload;
-    function Disconnect(const AConnection: TBleClient;
-      const ATimeoutMs: Cardinal; out AErrorMessage: string): Boolean;
-      overload;
     function Shutdown(const ATimeoutMs: Cardinal;
       out AErrorMessage: string): Boolean;
   end;
@@ -80,26 +70,26 @@ begin
   Result := FEvent.WaitFor(ATimeoutMs) = wrSignaled;
 end;
 
-constructor TBleClientSync.Create;
+constructor TLazBleSync.Create;
 begin
   inherited Create;
-  FClient := TLazBle.Create;
+  FBle := TLazBle.Create;
 end;
 
-constructor TBleClientSync.Create(const ABackend: ILazBleBackend);
+constructor TLazBleSync.Create(const ABackend: ILazBleBackend);
 begin
   inherited Create;
-  FClient := TLazBle.Create(ABackend);
+  FBle := TLazBle.Create(ABackend);
 end;
 
-destructor TBleClientSync.Destroy;
+destructor TLazBleSync.Destroy;
 begin
-  FClient.Free;
+  FBle.Free;
   inherited Destroy;
 end;
 
-function TBleClientSync.WaitForOperation(
-  const AOperation: TBleOperation; const ATimeoutMs: Cardinal): Boolean;
+function TLazBleSync.WaitForOperation(const AOperation: TBleOperation;
+  const ATimeoutMs: Cardinal): Boolean;
 var
   Waiter: TOperationWaiter;
 begin
@@ -117,14 +107,14 @@ begin
   end;
 end;
 
-function TBleClientSync.Scan(const AAdapterId: string;
+function TLazBleSync.Scan(const AAdapterId: string;
   const ATimeoutMs: Cardinal; out ADevices: TBleDeviceInfos;
   out AErrorMessage: string): Boolean;
 var
   Operation: TBleScanOperation;
   WaitTimeoutMs: Cardinal;
 begin
-  Operation := FClient.ScanAsync(AAdapterId, ATimeoutMs);
+  Operation := FBle.ScanAsync(AAdapterId, ATimeoutMs);
   if ATimeoutMs > High(Cardinal) - 1000 then
     WaitTimeoutMs := High(Cardinal)
   else
@@ -134,70 +124,47 @@ begin
   AErrorMessage := Operation.ErrorMessage;
 end;
 
-function TBleClientSync.CreateClient(
-  const ADeviceId: string): TBleClient;
+function TLazBleSync.CreateClient(const ADeviceId: string): TBleClient;
 begin
-  Result := FClient.CreateClient(ADeviceId);
+  Result := FBle.CreateClient(ADeviceId);
 end;
 
-function TBleClientSync.Connect(const ADeviceId: string;
-  const ATimeoutMs: Cardinal; out ASession: TBleGattSession;
-  out AErrorMessage: string): Boolean;
-var
-  Operation: TBleSessionOperation;
-begin
-  Operation := FClient.ConnectAsync(ADeviceId);
-  Result := WaitForOperation(Operation, ATimeoutMs);
-  ASession := Operation.Session;
-  AErrorMessage := Operation.ErrorMessage;
-end;
-
-function TBleClientSync.Connect(const AConnection: TBleClient;
+function TLazBleSync.Connect(const AClient: TBleClient;
   const ATimeoutMs: Cardinal; out AErrorMessage: string): Boolean;
 var
   Operation: TBleOperation;
 begin
-  if not Assigned(AConnection) then
+  if not Assigned(AClient) then
   begin
-    AErrorMessage := 'BLE connection is not assigned';
+    AErrorMessage := 'BLE client is not assigned';
     Exit(False);
   end;
-  Operation := AConnection.ConnectAsync;
+  Operation := AClient.ConnectAsync;
   Result := WaitForOperation(Operation, ATimeoutMs);
   AErrorMessage := Operation.ErrorMessage;
 end;
 
-function TBleClientSync.Disconnect(const ASession: TBleGattSession;
-  const ATimeoutMs: Cardinal; out AErrorMessage: string): Boolean;
-var
-  Operation: TBleSessionOperation;
-begin
-  Operation := FClient.DisconnectAsync(ASession);
-  Result := WaitForOperation(Operation, ATimeoutMs);
-  AErrorMessage := Operation.ErrorMessage;
-end;
-
-function TBleClientSync.Disconnect(const AConnection: TBleClient;
+function TLazBleSync.Disconnect(const AClient: TBleClient;
   const ATimeoutMs: Cardinal; out AErrorMessage: string): Boolean;
 var
   Operation: TBleOperation;
 begin
-  if not Assigned(AConnection) then
+  if not Assigned(AClient) then
   begin
-    AErrorMessage := 'BLE connection is not assigned';
+    AErrorMessage := 'BLE client is not assigned';
     Exit(False);
   end;
-  Operation := AConnection.DisconnectAsync;
+  Operation := AClient.DisconnectAsync;
   Result := WaitForOperation(Operation, ATimeoutMs);
   AErrorMessage := Operation.ErrorMessage;
 end;
 
-function TBleClientSync.Shutdown(const ATimeoutMs: Cardinal;
+function TLazBleSync.Shutdown(const ATimeoutMs: Cardinal;
   out AErrorMessage: string): Boolean;
 var
   Operation: TBleOperation;
 begin
-  Operation := FClient.ShutdownAsync;
+  Operation := FBle.ShutdownAsync;
   Result := WaitForOperation(Operation, ATimeoutMs);
   AErrorMessage := Operation.ErrorMessage;
 end;

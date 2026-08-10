@@ -10,11 +10,10 @@ uses
   testregistry,
   LazBleTypes,
   LazBleBackend,
-  LazBleGattSession,
   LazBleGattProfile,
   LazBleClient,
   LazBleFacade,
-  LazBleClientSync,
+  LazBleSync,
   LazBleNus,
   FakeLazBleBackend;
 
@@ -59,7 +58,7 @@ type
       const AOperationId: TBleOperationId; const ADeviceId: string = '';
       const ADeviceName: string = ''; const ARssi: SmallInt = 0;
       const AGeneration: QWord = 0);
-    procedure CompleteTransportConnection(const AConnection: TBleClient);
+    procedure CompleteTransportClient(const AClient: TBleClient);
   protected
     procedure SetUp; override;
     procedure TearDown; override;
@@ -70,19 +69,21 @@ type
     procedure ConnectCompletesAfterServiceDiscovery;
     procedure ShutdownCompletesAfterBackendShutdown;
     procedure SyncScanWaitsForTerminalEvent;
-    procedure DefaultClientDoesNotLoadNativeLibraryWhenCreated;
-    procedure DefaultSyncClientDoesNotLoadNativeLibraryWhenCreated;
-    procedure ConnectionWaitsForRequiredProfiles;
-    procedure ConnectionWaitsForRealNusSubscription;
-    procedure OptionalProfileFailureDoesNotFailConnection;
-    procedure RequiredProfileFailureFailsConnection;
-    procedure RequiredProfileFailureAfterReadyInvalidatesConnection;
+    procedure DefaultFacadeDoesNotLoadNativeLibraryWhenCreated;
+    procedure DefaultSyncFacadeDoesNotLoadNativeLibraryWhenCreated;
+    procedure ClientWaitsForRequiredProfiles;
+    procedure ClientWaitsForRealNusSubscription;
+    procedure OptionalProfileFailureDoesNotFailClient;
+    procedure RequiredProfileFailureFailsClient;
+    procedure RequiredProfileFailureAfterReadyInvalidatesClient;
     procedure ReconnectAttachesRegisteredProfilesAgain;
     procedure CreateClientRejectsDuplicateDevice;
     procedure FindClientReturnsRegisteredClient;
     procedure RemoveClientReleasesDeviceRegistration;
+    procedure RemoveClientRejectsActiveClient;
     procedure ProfileCannotBeAddedToTwoClients;
     procedure ProfileCannotBeAddedAfterConnectStarts;
+    procedure ClientExposesGattOperations;
   end;
 
 implementation
@@ -145,19 +146,19 @@ begin
   AssertTrue(FBackendObject.EmitProgress(BackendEvent));
 end;
 
-procedure TLazBleClientTest.CompleteTransportConnection(
-  const AConnection: TBleClient);
+procedure TLazBleClientTest.CompleteTransportClient(
+  const AClient: TBleClient);
 var
   OperationId: TBleOperationId;
 begin
   OperationId := FBackendObject.OperationIds[
     FBackendObject.CommandCount - 1];
-  EmitEvent(lbekConnected, OperationId, AConnection.DeviceId, '', 0,
-    AConnection.Session.Generation);
+  EmitEvent(lbekConnected, OperationId, AClient.DeviceId, '', 0,
+    AClient.Generation);
   OperationId := FBackendObject.OperationIds[
     FBackendObject.CommandCount - 1];
-  EmitEvent(lbekServicesDiscovered, OperationId, AConnection.DeviceId,
-    '', 0, AConnection.Session.Generation);
+  EmitEvent(lbekServicesDiscovered, OperationId, AClient.DeviceId,
+    '', 0, AClient.Generation);
 end;
 
 procedure TLazBleClientTest.SetUp;
@@ -243,20 +244,16 @@ end;
 
 procedure TLazBleClientTest.ConnectCompletesAfterServiceDiscovery;
 var
-  ConnectId: TBleOperationId;
-  DiscoveryId: TBleOperationId;
-  Operation: TBleSessionOperation;
+  Client: TBleClient;
+  Operation: TBleOperation;
 begin
-  Operation := FBle.ConnectAsync('device-a');
-  ConnectId := FBackendObject.OperationIds[0];
-  EmitEvent(lbekConnected, ConnectId, 'device-a', '', 0,
-    Operation.Session.Generation);
-  DiscoveryId := FBackendObject.OperationIds[1];
-  EmitEvent(lbekServicesDiscovered, DiscoveryId, 'device-a', '', 0,
-    Operation.Session.Generation);
+  Client := FBle.CreateClient('device-a');
+  Operation := Client.ConnectAsync;
+  CompleteTransportClient(Client);
 
   AssertEquals(Ord(lbopSucceeded), Ord(Operation.State));
-  AssertEquals(Ord(lbssConnected), Ord(Operation.Session.State));
+  AssertEquals(Ord(lbcstReady), Ord(Client.State));
+  AssertTrue(Client.Generation > 0);
 end;
 
 procedure TLazBleClientTest.ShutdownCompletesAfterBackendShutdown;
@@ -272,164 +269,164 @@ end;
 
 procedure TLazBleClientTest.SyncScanWaitsForTerminalEvent;
 var
-  ClientSync: TBleClientSync;
+  BleSync: TLazBleSync;
   CompletionThread: TScanCompletionThread;
   Devices: TBleDeviceInfos;
   ErrorMessage: string;
 begin
-  ClientSync := TBleClientSync.Create(FBackend);
+  BleSync := TLazBleSync.Create(FBackend);
   CompletionThread := TScanCompletionThread.Create(FBackendObject);
   try
     CompletionThread.Start;
-    AssertTrue(ClientSync.Scan('', 1000, Devices, ErrorMessage));
+    AssertTrue(BleSync.Scan('', 1000, Devices, ErrorMessage));
     CompletionThread.WaitFor;
     AssertEquals('', ErrorMessage);
   finally
     CompletionThread.Terminate;
     CompletionThread.WaitFor;
     CompletionThread.Free;
-    ClientSync.Free;
+    BleSync.Free;
   end;
 end;
 
-procedure TLazBleClientTest.ConnectionWaitsForRequiredProfiles;
+procedure TLazBleClientTest.ClientWaitsForRequiredProfiles;
 var
-  Connection: TBleClient;
+  Client: TBleClient;
   Operation: TBleOperation;
   Profile: TManualGattProfile;
 begin
-  Connection := FBle.CreateClient('device-a');
+  Client := FBle.CreateClient('device-a');
   Profile := TManualGattProfile.Create;
-  Connection.AddProfile(Profile, True);
+  Client.AddProfile(Profile, True);
   AssertTrue(Profile.Bound);
 
-  Operation := Connection.ConnectAsync;
-  CompleteTransportConnection(Connection);
+  Operation := Client.ConnectAsync;
+  CompleteTransportClient(Client);
 
-  AssertEquals(Ord(lbcstAttachingProfiles), Ord(Connection.State));
+  AssertEquals(Ord(lbcstAttachingProfiles), Ord(Client.State));
   AssertEquals(Ord(lbopPending), Ord(Operation.State));
   Profile.CompleteAttach;
-  AssertEquals(Ord(lbcstReady), Ord(Connection.State));
+  AssertEquals(Ord(lbcstReady), Ord(Client.State));
   AssertEquals(Ord(lbopSucceeded), Ord(Operation.State));
 end;
 
-procedure TLazBleClientTest.ConnectionWaitsForRealNusSubscription;
+procedure TLazBleClientTest.ClientWaitsForRealNusSubscription;
 var
   BackendEvent: TLazBleBackendEvent;
-  Connection: TBleClient;
+  Client: TBleClient;
   Operation: TBleOperation;
   Profile: TNusProfile;
 begin
-  Connection := FBle.CreateClient('device-a');
+  Client := FBle.CreateClient('device-a');
   Profile := TNusProfile.Create;
-  Connection.AddProfile(Profile, True);
+  Client.AddProfile(Profile, True);
 
-  Operation := Connection.ConnectAsync;
-  CompleteTransportConnection(Connection);
+  Operation := Client.ConnectAsync;
+  CompleteTransportClient(Client);
   AssertEquals(Ord(lbopPending), Ord(Operation.State));
 
   BackendEvent := Default(TLazBleBackendEvent);
   BackendEvent.Kind := lbekSubscribed;
   BackendEvent.OperationId := Profile.Channel.Subscription.OperationId;
   BackendEvent.SubscriptionId := 51;
-  BackendEvent.DeviceId := Connection.DeviceId;
-  BackendEvent.Generation := Connection.Session.Generation;
+  BackendEvent.DeviceId := Client.DeviceId;
+  BackendEvent.Generation := Client.Generation;
   AssertTrue(FBackendObject.EmitProgress(BackendEvent));
 
-  AssertEquals(Ord(lbcstReady), Ord(Connection.State));
+  AssertEquals(Ord(lbcstReady), Ord(Client.State));
   AssertEquals(Ord(lbopSucceeded), Ord(Operation.State));
 end;
 
-procedure TLazBleClientTest.OptionalProfileFailureDoesNotFailConnection;
+procedure TLazBleClientTest.OptionalProfileFailureDoesNotFailClient;
 var
-  Connection: TBleClient;
+  Client: TBleClient;
   Operation: TBleOperation;
   OptionalProfile: TManualGattProfile;
   RequiredProfile: TManualGattProfile;
 begin
-  Connection := FBle.CreateClient('device-a');
+  Client := FBle.CreateClient('device-a');
   RequiredProfile := TManualGattProfile.Create;
   OptionalProfile := TManualGattProfile.Create;
-  Connection.AddProfile(RequiredProfile, True);
-  Connection.AddProfile(OptionalProfile, False);
+  Client.AddProfile(RequiredProfile, True);
+  Client.AddProfile(OptionalProfile, False);
 
-  Operation := Connection.ConnectAsync;
-  CompleteTransportConnection(Connection);
+  Operation := Client.ConnectAsync;
+  CompleteTransportClient(Client);
   OptionalProfile.FailAttach('optional failure');
   RequiredProfile.CompleteAttach;
 
   AssertEquals(Ord(lbgpsError), Ord(OptionalProfile.State));
-  AssertEquals(Ord(lbcstReady), Ord(Connection.State));
+  AssertEquals(Ord(lbcstReady), Ord(Client.State));
   AssertEquals(Ord(lbopSucceeded), Ord(Operation.State));
 end;
 
-procedure TLazBleClientTest.RequiredProfileFailureFailsConnection;
+procedure TLazBleClientTest.RequiredProfileFailureFailsClient;
 var
-  Connection: TBleClient;
+  Client: TBleClient;
   Operation: TBleOperation;
   Profile: TManualGattProfile;
 begin
-  Connection := FBle.CreateClient('device-a');
+  Client := FBle.CreateClient('device-a');
   Profile := TManualGattProfile.Create;
-  Connection.AddProfile(Profile, True);
+  Client.AddProfile(Profile, True);
 
-  Operation := Connection.ConnectAsync;
-  CompleteTransportConnection(Connection);
+  Operation := Client.ConnectAsync;
+  CompleteTransportClient(Client);
   Profile.FailAttach('required failure');
 
-  AssertEquals(Ord(lbcstError), Ord(Connection.State));
+  AssertEquals(Ord(lbcstError), Ord(Client.State));
   AssertEquals(Ord(lbopFailed), Ord(Operation.State));
   AssertTrue(Pos('required failure', Operation.ErrorMessage) > 0);
 end;
 
-procedure TLazBleClientTest.RequiredProfileFailureAfterReadyInvalidatesConnection;
+procedure TLazBleClientTest.RequiredProfileFailureAfterReadyInvalidatesClient;
 var
-  Connection: TBleClient;
+  Client: TBleClient;
   Profile: TManualGattProfile;
 begin
-  Connection := FBle.CreateClient('device-a');
+  Client := FBle.CreateClient('device-a');
   Profile := TManualGattProfile.Create;
-  Connection.AddProfile(Profile, True);
-  Connection.ConnectAsync;
-  CompleteTransportConnection(Connection);
+  Client.AddProfile(Profile, True);
+  Client.ConnectAsync;
+  CompleteTransportClient(Client);
   Profile.CompleteAttach;
-  AssertEquals(Ord(lbcstReady), Ord(Connection.State));
+  AssertEquals(Ord(lbcstReady), Ord(Client.State));
 
   Profile.FailAttach('subscription lost');
 
-  AssertEquals(Ord(lbcstError), Ord(Connection.State));
+  AssertEquals(Ord(lbcstError), Ord(Client.State));
 end;
 
 procedure TLazBleClientTest.ReconnectAttachesRegisteredProfilesAgain;
 var
-  Connection: TBleClient;
+  Client: TBleClient;
   DisconnectId: TBleOperationId;
   Operation: TBleOperation;
   Profile: TManualGattProfile;
 begin
-  Connection := FBle.CreateClient('device-a');
+  Client := FBle.CreateClient('device-a');
   Profile := TManualGattProfile.Create;
-  Connection.AddProfile(Profile, True);
+  Client.AddProfile(Profile, True);
 
-  Operation := Connection.ConnectAsync;
-  CompleteTransportConnection(Connection);
+  Operation := Client.ConnectAsync;
+  CompleteTransportClient(Client);
   Profile.CompleteAttach;
   AssertEquals(Ord(lbopSucceeded), Ord(Operation.State));
 
-  Connection.DisconnectAsync;
+  Client.DisconnectAsync;
   DisconnectId := FBackendObject.OperationIds[
     FBackendObject.CommandCount - 1];
-  EmitEvent(lbekDisconnected, DisconnectId, Connection.DeviceId, '', 0,
-    Connection.Session.Generation);
-  AssertEquals(Ord(lbcstDisconnected), Ord(Connection.State));
+  EmitEvent(lbekDisconnected, DisconnectId, Client.DeviceId, '', 0,
+    Client.Generation);
+  AssertEquals(Ord(lbcstDisconnected), Ord(Client.State));
 
-  Operation := Connection.ConnectAsync;
-  CompleteTransportConnection(Connection);
+  Operation := Client.ConnectAsync;
+  CompleteTransportClient(Client);
   AssertEquals(2, Profile.AttachCount);
-  AssertTrue(Profile.AttachedGeneration = Connection.Session.Generation);
+  AssertTrue(Profile.AttachedGeneration = Client.Generation);
   Profile.CompleteAttach;
 
-  AssertEquals(Ord(lbcstReady), Ord(Connection.State));
+  AssertEquals(Ord(lbcstReady), Ord(Client.State));
   AssertEquals(Ord(lbopSucceeded), Ord(Operation.State));
 end;
 
@@ -468,6 +465,26 @@ begin
 
   AssertNull(FBle.FindClient('device-a'));
   AssertNotNull(FBle.CreateClient('device-a'));
+end;
+
+procedure TLazBleClientTest.RemoveClientRejectsActiveClient;
+var
+  Client: TBleClient;
+  RaisedExpectedException: Boolean;
+begin
+  Client := FBle.CreateClient('device-a');
+  Client.ConnectAsync;
+
+  RaisedExpectedException := False;
+  try
+    FBle.RemoveClient(Client);
+  except
+    on EInvalidOperation do
+      RaisedExpectedException := True;
+  end;
+
+  AssertTrue(RaisedExpectedException);
+  AssertTrue(Client = FBle.FindClient('device-a'));
 end;
 
 procedure TLazBleClientTest.ProfileCannotBeAddedToTwoClients;
@@ -521,7 +538,26 @@ begin
   end;
 end;
 
-procedure TLazBleClientTest.DefaultClientDoesNotLoadNativeLibraryWhenCreated;
+procedure TLazBleClientTest.ClientExposesGattOperations;
+var
+  Client: TBleClient;
+begin
+  Client := FBle.CreateClient('device-a');
+  Client.ConnectAsync;
+  CompleteTransportClient(Client);
+
+  AssertNotNull(Client.ReadAsync('service-read', 'characteristic-read'));
+  AssertNotNull(Client.WriteAsync('service-write', 'characteristic-write',
+    [$01, $02], lbwmRequest));
+  AssertNotNull(Client.SubscribeAsync('service-notify',
+    'characteristic-notify'));
+
+  AssertEquals(Ord(lbckRead), Ord(FBackendObject.Commands[2].Kind));
+  AssertEquals(Ord(lbckWrite), Ord(FBackendObject.Commands[3].Kind));
+  AssertEquals(Ord(lbckSubscribe), Ord(FBackendObject.Commands[4].Kind));
+end;
+
+procedure TLazBleClientTest.DefaultFacadeDoesNotLoadNativeLibraryWhenCreated;
 var
   Client: TLazBle;
 begin
@@ -529,11 +565,11 @@ begin
   Client.Free;
 end;
 
-procedure TLazBleClientTest.DefaultSyncClientDoesNotLoadNativeLibraryWhenCreated;
+procedure TLazBleClientTest.DefaultSyncFacadeDoesNotLoadNativeLibraryWhenCreated;
 var
-  Client: TBleClientSync;
+  Client: TLazBleSync;
 begin
-  Client := TBleClientSync.Create;
+  Client := TLazBleSync.Create;
   Client.Free;
 end;
 
