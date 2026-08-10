@@ -11,7 +11,8 @@ uses
   LazBleBackend,
   LazBleGattSession,
   LazBleCentralManager,
-  LazBleClient;
+  LazBleClient,
+  LazBleReconnect;
 
 type
   ELazBleDuplicateClient = class(Exception);
@@ -23,6 +24,7 @@ type
     FClients: TList;
     FActiveScan: TBleScanOperation;
     FShutdownOperation: TBleOperation;
+    FReconnectTimerFactory: ILazBleReconnectTimerFactory;
     procedure OperationCancelled(Sender: TObject);
     procedure ScanResult(Sender: TObject; const ADeviceId,
       ADeviceName: string; const ARssi: SmallInt);
@@ -42,6 +44,8 @@ type
   public
     constructor Create; overload;
     constructor Create(const ABackend: ILazBleBackend); overload;
+    constructor Create(const ABackend: ILazBleBackend;
+      const AReconnectTimerFactory: ILazBleReconnectTimerFactory); overload;
     destructor Destroy; override;
     function ScanAsync(const AAdapterId: string;
       const ATimeoutMs: Cardinal): TBleScanOperation;
@@ -114,7 +118,18 @@ end;
 
 constructor TLazBle.Create(const ABackend: ILazBleBackend);
 begin
+  Create(ABackend, LazBleCreateDefaultReconnectTimerFactory);
+end;
+
+constructor TLazBle.Create(const ABackend: ILazBleBackend;
+  const AReconnectTimerFactory: ILazBleReconnectTimerFactory);
+begin
   inherited Create;
+  if not Assigned(ABackend) then
+    raise EArgumentNilException.Create('ABackend');
+  if not Assigned(AReconnectTimerFactory) then
+    raise EArgumentNilException.Create('AReconnectTimerFactory');
+  FReconnectTimerFactory := AReconnectTimerFactory;
   FOperations := TList.Create;
   FClients := TList.Create;
   FManager := TBleCentralManager.Create(ABackend);
@@ -145,6 +160,7 @@ begin
   for Index := FOperations.Count - 1 downto 0 do
     TObject(FOperations[Index]).Free;
   FOperations.Free;
+  FReconnectTimerFactory := nil;
   inherited Destroy;
 end;
 
@@ -305,7 +321,7 @@ begin
   if not Assigned(Session) then
     Exit(nil);
   Result := TBleClient.Create(Session, @ConnectSessionAsync,
-    @DisconnectSessionAsync);
+    @DisconnectSessionAsync, FReconnectTimerFactory.CreateTimer);
   FClients.Add(Result);
 end;
 

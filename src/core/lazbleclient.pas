@@ -11,7 +11,8 @@ uses
   LazBleGattOperation,
   LazBleGattSubscription,
   LazBleGattSession,
-  LazBleGattProfile;
+  LazBleGattProfile,
+  LazBleReconnect;
 
 type
   TLazBleOperationState = (
@@ -98,6 +99,7 @@ type
     lbcstConnecting,
     lbcstAttachingProfiles,
     lbcstReady,
+    lbcstWaitingToReconnect,
     lbcstDisconnecting,
     lbcstError
   );
@@ -119,6 +121,10 @@ type
     FDisconnectOperation: TBleOperation;
     FSessionConnectOperation: TBleSessionOperation;
     FSessionDisconnectOperation: TBleSessionOperation;
+    FReconnectController: TLazBleReconnectController;
+    FReconnectCycleActive: Boolean;
+    FManualDisconnect: Boolean;
+    FShuttingDown: Boolean;
     FOnStateChanged: TLazBleClientStateChangedEvent;
     function GetDeviceId: string;
     function GetGeneration: QWord;
@@ -136,13 +142,24 @@ type
     procedure AttachProfiles;
     procedure DetachProfiles;
     procedure EvaluateProfiles;
+    procedure SetAutoReconnect(const AValue: Boolean);
+    function GetAutoReconnect: Boolean;
+    function GetReconnectOptions: TLazBleReconnectOptions;
+    procedure SetReconnectOptions(const AValue: TLazBleReconnectOptions);
+    function GetReconnectAttempt: Cardinal;
+    function GetReconnectDelayMs: Cardinal;
+    procedure ScheduleReconnect;
+    procedure ReconnectDelayElapsed;
+    procedure DisconnectForReconnect;
+    function StartConnect(const AManual: Boolean): TBleOperation;
   protected
     procedure CancelForShutdown;
   public
     { Applications obtain clients from TLazBle.CreateClient. }
     constructor Create(const ASession: TBleGattSession;
       const AConnectSession: TLazBleConnectSessionEvent;
-      const ADisconnectSession: TLazBleDisconnectSessionEvent);
+      const ADisconnectSession: TLazBleDisconnectSessionEvent;
+      const AReconnectTimer: ILazBleReconnectTimer);
     destructor Destroy; override;
     procedure AddProfile(const AProfile: TBleGattProfile;
       const ARequired: Boolean = True);
@@ -161,6 +178,12 @@ type
     property Profiles[const AIndex: Integer]: TBleGattProfile read GetProfile;
     property ProfileCount: Integer read GetProfileCount;
     property State: TLazBleClientState read FState;
+    property AutoReconnect: Boolean read GetAutoReconnect
+      write SetAutoReconnect;
+    property ReconnectOptions: TLazBleReconnectOptions
+      read GetReconnectOptions write SetReconnectOptions;
+    property ReconnectAttempt: Cardinal read GetReconnectAttempt;
+    property ReconnectDelayMs: Cardinal read GetReconnectDelayMs;
     property OnStateChanged: TLazBleClientStateChangedEvent
       read FOnStateChanged write FOnStateChanged;
   end;
@@ -393,7 +416,8 @@ end;
 
 constructor TBleClient.Create(const ASession: TBleGattSession;
   const AConnectSession: TLazBleConnectSessionEvent;
-  const ADisconnectSession: TLazBleDisconnectSessionEvent);
+  const ADisconnectSession: TLazBleDisconnectSessionEvent;
+  const AReconnectTimer: ILazBleReconnectTimer);
 begin
   inherited Create;
   if not Assigned(ASession) then
@@ -402,11 +426,16 @@ begin
     raise EArgumentNilException.Create('AConnectSession');
   if not Assigned(ADisconnectSession) then
     raise EArgumentNilException.Create('ADisconnectSession');
+  if not Assigned(AReconnectTimer) then
+    raise EArgumentNilException.Create('AReconnectTimer');
   FConnectSession := AConnectSession;
   FDisconnectSession := ADisconnectSession;
   FSession := ASession;
   FProfiles := TList.Create;
   FOperations := TList.Create;
+  FReconnectController := TLazBleReconnectController.Create(
+    AReconnectTimer);
+  FReconnectController.OnElapsed := @ReconnectDelayElapsed;
   FState := lbcstDisconnected;
   FSession.AddStateChangedHandler(@SessionStateChanged);
 end;
@@ -417,6 +446,10 @@ var
   Index: Integer;
 begin
   FOnStateChanged := nil;
+  FShuttingDown := True;
+  FReconnectCycleActive := False;
+  FReconnectController.OnElapsed := nil;
+  FReconnectController.Disable;
   if Assigned(FSessionConnectOperation) then
     FSessionConnectOperation.OnCompleted := nil;
   if Assigned(FSessionDisconnectOperation) then
@@ -435,10 +468,53 @@ begin
   for Index := FOperations.Count - 1 downto 0 do
     TObject(FOperations[Index]).Free;
   FOperations.Free;
+  FReconnectController.Free;
   FSession := nil;
   FConnectSession := nil;
   FDisconnectSession := nil;
   inherited Destroy;
+end;
+
+function TBleClient.GetAutoReconnect: Boolean;
+begin
+  Result := FReconnectController.Enabled;
+end;
+
+procedure TBleClient.SetAutoReconnect(const AValue: Boolean);
+begin
+  if AValue then
+    FReconnectController.Enable
+  else
+  begin
+    FReconnectCycleActive := False;
+    FReconnectController.Disable;
+    if FState = lbcstWaitingToReconnect then
+      SetState(lbcstDisconnected);
+  end;
+end;
+
+function TBleClient.GetReconnectOptions: TLazBleReconnectOptions;
+begin
+  Result := FReconnectController.Options;
+end;
+
+procedure TBleClient.SetReconnectOptions(
+  const AValue: TLazBleReconnectOptions);
+begin
+  if FReconnectCycleActive then
+    raise EInvalidOperation.Create(
+      'Reconnect options cannot be changed during a reconnect cycle');
+  FReconnectController.SetOptions(AValue);
+end;
+
+function TBleClient.GetReconnectAttempt: Cardinal;
+begin
+  Result := FReconnectController.Attempt;
+end;
+
+function TBleClient.GetReconnectDelayMs: Cardinal;
+begin
+  Result := FReconnectController.DelayMs;
 end;
 
 function TBleClient.GetDeviceId: string;
@@ -561,6 +637,8 @@ begin
               FConnectOperation.Complete(lbopFailed, 0,
                 Entry.Profile.ClassName + ': ' +
                 Entry.Profile.ErrorMessage);
+            if FReconnectCycleActive then
+              DisconnectForReconnect;
             Exit;
           end;
         lbgpsReady:
@@ -571,6 +649,8 @@ begin
     end;
     if AllRequiredReady and (FState = lbcstAttachingProfiles) then
     begin
+      FReconnectCycleActive := False;
+      FReconnectController.Reset;
       SetState(lbcstReady);
       if Assigned(FConnectOperation) then
         FConnectOperation.Complete(lbopSucceeded);
@@ -602,6 +682,8 @@ begin
         FConnectOperation.Complete(lbopFailed,
           FSessionConnectOperation.ErrorCode,
           FSessionConnectOperation.ErrorMessage);
+    if FReconnectCycleActive then
+      ScheduleReconnect;
   end;
 end;
 
@@ -622,16 +704,25 @@ begin
       FDisconnectOperation.Complete(lbopFailed,
         FSessionDisconnectOperation.ErrorCode,
         FSessionDisconnectOperation.ErrorMessage);
+    if FReconnectCycleActive then
+      ScheduleReconnect;
   end;
 end;
 
 procedure TBleClient.SessionStateChanged(Sender: TObject;
   const AState: TLazBleSessionState);
+var
+  ShouldReconnect: Boolean;
 begin
   if Sender <> FSession then
     Exit;
   if AState = lbssDisconnected then
   begin
+    ShouldReconnect := not FManualDisconnect and not FShuttingDown and
+      (FReconnectCycleActive or FReconnectController.Waiting or
+      (FState = lbcstReady) or
+      ((FState = lbcstError) and
+      (FReconnectController.Attempt > 0)));
     DetachProfiles;
     SetState(lbcstDisconnected);
     if Assigned(FConnectOperation) and
@@ -641,7 +732,48 @@ begin
       else
         FConnectOperation.Complete(lbopFailed, 0,
           'BLE connection was closed');
+    if ShouldReconnect then
+    begin
+      FReconnectCycleActive := True;
+      ScheduleReconnect;
+    end;
   end;
+end;
+
+procedure TBleClient.ScheduleReconnect;
+begin
+  if FManualDisconnect or FShuttingDown or
+    not FReconnectController.Enabled then
+  begin
+    FReconnectCycleActive := False;
+    Exit;
+  end;
+  if FReconnectController.Waiting then
+  begin
+    SetState(lbcstWaitingToReconnect);
+    Exit;
+  end;
+  if FReconnectController.Schedule then
+    SetState(lbcstWaitingToReconnect)
+  else
+  begin
+    FReconnectCycleActive := False;
+    SetState(lbcstError);
+  end;
+end;
+
+procedure TBleClient.ReconnectDelayElapsed;
+begin
+  if not FReconnectCycleActive or FManualDisconnect or FShuttingDown then
+    Exit;
+  StartConnect(False);
+end;
+
+procedure TBleClient.DisconnectForReconnect;
+begin
+  DetachProfiles;
+  FSessionDisconnectOperation := FDisconnectSession(FSession);
+  FSessionDisconnectOperation.OnCompleted := @SessionDisconnectCompleted;
 end;
 
 procedure TBleClient.OperationCancelled(Sender: TObject);
@@ -664,6 +796,12 @@ end;
 
 procedure TBleClient.CancelForShutdown;
 begin
+  FShuttingDown := True;
+  FManualDisconnect := True;
+  FReconnectCycleActive := False;
+  FReconnectController.Disable;
+  if FState = lbcstWaitingToReconnect then
+    SetState(lbcstDisconnected);
   if Assigned(FConnectOperation) and
     (FConnectOperation.State = lbopPending) then
     FConnectOperation.Cancel;
@@ -674,9 +812,24 @@ end;
 
 function TBleClient.ConnectAsync: TBleOperation;
 begin
+  Result := StartConnect(True);
+end;
+
+function TBleClient.StartConnect(const AManual: Boolean): TBleOperation;
+begin
   if Assigned(FConnectOperation) and
     (FConnectOperation.State = lbopPending) then
     Exit(FConnectOperation);
+  if AManual then
+  begin
+    FManualDisconnect := False;
+    FReconnectCycleActive := False;
+    FReconnectController.Reset;
+    if FState = lbcstWaitingToReconnect then
+      SetState(lbcstDisconnected);
+  end;
+  if not AManual and (FState = lbcstWaitingToReconnect) then
+    SetState(lbcstDisconnected);
   Result := TBleOperation.Create(@OperationCancelled);
   FOperations.Add(Result);
   FConnectOperation := Result;
@@ -698,14 +851,18 @@ end;
 
 function TBleClient.DisconnectAsync: TBleOperation;
 begin
+  FManualDisconnect := True;
+  FReconnectCycleActive := False;
+  FReconnectController.Reset;
   if Assigned(FDisconnectOperation) and
     (FDisconnectOperation.State = lbopPending) then
     Exit(FDisconnectOperation);
   Result := TBleOperation.Create(@OperationCancelled);
   FOperations.Add(Result);
   FDisconnectOperation := Result;
-  if FState = lbcstDisconnected then
+  if FState in [lbcstDisconnected, lbcstWaitingToReconnect] then
   begin
+    SetState(lbcstDisconnected);
     Result.Complete(lbopSucceeded);
     Exit;
   end;

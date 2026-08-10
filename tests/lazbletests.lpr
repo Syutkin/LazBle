@@ -12,6 +12,7 @@ uses
   LazBleSimpleBleBackendTests,
   LazBleCentralManagerTests,
   LazBleClientTests,
+  LazBleReconnectTests,
   LazBleGattSessionTests,
   LazBleGattProfileTests,
   LazBleByteChannelTests,

@@ -13,9 +13,11 @@ uses
   LazBleGattProfile,
   LazBleClient,
   LazBleFacade,
+  LazBleReconnect,
   LazBleSync,
   LazBleNus,
-  FakeLazBleBackend;
+  FakeLazBleBackend,
+  FakeLazBleReconnectTimer;
 
 type
   TManualGattProfile = class(TBleGattProfile)
@@ -66,11 +68,14 @@ type
     FBackend: ILazBleBackend;
     FBackendObject: TFakeLazBleBackend;
     FBle: TLazBle;
+    FReconnectTimerFactory: ILazBleReconnectTimerFactory;
+    FReconnectTimerFactoryObject: TFakeLazBleReconnectTimerFactory;
     procedure EmitEvent(const AKind: TLazBleBackendEventKind;
       const AOperationId: TBleOperationId; const ADeviceId: string = '';
       const ADeviceName: string = ''; const ARssi: SmallInt = 0;
       const AGeneration: QWord = 0);
     procedure CompleteTransportClient(const AClient: TBleClient);
+    procedure UseFakeReconnectTimer;
   protected
     procedure SetUp; override;
     procedure TearDown; override;
@@ -101,6 +106,14 @@ type
     procedure FacadeOwnsClientsProfilesAndDetachesBackend;
     procedure ShutdownCancelsActiveClientConnection;
     procedure ShutdownCancelsClientWhileProfileIsAttaching;
+    procedure AutoReconnectIsDisabledByDefault;
+    procedure InitialConnectFailureDoesNotStartReconnect;
+    procedure UnexpectedDisconnectReconnectsAndReattachesProfiles;
+    procedure ReconnectUsesCappedBackoffAndStopsAtMaximumAttempts;
+    procedure DisconnectDuringReconnectSchedulesNextAttempt;
+    procedure RequiredProfileReattachFailureContinuesReconnectCycle;
+    procedure ManualDisconnectCancelsPendingReconnect;
+    procedure ShutdownCancelsPendingReconnect;
   end;
 
 implementation
@@ -199,6 +212,19 @@ begin
     '', 0, AClient.Generation);
 end;
 
+procedure TLazBleClientTest.UseFakeReconnectTimer;
+begin
+  FBle.Free;
+  FBle := nil;
+  FBackend := nil;
+  FBackendObject := TFakeLazBleBackend.Create;
+  FBackend := FBackendObject;
+  FReconnectTimerFactoryObject :=
+    TFakeLazBleReconnectTimerFactory.Create;
+  FReconnectTimerFactory := FReconnectTimerFactoryObject;
+  FBle := TLazBle.Create(FBackend, FReconnectTimerFactory);
+end;
+
 procedure TLazBleClientTest.SetUp;
 begin
   FBackendObject := TFakeLazBleBackend.Create;
@@ -210,6 +236,8 @@ procedure TLazBleClientTest.TearDown;
 begin
   FBle.Free;
   FBle := nil;
+  FReconnectTimerFactory := nil;
+  FReconnectTimerFactoryObject := nil;
   FBackend := nil;
   FBackendObject := nil;
 end;
@@ -765,6 +793,240 @@ var
 begin
   Client := TLazBleSync.Create;
   Client.Free;
+end;
+
+procedure TLazBleClientTest.AutoReconnectIsDisabledByDefault;
+var
+  Client: TBleClient;
+  OperationId: TBleOperationId;
+  Profile: TManualGattProfile;
+begin
+  UseFakeReconnectTimer;
+  Client := FBle.CreateClient('device-a');
+  Profile := TManualGattProfile.Create;
+  Client.AddProfile(Profile);
+  Client.ConnectAsync;
+  CompleteTransportClient(Client);
+  Profile.CompleteAttach;
+
+  OperationId := FBackendObject.OperationIds[
+    FBackendObject.CommandCount - 1];
+  EmitEvent(lbekDisconnected, OperationId, Client.DeviceId, '', 0,
+    Client.Generation);
+
+  AssertEquals(Ord(lbcstDisconnected), Ord(Client.State));
+  AssertFalse(Client.AutoReconnect);
+  AssertFalse(FReconnectTimerFactoryObject.LastTimer.Active);
+end;
+
+procedure TLazBleClientTest.InitialConnectFailureDoesNotStartReconnect;
+var
+  Client: TBleClient;
+  OperationId: TBleOperationId;
+begin
+  UseFakeReconnectTimer;
+  Client := FBle.CreateClient('device-a');
+  Client.AutoReconnect := True;
+  Client.ConnectAsync;
+  OperationId := FBackendObject.OperationIds[
+    FBackendObject.CommandCount - 1];
+
+  AssertTrue(FBackendObject.CompleteOperation(OperationId,
+    lbekOperationFailed));
+
+  AssertEquals(Ord(lbcstError), Ord(Client.State));
+  AssertEquals(0, Client.ReconnectAttempt);
+  AssertFalse(FReconnectTimerFactoryObject.LastTimer.Active);
+end;
+
+procedure TLazBleClientTest.UnexpectedDisconnectReconnectsAndReattachesProfiles;
+var
+  Client: TBleClient;
+  CommandCount: Integer;
+  OperationId: TBleOperationId;
+  Profile: TManualGattProfile;
+begin
+  UseFakeReconnectTimer;
+  Client := FBle.CreateClient('device-a');
+  Profile := TManualGattProfile.Create;
+  Client.AddProfile(Profile);
+  Client.ReconnectOptions := TLazBleReconnectOptions.Create(100, 500, 3);
+  Client.AutoReconnect := True;
+  Client.ConnectAsync;
+  CompleteTransportClient(Client);
+  Profile.CompleteAttach;
+
+  OperationId := FBackendObject.OperationIds[
+    FBackendObject.CommandCount - 1];
+  EmitEvent(lbekDisconnected, OperationId, Client.DeviceId, '', 0,
+    Client.Generation);
+
+  AssertEquals(Ord(lbcstWaitingToReconnect), Ord(Client.State));
+  AssertEquals(1, Client.ReconnectAttempt);
+  AssertEquals(100, Client.ReconnectDelayMs);
+  CommandCount := FBackendObject.CommandCount;
+  AssertTrue(FReconnectTimerFactoryObject.LastTimer.Trigger);
+  AssertEquals(CommandCount + 1, FBackendObject.CommandCount);
+  AssertEquals(Ord(lbcstConnecting), Ord(Client.State));
+
+  CompleteTransportClient(Client);
+  AssertEquals(2, Profile.AttachCount);
+  Profile.CompleteAttach;
+
+  AssertEquals(Ord(lbcstReady), Ord(Client.State));
+  AssertEquals(0, Client.ReconnectAttempt);
+  AssertEquals(0, Client.ReconnectDelayMs);
+end;
+
+procedure TLazBleClientTest.ReconnectUsesCappedBackoffAndStopsAtMaximumAttempts;
+const
+  ExpectedDelays: array[1..3] of Cardinal = (100, 200, 250);
+var
+  Attempt: Integer;
+  Client: TBleClient;
+  OperationId: TBleOperationId;
+begin
+  UseFakeReconnectTimer;
+  Client := FBle.CreateClient('device-a');
+  Client.ReconnectOptions := TLazBleReconnectOptions.Create(100, 250, 3);
+  Client.AutoReconnect := True;
+  Client.ConnectAsync;
+  CompleteTransportClient(Client);
+  AssertEquals(Ord(lbcstReady), Ord(Client.State));
+
+  OperationId := FBackendObject.OperationIds[
+    FBackendObject.CommandCount - 1];
+  EmitEvent(lbekDisconnected, OperationId, Client.DeviceId, '', 0,
+    Client.Generation);
+
+  for Attempt := 1 to 3 do
+  begin
+    AssertEquals(Attempt, Client.ReconnectAttempt);
+    AssertEquals(ExpectedDelays[Attempt], Client.ReconnectDelayMs);
+    AssertTrue(FReconnectTimerFactoryObject.LastTimer.Trigger);
+    OperationId := FBackendObject.OperationIds[
+      FBackendObject.CommandCount - 1];
+    AssertTrue(FBackendObject.CompleteOperation(OperationId,
+      lbekOperationFailed));
+  end;
+
+  AssertEquals(Ord(lbcstError), Ord(Client.State));
+  AssertEquals(3, Client.ReconnectAttempt);
+  AssertFalse(FReconnectTimerFactoryObject.LastTimer.Active);
+end;
+
+procedure TLazBleClientTest.DisconnectDuringReconnectSchedulesNextAttempt;
+var
+  Client: TBleClient;
+  OperationId: TBleOperationId;
+begin
+  UseFakeReconnectTimer;
+  Client := FBle.CreateClient('device-a');
+  Client.ReconnectOptions := TLazBleReconnectOptions.Create(100, 500, 3);
+  Client.AutoReconnect := True;
+  Client.ConnectAsync;
+  CompleteTransportClient(Client);
+
+  OperationId := FBackendObject.OperationIds[
+    FBackendObject.CommandCount - 1];
+  EmitEvent(lbekDisconnected, OperationId, Client.DeviceId, '', 0,
+    Client.Generation);
+  AssertTrue(FReconnectTimerFactoryObject.LastTimer.Trigger);
+  OperationId := FBackendObject.OperationIds[
+    FBackendObject.CommandCount - 1];
+
+  EmitEvent(lbekDisconnected, OperationId, Client.DeviceId, '', 0,
+    Client.Generation);
+
+  AssertEquals(Ord(lbcstWaitingToReconnect), Ord(Client.State));
+  AssertEquals(2, Client.ReconnectAttempt);
+  AssertEquals(200, Client.ReconnectDelayMs);
+  AssertTrue(FReconnectTimerFactoryObject.LastTimer.Active);
+end;
+
+procedure TLazBleClientTest.RequiredProfileReattachFailureContinuesReconnectCycle;
+var
+  Client: TBleClient;
+  OperationId: TBleOperationId;
+  Profile: TManualGattProfile;
+begin
+  UseFakeReconnectTimer;
+  Client := FBle.CreateClient('device-a');
+  Profile := TManualGattProfile.Create;
+  Client.AddProfile(Profile);
+  Client.ReconnectOptions := TLazBleReconnectOptions.Create(100, 500, 3);
+  Client.AutoReconnect := True;
+  Client.ConnectAsync;
+  CompleteTransportClient(Client);
+  Profile.CompleteAttach;
+
+  OperationId := FBackendObject.OperationIds[
+    FBackendObject.CommandCount - 1];
+  EmitEvent(lbekDisconnected, OperationId, Client.DeviceId, '', 0,
+    Client.Generation);
+  AssertTrue(FReconnectTimerFactoryObject.LastTimer.Trigger);
+  CompleteTransportClient(Client);
+  Profile.FailAttach('subscribe failed');
+
+  OperationId := FBackendObject.OperationIds[
+    FBackendObject.CommandCount - 1];
+  AssertEquals(Ord(lbckDisconnect),
+    Ord(FBackendObject.Commands[FBackendObject.CommandCount - 1].Kind));
+  EmitEvent(lbekDisconnected, OperationId, Client.DeviceId, '', 0,
+    Client.Generation);
+
+  AssertEquals(Ord(lbcstWaitingToReconnect), Ord(Client.State));
+  AssertEquals(2, Client.ReconnectAttempt);
+  AssertEquals(200, Client.ReconnectDelayMs);
+end;
+
+procedure TLazBleClientTest.ManualDisconnectCancelsPendingReconnect;
+var
+  Client: TBleClient;
+  CommandCount: Integer;
+  DisconnectOperation: TBleOperation;
+  OperationId: TBleOperationId;
+begin
+  UseFakeReconnectTimer;
+  Client := FBle.CreateClient('device-a');
+  Client.AutoReconnect := True;
+  Client.ConnectAsync;
+  CompleteTransportClient(Client);
+  OperationId := FBackendObject.OperationIds[
+    FBackendObject.CommandCount - 1];
+  EmitEvent(lbekDisconnected, OperationId, Client.DeviceId, '', 0,
+    Client.Generation);
+  AssertTrue(FReconnectTimerFactoryObject.LastTimer.Active);
+
+  CommandCount := FBackendObject.CommandCount;
+  DisconnectOperation := Client.DisconnectAsync;
+
+  AssertEquals(Ord(lbopSucceeded), Ord(DisconnectOperation.State));
+  AssertEquals(Ord(lbcstDisconnected), Ord(Client.State));
+  AssertFalse(FReconnectTimerFactoryObject.LastTimer.Trigger);
+  AssertEquals(CommandCount, FBackendObject.CommandCount);
+end;
+
+procedure TLazBleClientTest.ShutdownCancelsPendingReconnect;
+var
+  Client: TBleClient;
+  OperationId: TBleOperationId;
+begin
+  UseFakeReconnectTimer;
+  Client := FBle.CreateClient('device-a');
+  Client.AutoReconnect := True;
+  Client.ConnectAsync;
+  CompleteTransportClient(Client);
+  OperationId := FBackendObject.OperationIds[
+    FBackendObject.CommandCount - 1];
+  EmitEvent(lbekDisconnected, OperationId, Client.DeviceId, '', 0,
+    Client.Generation);
+  AssertTrue(FReconnectTimerFactoryObject.LastTimer.Active);
+
+  FBle.ShutdownAsync;
+
+  AssertFalse(FReconnectTimerFactoryObject.LastTimer.Trigger);
+  AssertEquals(Ord(lbcstDisconnected), Ord(Client.State));
 end;
 
 initialization

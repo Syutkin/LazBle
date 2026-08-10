@@ -14,7 +14,7 @@
       <UseAppBundle Value="False"/>
       <ResourceType Value="res"/>
     </General>
-    <Units Count="12">
+    <Units Count="14">
       <Unit0>
         <Filename Value="lazbletests.lpr"/>
         <IsPartOfProject Value="True"/>
@@ -74,6 +74,16 @@
         <IsPartOfProject Value="True"/>
         <UnitName Value="LazBleGattProfileTests"/>
       </Unit11>
+      <Unit12>
+        <Filename Value="core\lazblereconnecttests.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="LazBleReconnectTests"/>
+      </Unit12>
+      <Unit13>
+        <Filename Value="support\fakelazblereconnecttimer.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="FakeLazBleReconnectTimer"/>
+      </Unit13>
     </Units>
   </ProjectOptions>
   <CompilerOptions>
