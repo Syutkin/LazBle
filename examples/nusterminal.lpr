@@ -10,6 +10,7 @@ uses
   SysUtils,
   CustApp,
   LazBleTypes,
+  LazBleOperation,
   LazBleGattOperation,
   LazBleClient,
   LazBleSync,
@@ -103,23 +104,22 @@ function TNusTerminalApplication.SendText(const AText: string;
   const ATimeoutMs: Cardinal): Boolean;
 var
   Deadline: QWord;
-  Operation: TBleGattOperation;
+  Operation: IBleGattOperation;
 begin
   Operation := FProfile.SendAsync(StringToBytes(AText));
-  if not Assigned(Operation) then
-    Exit(False);
-
   Deadline := GetTickCount64 + ATimeoutMs;
-  while (Operation.State = lbosPending) and
+  while (Operation.State = lbopPending) and
     (GetTickCount64 < Deadline) do
     Sleep(10);
+  if Operation.State = lbopPending then
+    Operation.Timeout;
 
-  Result := Operation.State = lbosSucceeded;
+  Result := Operation.State = lbopSucceeded;
   if not Result then
   begin
     if Operation.ErrorMessage <> '' then
       WriteLn(StdErr, Operation.ErrorMessage)
-    else if Operation.State = lbosPending then
+    else if Operation.State = lbopTimedOut then
       WriteLn(StdErr, 'NUS write timed out.')
     else
       WriteLn(StdErr, 'NUS write failed.');

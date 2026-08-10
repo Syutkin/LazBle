@@ -24,6 +24,8 @@ type
 
   TBleGattProfile = class abstract
   private
+    FLock: TRTLCriticalSection;
+    FCallbackLock: TRTLCriticalSection;
     FSession: TBleGattSession;
     FState: TLazBleGattProfileState;
     FErrorMessage: string;
@@ -34,6 +36,12 @@ type
     function GetState: TLazBleGattProfileState;
     function GetReady: Boolean;
     function GetBound: Boolean;
+    function GetCurrentState: TLazBleGattProfileState;
+    function GetAttachedGeneration: QWord;
+    function GetErrorMessage: string;
+    function GetOnStateChanged: TLazBleGattProfileStateChangedEvent;
+    procedure SetOnStateChanged(
+      const AHandler: TLazBleGattProfileStateChangedEvent);
     procedure SetState(const AState: TLazBleGattProfileState);
   protected
     procedure BindSession(const ASession: TBleGattSession);
@@ -43,25 +51,25 @@ type
     procedure RefreshState; virtual;
     procedure MarkReady;
     procedure MarkError(const AMessage: string);
-    property CurrentState: TLazBleGattProfileState read FState;
-    property Session: TBleGattSession read FSession;
-  public
-    constructor Create;
-    destructor Destroy; override;
     procedure Attach;
     procedure Detach;
     procedure AddStateChangedHandler(
       const AHandler: TLazBleGattProfileStateChangedEvent);
     procedure RemoveStateChangedHandler(
       const AHandler: TLazBleGattProfileStateChangedEvent);
+    property CurrentState: TLazBleGattProfileState read GetCurrentState;
+    property Session: TBleGattSession read FSession;
     property Bound: Boolean read GetBound;
+    property AttachedGeneration: QWord read GetAttachedGeneration;
+  public
+    constructor Create;
+    destructor Destroy; override;
     property DeviceId: string read GetDeviceId;
-    property AttachedGeneration: QWord read FAttachedGeneration;
     property State: TLazBleGattProfileState read GetState;
     property Ready: Boolean read GetReady;
-    property ErrorMessage: string read FErrorMessage;
+    property ErrorMessage: string read GetErrorMessage;
     property OnStateChanged: TLazBleGattProfileStateChangedEvent
-      read FOnStateChanged write FOnStateChanged;
+      read GetOnStateChanged write SetOnStateChanged;
   end;
 
 implementation
@@ -76,14 +84,76 @@ end;
 constructor TBleGattProfile.Create;
 begin
   inherited Create;
+  InitCriticalSection(FLock);
+  InitCriticalSection(FCallbackLock);
   FState := lbgpsDetached;
 end;
 
 destructor TBleGattProfile.Destroy;
 begin
-  FOnStateChanged := nil;
+  SetOnStateChanged(nil);
+  EnterCriticalSection(FCallbackLock);
+  try
+    FStateChangedHandlers := nil;
+  finally
+    LeaveCriticalSection(FCallbackLock);
+  end;
   FSession := nil;
+  DoneCriticalSection(FCallbackLock);
+  DoneCriticalSection(FLock);
   inherited Destroy;
+end;
+
+function TBleGattProfile.GetCurrentState: TLazBleGattProfileState;
+begin
+  EnterCriticalSection(FLock);
+  try
+    Result := FState;
+  finally
+    LeaveCriticalSection(FLock);
+  end;
+end;
+
+function TBleGattProfile.GetAttachedGeneration: QWord;
+begin
+  EnterCriticalSection(FLock);
+  try
+    Result := FAttachedGeneration;
+  finally
+    LeaveCriticalSection(FLock);
+  end;
+end;
+
+function TBleGattProfile.GetErrorMessage: string;
+begin
+  EnterCriticalSection(FLock);
+  try
+    Result := FErrorMessage;
+  finally
+    LeaveCriticalSection(FLock);
+  end;
+end;
+
+function TBleGattProfile.GetOnStateChanged:
+  TLazBleGattProfileStateChangedEvent;
+begin
+  EnterCriticalSection(FCallbackLock);
+  try
+    Result := FOnStateChanged;
+  finally
+    LeaveCriticalSection(FCallbackLock);
+  end;
+end;
+
+procedure TBleGattProfile.SetOnStateChanged(
+  const AHandler: TLazBleGattProfileStateChangedEvent);
+begin
+  EnterCriticalSection(FCallbackLock);
+  try
+    FOnStateChanged := AHandler;
+  finally
+    LeaveCriticalSection(FCallbackLock);
+  end;
 end;
 
 function TBleGattProfile.GetDeviceId: string;
@@ -120,9 +190,9 @@ end;
 
 function TBleGattProfile.GetState: TLazBleGattProfileState;
 begin
-  if FState <> lbgpsDetached then
+  if GetCurrentState <> lbgpsDetached then
     RefreshState;
-  Result := FState;
+  Result := GetCurrentState;
 end;
 
 function TBleGattProfile.GetReady: Boolean;
@@ -135,15 +205,26 @@ var
   Handler: TLazBleGattProfileStateChangedEvent;
   Handlers: TLazBleGattProfileStateChangedEvents;
 begin
-  if FState = AState then
-    Exit;
-  FState := AState;
-  if Assigned(FOnStateChanged) then
-    FOnStateChanged(Self, FState);
-  Handlers := Copy(FStateChangedHandlers);
+  EnterCriticalSection(FLock);
+  try
+    if FState = AState then
+      Exit;
+    FState := AState;
+  finally
+    LeaveCriticalSection(FLock);
+  end;
+  EnterCriticalSection(FCallbackLock);
+  try
+    Handler := FOnStateChanged;
+    Handlers := Copy(FStateChangedHandlers);
+  finally
+    LeaveCriticalSection(FCallbackLock);
+  end;
+  if Assigned(Handler) then
+    Handler(Self, AState);
   for Handler in Handlers do
     if Assigned(Handler) then
-      Handler(Self, FState);
+      Handler(Self, AState);
 end;
 
 procedure TBleGattProfile.AddStateChangedHandler(
@@ -154,12 +235,17 @@ var
 begin
   if not Assigned(AHandler) then
     Exit;
-  for Handler in FStateChangedHandlers do
-    if SameProfileStateChangedHandler(Handler, AHandler) then
-      Exit;
-  Index := Length(FStateChangedHandlers);
-  SetLength(FStateChangedHandlers, Index + 1);
-  FStateChangedHandlers[Index] := AHandler;
+  EnterCriticalSection(FCallbackLock);
+  try
+    for Handler in FStateChangedHandlers do
+      if SameProfileStateChangedHandler(Handler, AHandler) then
+        Exit;
+    Index := Length(FStateChangedHandlers);
+    SetLength(FStateChangedHandlers, Index + 1);
+    FStateChangedHandlers[Index] := AHandler;
+  finally
+    LeaveCriticalSection(FCallbackLock);
+  end;
 end;
 
 procedure TBleGattProfile.RemoveStateChangedHandler(
@@ -168,16 +254,22 @@ var
   Index: Integer;
   MoveIndex: Integer;
 begin
-  for Index := 0 to High(FStateChangedHandlers) do
-    if SameProfileStateChangedHandler(FStateChangedHandlers[Index],
-      AHandler) then
-    begin
-      for MoveIndex := Index to High(FStateChangedHandlers) - 1 do
-        FStateChangedHandlers[MoveIndex] :=
-          FStateChangedHandlers[MoveIndex + 1];
-      SetLength(FStateChangedHandlers, Length(FStateChangedHandlers) - 1);
-      Exit;
-    end;
+  EnterCriticalSection(FCallbackLock);
+  try
+    for Index := 0 to High(FStateChangedHandlers) do
+      if SameProfileStateChangedHandler(FStateChangedHandlers[Index],
+        AHandler) then
+      begin
+        for MoveIndex := Index to High(FStateChangedHandlers) - 1 do
+          FStateChangedHandlers[MoveIndex] :=
+            FStateChangedHandlers[MoveIndex + 1];
+        SetLength(FStateChangedHandlers,
+          Length(FStateChangedHandlers) - 1);
+        Exit;
+      end;
+  finally
+    LeaveCriticalSection(FCallbackLock);
+  end;
 end;
 
 procedure TBleGattProfile.RefreshState;
@@ -186,15 +278,20 @@ end;
 
 procedure TBleGattProfile.MarkReady;
 begin
-  if FState = lbgpsAttaching then
+  if GetCurrentState = lbgpsAttaching then
     SetState(lbgpsReady);
 end;
 
 procedure TBleGattProfile.MarkError(const AMessage: string);
 begin
-  if FState = lbgpsDetached then
+  if GetCurrentState = lbgpsDetached then
     Exit;
-  FErrorMessage := AMessage;
+  EnterCriticalSection(FLock);
+  try
+    FErrorMessage := AMessage;
+  finally
+    LeaveCriticalSection(FLock);
+  end;
   SetState(lbgpsError);
 end;
 
@@ -202,10 +299,15 @@ procedure TBleGattProfile.Attach;
 begin
   if not Assigned(FSession) then
     raise EInvalidOperation.Create('GATT profile is not bound to a client');
-  if FState <> lbgpsDetached then
+  if GetCurrentState <> lbgpsDetached then
     Exit;
-  FErrorMessage := '';
-  FAttachedGeneration := FSession.Generation;
+  EnterCriticalSection(FLock);
+  try
+    FErrorMessage := '';
+    FAttachedGeneration := FSession.Generation;
+  finally
+    LeaveCriticalSection(FLock);
+  end;
   SetState(lbgpsAttaching);
   DoAttach;
   GetState;
@@ -213,11 +315,16 @@ end;
 
 procedure TBleGattProfile.Detach;
 begin
-  if FState = lbgpsDetached then
+  if GetCurrentState = lbgpsDetached then
     Exit;
   DoDetach;
-  FAttachedGeneration := 0;
-  FErrorMessage := '';
+  EnterCriticalSection(FLock);
+  try
+    FAttachedGeneration := 0;
+    FErrorMessage := '';
+  finally
+    LeaveCriticalSection(FLock);
+  end;
   SetState(lbgpsDetached);
 end;
 

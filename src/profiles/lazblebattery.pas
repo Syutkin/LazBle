@@ -6,6 +6,7 @@ interface
 
 uses
   SysUtils,
+  LazBleOperation,
   LazBleGattOperation,
   LazBleGattSubscription,
   LazBleGattSession,
@@ -17,22 +18,24 @@ const
   UnknownBatteryLevel = -1;
 
 type
-  TLazBleBatteryPhase = (
-    lbbpDetached,
-    lbbpReading,
-    lbbpSubscribing
-  );
-
   TLazBleBatteryLevelEvent = procedure(Sender: TObject;
     const ADeviceId: string; const ALevelPercent: Integer) of object;
 
   TBleBatteryProfile = class(TBleGattProfile)
+  private type
+    TLazBleBatteryPhase = (
+      lbbpDetached,
+      lbbpReading,
+      lbbpSubscribing
+    );
   private
+    FLevelLock: TRTLCriticalSection;
+    FCallbackLock: TRTLCriticalSection;
     FPhase: TLazBleBatteryPhase;
     FLevelPercent: Integer;
-    FReadOperation: TBleGattOperation;
-    FSubscription: TBleSubscription;
-    FDetachOperation: TBleGattOperation;
+    FReadOperation: IBleGattOperation;
+    FSubscription: IBleSubscription;
+    FDetachOperation: IBleGattOperation;
     FOnLevelChanged: TLazBleBatteryLevelEvent;
     procedure ReadCompleted(Sender: TObject);
     procedure NotificationReceived(Sender: TObject; const AValue: TBytes);
@@ -40,19 +43,22 @@ type
       const AState: TLazBleSubscriptionState);
     function AcceptLevel(const AValue: TBytes): Boolean;
     procedure SetProfileError(const AMessage: string);
+    function GetLevelPercent: Integer;
+    function GetOnLevelChanged: TLazBleBatteryLevelEvent;
+    procedure SetOnLevelChanged(const AHandler: TLazBleBatteryLevelEvent);
   protected
     procedure DoAttach; override;
     procedure DoDetach; override;
     procedure RefreshState; override;
+    property ReadOperation: IBleGattOperation read FReadOperation;
+    property Subscription: IBleSubscription read FSubscription;
+    property DetachOperation: IBleGattOperation read FDetachOperation;
   public
     constructor Create;
     destructor Destroy; override;
-    property LevelPercent: Integer read FLevelPercent;
-    property ReadOperation: TBleGattOperation read FReadOperation;
-    property Subscription: TBleSubscription read FSubscription;
-    property DetachOperation: TBleGattOperation read FDetachOperation;
-    property OnLevelChanged: TLazBleBatteryLevelEvent read FOnLevelChanged
-      write FOnLevelChanged;
+    property LevelPercent: Integer read GetLevelPercent;
+    property OnLevelChanged: TLazBleBatteryLevelEvent read GetOnLevelChanged
+      write SetOnLevelChanged;
   end;
 
 implementation
@@ -60,6 +66,8 @@ implementation
 constructor TBleBatteryProfile.Create;
 begin
   inherited Create;
+  InitCriticalSection(FLevelLock);
+  InitCriticalSection(FCallbackLock);
   FPhase := lbbpDetached;
   FLevelPercent := UnknownBatteryLevel;
 end;
@@ -67,7 +75,41 @@ end;
 destructor TBleBatteryProfile.Destroy;
 begin
   Detach;
+  SetOnLevelChanged(nil);
+  DoneCriticalSection(FCallbackLock);
+  DoneCriticalSection(FLevelLock);
   inherited Destroy;
+end;
+
+function TBleBatteryProfile.GetLevelPercent: Integer;
+begin
+  EnterCriticalSection(FLevelLock);
+  try
+    Result := FLevelPercent;
+  finally
+    LeaveCriticalSection(FLevelLock);
+  end;
+end;
+
+function TBleBatteryProfile.GetOnLevelChanged: TLazBleBatteryLevelEvent;
+begin
+  EnterCriticalSection(FCallbackLock);
+  try
+    Result := FOnLevelChanged;
+  finally
+    LeaveCriticalSection(FCallbackLock);
+  end;
+end;
+
+procedure TBleBatteryProfile.SetOnLevelChanged(
+  const AHandler: TLazBleBatteryLevelEvent);
+begin
+  EnterCriticalSection(FCallbackLock);
+  try
+    FOnLevelChanged := AHandler;
+  finally
+    LeaveCriticalSection(FCallbackLock);
+  end;
 end;
 
 procedure TBleBatteryProfile.SetProfileError(const AMessage: string);
@@ -77,6 +119,7 @@ end;
 
 function TBleBatteryProfile.AcceptLevel(const AValue: TBytes): Boolean;
 var
+  Handler: TLazBleBatteryLevelEvent;
   NewLevel: Integer;
 begin
   Result := (Length(AValue) = 1) and (AValue[0] <= 100);
@@ -87,21 +130,32 @@ begin
   end;
 
   NewLevel := AValue[0];
-  if NewLevel = FLevelPercent then
-    Exit;
-  FLevelPercent := NewLevel;
-  if Assigned(FOnLevelChanged) then
-    FOnLevelChanged(Self, DeviceId, FLevelPercent);
+  EnterCriticalSection(FLevelLock);
+  try
+    if NewLevel = FLevelPercent then
+      Exit;
+    FLevelPercent := NewLevel;
+  finally
+    LeaveCriticalSection(FLevelLock);
+  end;
+  EnterCriticalSection(FCallbackLock);
+  try
+    Handler := FOnLevelChanged;
+  finally
+    LeaveCriticalSection(FCallbackLock);
+  end;
+  if Assigned(Handler) then
+    Handler(Self, DeviceId, NewLevel);
 end;
 
 procedure TBleBatteryProfile.ReadCompleted(Sender: TObject);
 begin
-  if (Sender <> FReadOperation) or (FPhase <> lbbpReading) or
+  if (FPhase <> lbbpReading) or
     (CurrentState <> lbgpsAttaching) then
     Exit;
   FReadOperation.OnCompleted := nil;
 
-  if FReadOperation.State <> lbosSucceeded then
+  if FReadOperation.State <> lbopSucceeded then
   begin
     SetProfileError('Could not read Battery Level');
     Exit;
@@ -122,8 +176,6 @@ end;
 procedure TBleBatteryProfile.NotificationReceived(Sender: TObject;
   const AValue: TBytes);
 begin
-  if Sender <> FSubscription then
-    Exit;
   if AcceptLevel(AValue) then
     MarkReady;
 end;
@@ -156,30 +208,32 @@ begin
   FReadOperation := Session.ReadAsync(BatteryServiceUuid,
     BatteryLevelCharacteristicUuid);
   FReadOperation.OnCompleted := @ReadCompleted;
-  if FReadOperation.State <> lbosPending then
-    ReadCompleted(FReadOperation);
+  if FReadOperation.State <> lbopPending then
+    ReadCompleted(nil);
 end;
 
 procedure TBleBatteryProfile.DoDetach;
 begin
   if Assigned(FReadOperation) and
-    (FReadOperation.State = lbosPending) then
+    (FReadOperation.State = lbopPending) then
   begin
     FReadOperation.OnCompleted := nil;
-    Session.CancelOperation(FReadOperation);
+    FReadOperation.Cancel;
   end;
 
   if Assigned(FSubscription) then
   begin
     FSubscription.OnData := nil;
     FSubscription.OnStateChanged := nil;
-    if FSubscription.State = lbsubPending then
-      Session.CancelSubscription(FSubscription)
-    else
-      FDetachOperation := FSubscription.Unsubscribe;
+    FDetachOperation := FSubscription.Unsubscribe;
   end;
 
-  FLevelPercent := UnknownBatteryLevel;
+  EnterCriticalSection(FLevelLock);
+  try
+    FLevelPercent := UnknownBatteryLevel;
+  finally
+    LeaveCriticalSection(FLevelLock);
+  end;
   FPhase := lbbpDetached;
 end;
 

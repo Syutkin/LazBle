@@ -6,10 +6,12 @@ interface
 
 uses
   Classes,
+  SysUtils,
   fpcunit,
   testregistry,
   LazBleTypes,
   LazBleBackend,
+  LazBleOperation,
   LazBleGattProfile,
   LazBleClient,
   LazBleFacade,
@@ -30,6 +32,8 @@ type
   public
     procedure CompleteAttach;
     procedure FailAttach(const AMessage: string);
+    function IsBound: Boolean;
+    function TestAttachedGeneration: QWord;
     property AttachCount: Integer read FAttachCount;
     property DetachCount: Integer read FDetachCount;
   end;
@@ -86,6 +90,7 @@ type
     procedure ConnectCompletesAfterServiceDiscovery;
     procedure TwoClientsConnectIndependently;
     procedure ShutdownCompletesAfterBackendShutdown;
+    procedure CreateClientAfterShutdownRaises;
     procedure SyncScanWaitsForTerminalEvent;
     procedure DefaultFacadeDoesNotLoadNativeLibraryWhenCreated;
     procedure DefaultSyncFacadeDoesNotLoadNativeLibraryWhenCreated;
@@ -118,6 +123,45 @@ type
 
 implementation
 
+type
+  TTestLazBleAccess = class(TLazBle)
+  public
+    constructor CreateInternal(const ABackend: ILazBleBackend;
+      const AReconnectTimerFactory: ILazBleReconnectTimerFactory);
+  end;
+
+  TTestBleClientAccess = class(TBleClient)
+  public
+    function TestGeneration: QWord;
+    function TestProfileCount: Integer;
+  end;
+
+constructor TTestLazBleAccess.CreateInternal(const ABackend: ILazBleBackend;
+  const AReconnectTimerFactory: ILazBleReconnectTimerFactory);
+begin
+  inherited Create(ABackend, AReconnectTimerFactory);
+end;
+
+function TTestBleClientAccess.TestGeneration: QWord;
+begin
+  Result := Generation;
+end;
+
+function TTestBleClientAccess.TestProfileCount: Integer;
+begin
+  Result := ProfileCount;
+end;
+
+function ClientGeneration(const AClient: TBleClient): QWord;
+begin
+  Result := TTestBleClientAccess(AClient).TestGeneration;
+end;
+
+function ClientProfileCount(const AClient: TBleClient): Integer;
+begin
+  Result := TTestBleClientAccess(AClient).TestProfileCount;
+end;
+
 procedure TManualGattProfile.DoAttach;
 begin
   Inc(FAttachCount);
@@ -136,6 +180,16 @@ end;
 procedure TManualGattProfile.FailAttach(const AMessage: string);
 begin
   MarkError(AMessage);
+end;
+
+function TManualGattProfile.IsBound: Boolean;
+begin
+  Result := Bound;
+end;
+
+function TManualGattProfile.TestAttachedGeneration: QWord;
+begin
+  Result := AttachedGeneration;
 end;
 
 constructor TTrackedGattProfile.Create(const ABackend: TFakeLazBleBackend;
@@ -205,11 +259,11 @@ begin
   OperationId := FBackendObject.OperationIds[
     FBackendObject.CommandCount - 1];
   EmitEvent(lbekConnected, OperationId, AClient.DeviceId, '', 0,
-    AClient.Generation);
+    ClientGeneration(AClient));
   OperationId := FBackendObject.OperationIds[
     FBackendObject.CommandCount - 1];
   EmitEvent(lbekServicesDiscovered, OperationId, AClient.DeviceId,
-    '', 0, AClient.Generation);
+    '', 0, ClientGeneration(AClient));
 end;
 
 procedure TLazBleClientTest.UseFakeReconnectTimer;
@@ -222,7 +276,8 @@ begin
   FReconnectTimerFactoryObject :=
     TFakeLazBleReconnectTimerFactory.Create;
   FReconnectTimerFactory := FReconnectTimerFactoryObject;
-  FBle := TLazBle.Create(FBackend, FReconnectTimerFactory);
+  FBle := TTestLazBleAccess.CreateInternal(FBackend,
+    FReconnectTimerFactory);
 end;
 
 procedure TLazBleClientTest.SetUp;
@@ -245,7 +300,7 @@ end;
 procedure TLazBleClientTest.ScanDeduplicatesWithoutChangingDiscoveryOrder;
 var
   Devices: TBleDeviceInfos;
-  Operation: TBleScanOperation;
+  Operation: IBleScanOperation;
   OperationId: TBleOperationId;
 begin
   Operation := FBle.ScanAsync('hci0', 5000);
@@ -269,7 +324,7 @@ end;
 
 procedure TLazBleClientTest.CancellingScanCancelsBackendOperation;
 var
-  Operation: TBleScanOperation;
+  Operation: IBleScanOperation;
   OperationId: TBleOperationId;
 begin
   Operation := FBle.ScanAsync('', 5000);
@@ -286,7 +341,7 @@ end;
 procedure TLazBleClientTest.TimedOutScanKeepsTimedOutStateAfterTerminalEvent;
 var
   Observer: TClientOperationObserver;
-  Operation: TBleScanOperation;
+  Operation: IBleScanOperation;
   OperationId: TBleOperationId;
 begin
   Observer := TClientOperationObserver.Create;
@@ -311,7 +366,7 @@ end;
 procedure TLazBleClientTest.ConnectCompletesAfterServiceDiscovery;
 var
   Client: TBleClient;
-  Operation: TBleOperation;
+  Operation: IBleOperation;
 begin
   Client := FBle.CreateClient('device-a');
   Operation := Client.ConnectAsync;
@@ -319,7 +374,7 @@ begin
 
   AssertEquals(Ord(lbopSucceeded), Ord(Operation.State));
   AssertEquals(Ord(lbcstReady), Ord(Client.State));
-  AssertTrue(Client.Generation > 0);
+  AssertTrue(ClientGeneration(Client) > 0);
 end;
 
 procedure TLazBleClientTest.TwoClientsConnectIndependently;
@@ -339,21 +394,21 @@ begin
   SecondConnectId := FBackendObject.OperationIds[1];
 
   EmitEvent(lbekConnected, FirstConnectId, FirstClient.DeviceId, '', 0,
-    FirstClient.Generation);
+    ClientGeneration(FirstClient));
   FirstDiscoveryId := FBackendObject.OperationIds[
     FBackendObject.CommandCount - 1];
   EmitEvent(lbekServicesDiscovered, FirstDiscoveryId,
-    FirstClient.DeviceId, '', 0, FirstClient.Generation);
+    FirstClient.DeviceId, '', 0, ClientGeneration(FirstClient));
 
   AssertEquals(Ord(lbcstReady), Ord(FirstClient.State));
   AssertEquals(Ord(lbcstConnecting), Ord(SecondClient.State));
 
   EmitEvent(lbekConnected, SecondConnectId, SecondClient.DeviceId, '', 0,
-    SecondClient.Generation);
+    ClientGeneration(SecondClient));
   SecondDiscoveryId := FBackendObject.OperationIds[
     FBackendObject.CommandCount - 1];
   EmitEvent(lbekServicesDiscovered, SecondDiscoveryId,
-    SecondClient.DeviceId, '', 0, SecondClient.Generation);
+    SecondClient.DeviceId, '', 0, ClientGeneration(SecondClient));
 
   AssertEquals(Ord(lbcstReady), Ord(FirstClient.State));
   AssertEquals(Ord(lbcstReady), Ord(SecondClient.State));
@@ -361,13 +416,32 @@ end;
 
 procedure TLazBleClientTest.ShutdownCompletesAfterBackendShutdown;
 var
-  Operation: TBleOperation;
+  Operation: IBleOperation;
 begin
   Operation := FBle.ShutdownAsync;
 
   AssertEquals(Ord(lbopPending), Ord(Operation.State));
   AssertTrue(FBackendObject.CompleteShutdown);
   AssertEquals(Ord(lbopSucceeded), Ord(Operation.State));
+end;
+
+procedure TLazBleClientTest.CreateClientAfterShutdownRaises;
+var
+  Raised: Boolean;
+  ShutdownOperation: IBleOperation;
+begin
+  ShutdownOperation := FBle.ShutdownAsync;
+  FBackendObject.CompleteShutdown;
+  AssertEquals(Ord(lbopSucceeded), Ord(ShutdownOperation.State));
+
+  Raised := False;
+  try
+    FBle.CreateClient('too-late');
+  except
+    on EInvalidOperation do
+      Raised := True;
+  end;
+  AssertTrue(Raised);
 end;
 
 procedure TLazBleClientTest.SyncScanWaitsForTerminalEvent;
@@ -395,13 +469,13 @@ end;
 procedure TLazBleClientTest.ClientWaitsForRequiredProfiles;
 var
   Client: TBleClient;
-  Operation: TBleOperation;
+  Operation: IBleOperation;
   Profile: TManualGattProfile;
 begin
   Client := FBle.CreateClient('device-a');
   Profile := TManualGattProfile.Create;
   Client.AddProfile(Profile, True);
-  AssertTrue(Profile.Bound);
+  AssertTrue(Profile.IsBound);
 
   Operation := Client.ConnectAsync;
   CompleteTransportClient(Client);
@@ -417,7 +491,7 @@ procedure TLazBleClientTest.ClientWaitsForRealNusSubscription;
 var
   BackendEvent: TLazBleBackendEvent;
   Client: TBleClient;
-  Operation: TBleOperation;
+  Operation: IBleOperation;
   Profile: TNusProfile;
 begin
   Client := FBle.CreateClient('device-a');
@@ -430,10 +504,11 @@ begin
 
   BackendEvent := Default(TLazBleBackendEvent);
   BackendEvent.Kind := lbekSubscribed;
-  BackendEvent.OperationId := Profile.Channel.Subscription.OperationId;
+  BackendEvent.OperationId := FBackendObject.OperationIds[
+    FBackendObject.CommandCount - 1];
   BackendEvent.SubscriptionId := 51;
   BackendEvent.DeviceId := Client.DeviceId;
-  BackendEvent.Generation := Client.Generation;
+  BackendEvent.Generation := ClientGeneration(Client);
   AssertTrue(FBackendObject.EmitProgress(BackendEvent));
 
   AssertEquals(Ord(lbcstReady), Ord(Client.State));
@@ -443,7 +518,7 @@ end;
 procedure TLazBleClientTest.OptionalProfileFailureDoesNotFailClient;
 var
   Client: TBleClient;
-  Operation: TBleOperation;
+  Operation: IBleOperation;
   OptionalProfile: TManualGattProfile;
   RequiredProfile: TManualGattProfile;
 begin
@@ -466,7 +541,7 @@ end;
 procedure TLazBleClientTest.RequiredProfileFailureFailsClient;
 var
   Client: TBleClient;
-  Operation: TBleOperation;
+  Operation: IBleOperation;
   Profile: TManualGattProfile;
 begin
   Client := FBle.CreateClient('device-a');
@@ -504,7 +579,7 @@ procedure TLazBleClientTest.SecondConnectAttachesRegisteredProfilesAgain;
 var
   Client: TBleClient;
   DisconnectId: TBleOperationId;
-  Operation: TBleOperation;
+  Operation: IBleOperation;
   Profile: TManualGattProfile;
 begin
   Client := FBle.CreateClient('device-a');
@@ -520,13 +595,13 @@ begin
   DisconnectId := FBackendObject.OperationIds[
     FBackendObject.CommandCount - 1];
   EmitEvent(lbekDisconnected, DisconnectId, Client.DeviceId, '', 0,
-    Client.Generation);
+    ClientGeneration(Client));
   AssertEquals(Ord(lbcstDisconnected), Ord(Client.State));
 
   Operation := Client.ConnectAsync;
   CompleteTransportClient(Client);
   AssertEquals(2, Profile.AttachCount);
-  AssertTrue(Profile.AttachedGeneration = Client.Generation);
+  AssertTrue(Profile.TestAttachedGeneration = ClientGeneration(Client));
   Profile.CompleteAttach;
 
   AssertEquals(Ord(lbcstReady), Ord(Client.State));
@@ -556,15 +631,15 @@ begin
   DisconnectId := FBackendObject.OperationIds[
     FBackendObject.CommandCount - 1];
   EmitEvent(lbekDisconnected, DisconnectId, Client.DeviceId, '', 0,
-    Client.Generation);
+    ClientGeneration(Client));
 
   Client.ConnectAsync;
   CompleteTransportClient(Client);
 
   AssertEquals(2, FirstProfile.AttachCount);
   AssertEquals(2, SecondProfile.AttachCount);
-  AssertTrue(FirstProfile.AttachedGeneration = Client.Generation);
-  AssertTrue(SecondProfile.AttachedGeneration = Client.Generation);
+  AssertTrue(FirstProfile.TestAttachedGeneration = ClientGeneration(Client));
+  AssertTrue(SecondProfile.TestAttachedGeneration = ClientGeneration(Client));
 end;
 
 procedure TLazBleClientTest.CreateClientRejectsDuplicateDevice;
@@ -645,8 +720,8 @@ begin
   end;
 
   AssertTrue(RaisedExpectedException);
-  AssertEquals(1, FirstClient.ProfileCount);
-  AssertEquals(0, SecondClient.ProfileCount);
+  AssertEquals(1, ClientProfileCount(FirstClient));
+  AssertEquals(0, ClientProfileCount(SecondClient));
 end;
 
 procedure TLazBleClientTest.ProfileCannotBeAddedAfterConnectStarts;
@@ -668,8 +743,8 @@ begin
     end;
 
     AssertTrue(RaisedExpectedException);
-    AssertFalse(Profile.Bound);
-    AssertEquals(0, Client.ProfileCount);
+    AssertFalse(Profile.IsBound);
+    AssertEquals(0, ClientProfileCount(Client));
   finally
     Profile.Free;
   end;
@@ -719,11 +794,11 @@ end;
 procedure TLazBleClientTest.ShutdownCancelsActiveClientConnection;
 var
   Client: TBleClient;
-  ConnectOperation: TBleOperation;
+  ConnectOperation: IBleOperation;
   ConnectOperationId: TBleOperationId;
   Index: Integer;
   OperationCount: Integer;
-  ShutdownOperation: TBleOperation;
+  ShutdownOperation: IBleOperation;
 begin
   Client := FBle.CreateClient('device-a');
   ConnectOperation := Client.ConnectAsync;
@@ -750,10 +825,10 @@ end;
 procedure TLazBleClientTest.ShutdownCancelsClientWhileProfileIsAttaching;
 var
   Client: TBleClient;
-  ConnectOperation: TBleOperation;
+  ConnectOperation: IBleOperation;
   DisconnectOperationId: TBleOperationId;
   Profile: TManualGattProfile;
-  ShutdownOperation: TBleOperation;
+  ShutdownOperation: IBleOperation;
 begin
   Client := FBle.CreateClient('device-a');
   Profile := TManualGattProfile.Create;
@@ -812,7 +887,7 @@ begin
   OperationId := FBackendObject.OperationIds[
     FBackendObject.CommandCount - 1];
   EmitEvent(lbekDisconnected, OperationId, Client.DeviceId, '', 0,
-    Client.Generation);
+    ClientGeneration(Client));
 
   AssertEquals(Ord(lbcstDisconnected), Ord(Client.State));
   AssertFalse(Client.AutoReconnect);
@@ -859,7 +934,7 @@ begin
   OperationId := FBackendObject.OperationIds[
     FBackendObject.CommandCount - 1];
   EmitEvent(lbekDisconnected, OperationId, Client.DeviceId, '', 0,
-    Client.Generation);
+    ClientGeneration(Client));
 
   AssertEquals(Ord(lbcstWaitingToReconnect), Ord(Client.State));
   AssertEquals(1, Client.ReconnectAttempt);
@@ -897,7 +972,7 @@ begin
   OperationId := FBackendObject.OperationIds[
     FBackendObject.CommandCount - 1];
   EmitEvent(lbekDisconnected, OperationId, Client.DeviceId, '', 0,
-    Client.Generation);
+    ClientGeneration(Client));
 
   for Attempt := 1 to 3 do
   begin
@@ -930,13 +1005,13 @@ begin
   OperationId := FBackendObject.OperationIds[
     FBackendObject.CommandCount - 1];
   EmitEvent(lbekDisconnected, OperationId, Client.DeviceId, '', 0,
-    Client.Generation);
+    ClientGeneration(Client));
   AssertTrue(FReconnectTimerFactoryObject.LastTimer.Trigger);
   OperationId := FBackendObject.OperationIds[
     FBackendObject.CommandCount - 1];
 
   EmitEvent(lbekDisconnected, OperationId, Client.DeviceId, '', 0,
-    Client.Generation);
+    ClientGeneration(Client));
 
   AssertEquals(Ord(lbcstWaitingToReconnect), Ord(Client.State));
   AssertEquals(2, Client.ReconnectAttempt);
@@ -963,7 +1038,7 @@ begin
   OperationId := FBackendObject.OperationIds[
     FBackendObject.CommandCount - 1];
   EmitEvent(lbekDisconnected, OperationId, Client.DeviceId, '', 0,
-    Client.Generation);
+    ClientGeneration(Client));
   AssertTrue(FReconnectTimerFactoryObject.LastTimer.Trigger);
   CompleteTransportClient(Client);
   Profile.FailAttach('subscribe failed');
@@ -973,7 +1048,7 @@ begin
   AssertEquals(Ord(lbckDisconnect),
     Ord(FBackendObject.Commands[FBackendObject.CommandCount - 1].Kind));
   EmitEvent(lbekDisconnected, OperationId, Client.DeviceId, '', 0,
-    Client.Generation);
+    ClientGeneration(Client));
 
   AssertEquals(Ord(lbcstWaitingToReconnect), Ord(Client.State));
   AssertEquals(2, Client.ReconnectAttempt);
@@ -984,7 +1059,7 @@ procedure TLazBleClientTest.ManualDisconnectCancelsPendingReconnect;
 var
   Client: TBleClient;
   CommandCount: Integer;
-  DisconnectOperation: TBleOperation;
+  DisconnectOperation: IBleOperation;
   OperationId: TBleOperationId;
 begin
   UseFakeReconnectTimer;
@@ -995,7 +1070,7 @@ begin
   OperationId := FBackendObject.OperationIds[
     FBackendObject.CommandCount - 1];
   EmitEvent(lbekDisconnected, OperationId, Client.DeviceId, '', 0,
-    Client.Generation);
+    ClientGeneration(Client));
   AssertTrue(FReconnectTimerFactoryObject.LastTimer.Active);
 
   CommandCount := FBackendObject.CommandCount;
@@ -1020,7 +1095,7 @@ begin
   OperationId := FBackendObject.OperationIds[
     FBackendObject.CommandCount - 1];
   EmitEvent(lbekDisconnected, OperationId, Client.DeviceId, '', 0,
-    Client.Generation);
+    ClientGeneration(Client));
   AssertTrue(FReconnectTimerFactoryObject.LastTimer.Active);
 
   FBle.ShutdownAsync;

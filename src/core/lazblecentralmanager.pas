@@ -75,6 +75,34 @@ type
 
 implementation
 
+type
+  TBleGattSessionAccess = class(TBleGattSession)
+  public
+    constructor CreateInternal(const ADeviceId: string;
+      const ASubmitCommand: TLazBleSubmitCommand;
+      const ACancelOperation: TLazBleCancelOperation);
+    procedure HandleEvent(const AEvent: TLazBleBackendEvent);
+    procedure HandleShutdown;
+  end;
+
+constructor TBleGattSessionAccess.CreateInternal(const ADeviceId: string;
+  const ASubmitCommand: TLazBleSubmitCommand;
+  const ACancelOperation: TLazBleCancelOperation);
+begin
+  inherited Create(ADeviceId, ASubmitCommand, ACancelOperation);
+end;
+
+procedure TBleGattSessionAccess.HandleEvent(
+  const AEvent: TLazBleBackendEvent);
+begin
+  HandleBackendEvent(AEvent);
+end;
+
+procedure TBleGattSessionAccess.HandleShutdown;
+begin
+  HandleBackendShutdown;
+end;
+
 procedure TBleCentralManager.SetState(const AState: TLazBleCentralState);
 begin
   if FState = AState then
@@ -195,7 +223,7 @@ begin
     if Result.DeviceId = ADeviceId then
       Exit;
   end;
-  Result := TBleGattSession.Create(ADeviceId, @SubmitCommand,
+  Result := TBleGattSessionAccess.CreateInternal(ADeviceId, @SubmitCommand,
     @CancelOperation);
   FSessions.Add(Result);
 end;
@@ -228,7 +256,7 @@ begin
     (AEvent.OperationId = FShutdownOperationId) then
   begin
     for Index := 0 to FSessions.Count - 1 do
-      TBleGattSession(FSessions[Index]).HandleBackendShutdown;
+      TBleGattSessionAccess(FSessions[Index]).HandleShutdown;
     FBackend.SetEventSink(nil);
     FEventSinkObject.Detach;
     SetState(lbcsShutdown);
@@ -236,7 +264,7 @@ begin
   end;
 
   for Index := 0 to FSessions.Count - 1 do
-    TBleGattSession(FSessions[Index]).HandleBackendEvent(AEvent);
+    TBleGattSessionAccess(FSessions[Index]).HandleEvent(AEvent);
 
   if LazBleBackendEventIsTerminal(AEvent) and
     (AEvent.OperationId = FScanOperationId) then

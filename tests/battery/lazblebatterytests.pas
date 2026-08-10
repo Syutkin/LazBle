@@ -15,19 +15,28 @@ uses
   LazBleGattSession,
   LazBleGattProfile,
   LazBleCentralManager,
+  LazBleByteChannel,
   LazBleNus,
   LazBleBattery,
-  FakeLazBleBackend;
+  FakeLazBleBackend,
+  TestLazBleAccess;
 
 type
   TTestBatteryProfile = class(TBleBatteryProfile)
   public
     procedure BindToSession(const ASession: TBleGattSession);
+    procedure AttachProfile;
+    procedure DetachProfile;
+    function TestReadOperation: IBleGattOperation;
+    function TestSubscription: IBleSubscription;
+    function TestDetachOperation: IBleGattOperation;
   end;
 
   TTestNusProfile = class(TNusProfile)
   public
     procedure BindToSession(const ASession: TBleGattSession);
+    procedure AttachProfile;
+    function TestChannel: TBleByteChannel;
   end;
 
   TBatteryObserver = class
@@ -86,9 +95,44 @@ begin
   BindSession(ASession);
 end;
 
+procedure TTestBatteryProfile.AttachProfile;
+begin
+  Attach;
+end;
+
+procedure TTestBatteryProfile.DetachProfile;
+begin
+  Detach;
+end;
+
+function TTestBatteryProfile.TestReadOperation: IBleGattOperation;
+begin
+  Result := ReadOperation;
+end;
+
+function TTestBatteryProfile.TestSubscription: IBleSubscription;
+begin
+  Result := Subscription;
+end;
+
+function TTestBatteryProfile.TestDetachOperation: IBleGattOperation;
+begin
+  Result := DetachOperation;
+end;
+
 procedure TTestNusProfile.BindToSession(const ASession: TBleGattSession);
 begin
   BindSession(ASession);
+end;
+
+procedure TTestNusProfile.AttachProfile;
+begin
+  Attach;
+end;
+
+function TTestNusProfile.TestChannel: TBleByteChannel;
+begin
+  Result := Channel;
 end;
 
 procedure TBatteryObserver.LevelChanged(Sender: TObject;
@@ -128,22 +172,27 @@ end;
 
 procedure TLazBleBatteryTest.CompleteRead(const AValue: array of Byte);
 var
-  Operation: TBleGattOperation;
+  OperationId: TBleOperationId;
 begin
-  Operation := FProfile.ReadOperation;
-  EmitEvent(lbekReadResult, Operation.OperationId,
+  OperationId := FBackendObject.OperationIds[
+    FBackendObject.CommandCount - 1];
+  EmitEvent(lbekReadResult, OperationId,
     InvalidBleSubscriptionId, AValue);
-  AssertTrue(FBackendObject.CompleteOperation(Operation.OperationId,
+  AssertTrue(FBackendObject.CompleteOperation(OperationId,
     lbekOperationSucceeded));
 end;
 
 procedure TLazBleBatteryTest.ActivateProfile(const ALevelPercent: Byte);
+var
+  OperationId: TBleOperationId;
 begin
-  FProfile.Attach;
+  FProfile.AttachProfile;
   CompleteRead([ALevelPercent]);
-  EmitEvent(lbekSubscribed, FProfile.Subscription.OperationId, 41, []);
+  OperationId := FBackendObject.OperationIds[
+    FBackendObject.CommandCount - 1];
+  EmitEvent(lbekSubscribed, OperationId, 41, []);
   AssertTrue(FBackendObject.CompleteOperation(
-    FProfile.Subscription.OperationId, lbekOperationSucceeded));
+    OperationId, lbekOperationSucceeded));
   AssertTrue(FProfile.Ready);
 end;
 
@@ -155,7 +204,7 @@ begin
   FBackend := FBackendObject;
   FManager := TBleCentralManager.Create(FBackend);
   FSession := FManager.CreateSession('entime-1');
-  ConnectId := FSession.Connect;
+  ConnectId := LazBleTestConnect(FSession);
   EmitEvent(lbekConnected, ConnectId, InvalidBleSubscriptionId, []);
   EmitEvent(lbekServicesDiscovered, FBackendObject.OperationIds[1],
     InvalidBleSubscriptionId, []);
@@ -176,9 +225,9 @@ end;
 
 procedure TLazBleBatteryTest.AttachReadsBeforeSubscribing;
 begin
-  FProfile.Attach;
+  FProfile.AttachProfile;
 
-  AssertTrue(Assigned(FProfile.ReadOperation));
+  AssertTrue(Assigned(FProfile.TestReadOperation));
   AssertEquals(3, FBackendObject.CommandCount);
   AssertEquals(Ord(lbckRead), Ord(FBackendObject.Commands[2].Kind));
   AssertEquals(BatteryServiceUuid, FBackendObject.Commands[2].ServiceUuid);
@@ -201,7 +250,7 @@ begin
     FProfile.OnLevelChanged := @Observer.LevelChanged;
     ActivateProfile(75);
     EmitEvent(lbekNotification, InvalidBleOperationId,
-      FProfile.Subscription.SubscriptionId, [64]);
+      41, [64]);
 
     AssertEquals(64, FProfile.LevelPercent);
     AssertEquals(2, Observer.CallCount);
@@ -214,7 +263,7 @@ end;
 
 procedure TLazBleBatteryTest.InvalidReadPayloadIsProfileError;
 begin
-  FProfile.Attach;
+  FProfile.AttachProfile;
   CompleteRead([101]);
 
   AssertEquals(Ord(lbgpsError), Ord(FProfile.State));
@@ -227,7 +276,7 @@ procedure TLazBleBatteryTest.InvalidNotificationIsProfileError;
 begin
   ActivateProfile(75);
   EmitEvent(lbekNotification, InvalidBleOperationId,
-    FProfile.Subscription.SubscriptionId, [70, 71]);
+    41, [70, 71]);
 
   AssertEquals(Ord(lbgpsError), Ord(FProfile.State));
   AssertEquals(75, FProfile.LevelPercent);
@@ -236,14 +285,15 @@ end;
 
 procedure TLazBleBatteryTest.DetachCancelsPendingRead;
 var
-  ReadOperation: TBleGattOperation;
+  ReadOperationId: TBleOperationId;
 begin
-  FProfile.Attach;
-  ReadOperation := FProfile.ReadOperation;
-  FProfile.Detach;
+  FProfile.AttachProfile;
+  ReadOperationId := FBackendObject.OperationIds[
+    FBackendObject.CommandCount - 1];
+  FProfile.DetachProfile;
 
   AssertTrue(FBackendObject.CancellationWasRequested(
-    ReadOperation.OperationId));
+    ReadOperationId));
   AssertEquals(UnknownBatteryLevel, FProfile.LevelPercent);
   AssertEquals(Ord(lbgpsDetached), Ord(FProfile.State));
 end;
@@ -252,10 +302,11 @@ procedure TLazBleBatteryTest.DetachCancelsPendingSubscription;
 var
   SubscriptionId: TBleOperationId;
 begin
-  FProfile.Attach;
+  FProfile.AttachProfile;
   CompleteRead([75]);
-  SubscriptionId := FProfile.Subscription.OperationId;
-  FProfile.Detach;
+  SubscriptionId := FBackendObject.OperationIds[
+    FBackendObject.CommandCount - 1];
+  FProfile.DetachProfile;
 
   AssertTrue(FBackendObject.CancellationWasRequested(SubscriptionId));
   AssertEquals(UnknownBatteryLevel, FProfile.LevelPercent);
@@ -264,15 +315,15 @@ end;
 
 procedure TLazBleBatteryTest.DetachUnsubscribesAndSetsUnknown;
 var
-  DetachOperation: TBleGattOperation;
+  DetachOperation: IBleGattOperation;
 begin
   ActivateProfile(75);
-  FProfile.Detach;
-  DetachOperation := FProfile.DetachOperation;
+  FProfile.DetachProfile;
+  DetachOperation := FProfile.TestDetachOperation;
 
   AssertTrue(Assigned(DetachOperation));
-  FProfile.Detach;
-  AssertTrue(DetachOperation = FProfile.DetachOperation);
+  FProfile.DetachProfile;
+  AssertTrue(DetachOperation = FProfile.TestDetachOperation);
   AssertEquals(Ord(lbckUnsubscribe),
     Ord(FBackendObject.Commands[FBackendObject.CommandCount - 1].Kind));
   AssertEquals(UnknownBatteryLevel, FProfile.LevelPercent);
@@ -283,23 +334,26 @@ procedure TLazBleBatteryTest.NusAndBatteryShareOneSession;
 var
   NusProfile: TTestNusProfile;
   NusObserver: TNusObserver;
-  NusSubscription: TBleSubscription;
+  NusOperationId: TBleOperationId;
+  NusSubscription: IBleSubscription;
 begin
   NusProfile := TTestNusProfile.Create;
   NusProfile.BindToSession(FSession);
   NusObserver := TNusObserver.Create;
   try
     NusProfile.OnData := @NusObserver.DataReceived;
-    NusProfile.Attach;
-    NusSubscription := NusProfile.Channel.Subscription;
+    NusProfile.AttachProfile;
+    NusSubscription := NusProfile.TestChannel.Subscription;
+    NusOperationId := FBackendObject.OperationIds[
+      FBackendObject.CommandCount - 1];
     ActivateProfile(80);
-    EmitEvent(lbekSubscribed, NusSubscription.OperationId, 42, []);
-    AssertTrue(FBackendObject.CompleteOperation(NusSubscription.OperationId,
+    EmitEvent(lbekSubscribed, NusOperationId, 42, []);
+    AssertTrue(FBackendObject.CompleteOperation(NusOperationId,
       lbekOperationSucceeded));
 
     EmitEvent(lbekNotification, InvalidBleOperationId, 42, [$24, $23]);
     EmitEvent(lbekNotification, InvalidBleOperationId,
-      FProfile.Subscription.SubscriptionId, [79]);
+      41, [79]);
 
     AssertEquals(1, NusObserver.CallCount);
     AssertEquals(79, FProfile.LevelPercent);

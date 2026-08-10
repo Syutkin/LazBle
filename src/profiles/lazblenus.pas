@@ -7,6 +7,7 @@ interface
 uses
   SysUtils,
   LazBleTypes,
+  LazBleOperation,
   LazBleGattOperation,
   LazBleGattSubscription,
   LazBleGattProfile,
@@ -23,8 +24,11 @@ type
 
   TNusProfile = class(TBleGattProfile)
   private
+    FCallbackLock: TRTLCriticalSection;
     FChannel: TBleByteChannel;
     FOnData: TNusDataEvent;
+    function GetOnData: TNusDataEvent;
+    procedure SetOnData(const AHandler: TNusDataEvent);
     procedure ChannelDataReceived(Sender: TObject; const AValue: TBytes);
     procedure SubscriptionStateChanged(Sender: TObject;
       const AState: TLazBleSubscriptionState);
@@ -33,19 +37,32 @@ type
     procedure DoAttach; override;
     procedure DoDetach; override;
     procedure RefreshState; override;
+    property Channel: TBleByteChannel read FChannel;
   public
     constructor Create;
     destructor Destroy; override;
-    function SendAsync(const AValue: TBytes): TBleGattOperation;
-    property Channel: TBleByteChannel read FChannel;
-    property OnData: TNusDataEvent read FOnData write FOnData;
+    function SendAsync(const AValue: TBytes): IBleGattOperation;
+    property OnData: TNusDataEvent read GetOnData write SetOnData;
   end;
 
 implementation
 
+type
+  TBleGattOperationAccess = class(TBleGattOperation)
+  public
+    constructor CreateTerminal(const AErrorMessage: string);
+  end;
+
+constructor TBleGattOperationAccess.CreateTerminal(
+  const AErrorMessage: string);
+begin
+  inherited CreateCompleted(lbckWrite, lbopFailed, AErrorMessage);
+end;
+
 constructor TNusProfile.Create;
 begin
   inherited Create;
+  InitCriticalSection(FCallbackLock);
 end;
 
 procedure TNusProfile.DoBind;
@@ -58,18 +75,43 @@ end;
 destructor TNusProfile.Destroy;
 begin
   Detach;
+  SetOnData(nil);
   if Assigned(FChannel) then
     FChannel.OnData := nil;
   FChannel.Free;
   FChannel := nil;
+  DoneCriticalSection(FCallbackLock);
   inherited Destroy;
+end;
+
+function TNusProfile.GetOnData: TNusDataEvent;
+begin
+  EnterCriticalSection(FCallbackLock);
+  try
+    Result := FOnData;
+  finally
+    LeaveCriticalSection(FCallbackLock);
+  end;
+end;
+
+procedure TNusProfile.SetOnData(const AHandler: TNusDataEvent);
+begin
+  EnterCriticalSection(FCallbackLock);
+  try
+    FOnData := AHandler;
+  finally
+    LeaveCriticalSection(FCallbackLock);
+  end;
 end;
 
 procedure TNusProfile.ChannelDataReceived(Sender: TObject;
   const AValue: TBytes);
+var
+  Handler: TNusDataEvent;
 begin
-  if Assigned(FOnData) then
-    FOnData(Self, DeviceId, AValue);
+  Handler := GetOnData;
+  if Assigned(Handler) then
+    Handler(Self, DeviceId, AValue);
 end;
 
 procedure TNusProfile.SubscriptionStateChanged(Sender: TObject;
@@ -115,12 +157,13 @@ begin
   end;
 end;
 
-function TNusProfile.SendAsync(const AValue: TBytes): TBleGattOperation;
+function TNusProfile.SendAsync(const AValue: TBytes): IBleGattOperation;
 begin
   if Assigned(FChannel) then
     Result := FChannel.SendAsync(AValue)
   else
-    Result := nil;
+    Result := TBleGattOperationAccess.CreateTerminal(
+      'NUS profile is not bound to a client');
 end;
 
 end.

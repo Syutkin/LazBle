@@ -10,7 +10,8 @@ uses
   fpcunit,
   testregistry,
   LazBleGattSession,
-  LazBleGattProfile;
+  LazBleGattProfile,
+  TestLazBleAccess;
 
 type
   TTestGattProfile = class(TBleGattProfile)
@@ -22,8 +23,12 @@ type
     procedure DoDetach; override;
   public
     procedure BindToSession(const ASession: TBleGattSession);
+    procedure AttachProfile;
+    procedure DetachProfile;
     procedure CompleteAttach;
     procedure FailAttach(const AMessage: string);
+    function IsBound: Boolean;
+    function TestAttachedGeneration: QWord;
     property AttachCount: Integer read FAttachCount;
     property DetachCount: Integer read FDetachCount;
   end;
@@ -60,6 +65,26 @@ begin
   BindSession(ASession);
 end;
 
+procedure TTestGattProfile.AttachProfile;
+begin
+  Attach;
+end;
+
+procedure TTestGattProfile.DetachProfile;
+begin
+  Detach;
+end;
+
+function TTestGattProfile.IsBound: Boolean;
+begin
+  Result := Bound;
+end;
+
+function TTestGattProfile.TestAttachedGeneration: QWord;
+begin
+  Result := AttachedGeneration;
+end;
+
 procedure TTestGattProfile.CompleteAttach;
 begin
   MarkReady;
@@ -72,8 +97,8 @@ end;
 
 procedure TLazBleGattProfileTest.SetUp;
 begin
-  FSession := TBleGattSession.Create('device-1', nil, nil);
-  FSession.Connect;
+  FSession := LazBleTestCreateSession('device-1', nil, nil);
+  LazBleTestConnect(FSession);
   FProfile := TTestGattProfile.Create;
   FProfile.BindToSession(FSession);
 end;
@@ -88,10 +113,10 @@ end;
 
 procedure TLazBleGattProfileTest.AttachCapturesGenerationAndBecomesReady;
 begin
-  FProfile.Attach;
+  FProfile.AttachProfile;
 
   AssertEquals(1, FProfile.AttachCount);
-  AssertTrue(FProfile.AttachedGeneration = FSession.Generation);
+  AssertTrue(FProfile.TestAttachedGeneration = FSession.Generation);
   AssertEquals(Ord(lbgpsAttaching), Ord(FProfile.State));
 
   FProfile.CompleteAttach;
@@ -101,28 +126,28 @@ end;
 
 procedure TLazBleGattProfileTest.AttachAndDetachAreIdempotent;
 begin
-  FProfile.Attach;
-  FProfile.Attach;
+  FProfile.AttachProfile;
+  FProfile.AttachProfile;
   FProfile.CompleteAttach;
-  FProfile.Detach;
-  FProfile.Detach;
+  FProfile.DetachProfile;
+  FProfile.DetachProfile;
 
   AssertEquals(1, FProfile.AttachCount);
   AssertEquals(1, FProfile.DetachCount);
   AssertEquals(Ord(lbgpsDetached), Ord(FProfile.State));
-  AssertTrue(FProfile.AttachedGeneration = 0);
+  AssertTrue(FProfile.TestAttachedGeneration = 0);
 end;
 
 procedure TLazBleGattProfileTest.DetachClearsErrorAndAllowsReattach;
 begin
-  FProfile.Attach;
+  FProfile.AttachProfile;
   FProfile.FailAttach('attach failed');
   AssertEquals(Ord(lbgpsError), Ord(FProfile.State));
   AssertEquals('attach failed', FProfile.ErrorMessage);
 
-  FProfile.Detach;
+  FProfile.DetachProfile;
   AssertEquals('', FProfile.ErrorMessage);
-  FProfile.Attach;
+  FProfile.AttachProfile;
 
   AssertEquals(2, FProfile.AttachCount);
   AssertEquals(Ord(lbgpsAttaching), Ord(FProfile.State));
@@ -134,7 +159,7 @@ var
 begin
   Profile := TTestGattProfile.Create;
   try
-    AssertFalse(Profile.Bound);
+    AssertFalse(Profile.IsBound);
   finally
     Profile.Free;
   end;
@@ -149,7 +174,7 @@ begin
   try
     RaisedExpectedException := False;
     try
-      Profile.Attach;
+      Profile.AttachProfile;
     except
       on EInvalidOperation do
         RaisedExpectedException := True;

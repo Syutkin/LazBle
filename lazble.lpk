@@ -4,7 +4,7 @@
     <PathDelim Value="\"/>
     <Name Value="LazBle"/>
     <Type Value="RunTimeOnly"/>
-    <Version Major="0" Minor="1" Release="0"/>
+    <Version Major="1" Minor="0" Release="0"/>
     <CompilerOptions>
       <Version Value="11"/>
       <PathDelim Value="\"/>
@@ -21,6 +21,10 @@
       <Item>
         <Filename Value="src\core\lazblebackend.pas"/>
         <UnitName Value="LazBleBackend"/>
+      </Item>
+      <Item>
+        <Filename Value="src\core\lazbleoperation.pas"/>
+        <UnitName Value="LazBleOperation"/>
       </Item>
       <Item>
         <Filename Value="src\core\lazblegattoperation.pas"/>
@@ -45,6 +49,12 @@
       <Item>
         <Filename Value="src\core\lazblecentralmanager.pas"/>
         <UnitName Value="LazBleCentralManager"/>
+        <AddToUsesPkgSection Value="False"/>
+      </Item>
+      <Item>
+        <Filename Value="src\core\lazbleclientinternal.pas"/>
+        <UnitName Value="LazBleClientInternal"/>
+        <AddToUsesPkgSection Value="False"/>
       </Item>
       <Item>
         <Filename Value="src\core\lazbleclient.pas"/>
@@ -53,6 +63,7 @@
       <Item>
         <Filename Value="src\core\lazblereconnect.pas"/>
         <UnitName Value="LazBleReconnect"/>
+        <AddToUsesPkgSection Value="False"/>
       </Item>
       <Item>
         <Filename Value="src\core\lazblefacade.pas"/>
@@ -69,6 +80,11 @@
       <Item>
         <Filename Value="src\profiles\lazblebattery.pas"/>
         <UnitName Value="LazBleBattery"/>
+      </Item>
+      <Item>
+        <Filename Value="src\backends\lazblesimplebledriverintf.pas"/>
+        <UnitName Value="LazBleSimpleBleDriverIntf"/>
+        <AddToUsesPkgSection Value="False"/>
       </Item>
       <Item>
         <Filename Value="src\backends\lazblesimpleblebackend.pas"/>

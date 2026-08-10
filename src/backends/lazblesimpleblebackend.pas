@@ -8,36 +8,11 @@ uses
   Classes,
   SysUtils,
   LazBleTypes,
-  LazBleBackend;
+  LazBleBackend,
+  LazBleSimpleBleDriverIntf;
 
 type
-  ILazBleSimpleBleDriverEventSink = interface
-    ['{135F96C7-5434-4D4D-BE47-F97E450F69F8}']
-    procedure Emit(const AEvent: TLazBleBackendEvent);
-  end;
-
-  ILazBleSimpleBleDriver = interface
-    ['{27E5F79B-E4DD-42FB-A354-A3B992105970}']
-    function Open(out AErrorMessage: string): Boolean;
-    procedure Close;
-    function Execute(const ACommand: TLazBleBackendCommand;
-      const AOperationId: TBleOperationId;
-      const AEventSink: ILazBleSimpleBleDriverEventSink;
-      out AErrorCode: Integer; out AErrorMessage: string): Boolean;
-    procedure CancelCurrent;
-  end;
-
   TLazBleSimpleBleBackend = class;
-
-  TLazBleSimpleBleDriverSink = class(TInterfacedObject,
-    ILazBleSimpleBleDriverEventSink)
-  private
-    FBackend: TLazBleSimpleBleBackend;
-  public
-    constructor Create(const ABackend: TLazBleSimpleBleBackend);
-    procedure Detach;
-    procedure Emit(const AEvent: TLazBleBackendEvent);
-  end;
 
   TLazBleSimpleBleBackend = class(TInterfacedObject, ILazBleBackend)
   private type
@@ -67,7 +42,7 @@ type
     FBackendEventSink: ILazBleBackendEventSink;
     FDriver: ILazBleSimpleBleDriver;
     FDriverEventSink: ILazBleSimpleBleDriverEventSink;
-    FDriverEventSinkObject: TLazBleSimpleBleDriverSink;
+    FDriverEventSinkControl: ILazBleSimpleBleDriverSinkControl;
     FWorker: TBackendWorker;
     FOperations: TList;
     FPendingOperations: TList;
@@ -91,9 +66,10 @@ type
       const AErrorMessage: string);
     procedure ProcessOperation(const AOperation: TBackendOperation);
     procedure WorkerExecute;
+  protected
+    constructor Create(const ADriver: ILazBleSimpleBleDriver); overload;
   public
     constructor Create; overload;
-    constructor Create(const ADriver: ILazBleSimpleBleDriver); overload;
     destructor Destroy; override;
     procedure SetEventSink(const AEventSink: ILazBleBackendEventSink);
     function Submit(const ACommand: TLazBleBackendCommand): TBleOperationId;
@@ -108,6 +84,16 @@ uses
   SimpleBle;
 
 type
+  TLazBleSimpleBleDriverSink = class(TInterfacedObject,
+    ILazBleSimpleBleDriverEventSink, ILazBleSimpleBleDriverSinkControl)
+  private
+    FBackend: TLazBleSimpleBleBackend;
+  public
+    constructor Create(const ABackend: TLazBleSimpleBleBackend);
+    procedure Detach;
+    procedure Emit(const AEvent: TLazBleBackendEvent);
+  end;
+
   TLazBleNativeSimpleBleDriver = class;
 
   TSimpleBlePeripheralEntry = class
@@ -1037,6 +1023,8 @@ end;
 
 constructor TLazBleSimpleBleBackend.Create(
   const ADriver: ILazBleSimpleBleDriver);
+var
+  DriverSink: TLazBleSimpleBleDriverSink;
 begin
   inherited Create;
   if not Assigned(ADriver) then
@@ -1047,8 +1035,9 @@ begin
   FOperations := TList.Create;
   FPendingOperations := TList.Create;
   FPendingEvents := TList.Create;
-  FDriverEventSinkObject := TLazBleSimpleBleDriverSink.Create(Self);
-  FDriverEventSink := FDriverEventSinkObject;
+  DriverSink := TLazBleSimpleBleDriverSink.Create(Self);
+  FDriverEventSink := DriverSink;
+  FDriverEventSinkControl := DriverSink;
   FWorker := TBackendWorker.Create(Self);
 end;
 
@@ -1059,9 +1048,9 @@ begin
   BeginShutdown;
   FWorker.WaitFor;
   FWorker.Free;
-  FDriverEventSinkObject.Detach;
+  FDriverEventSinkControl.Detach;
   FDriverEventSink := nil;
-  FDriverEventSinkObject := nil;
+  FDriverEventSinkControl := nil;
   FDriver := nil;
   for Index := FPendingEvents.Count - 1 downto 0 do
     TObject(FPendingEvents[Index]).Free;

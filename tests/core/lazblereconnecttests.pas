@@ -8,6 +8,7 @@ uses
   SysUtils,
   fpcunit,
   testregistry,
+  LazBleTypes,
   LazBleReconnect,
   FakeLazBleReconnectTimer;
 

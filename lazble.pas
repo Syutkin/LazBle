@@ -8,10 +8,10 @@ unit LazBle;
 interface
 
 uses
-  LazBleTypes, LazBleBackend, LazBleGattOperation, LazBleGattSubscription,
-  LazBleGattSession, LazBleGattProfile, LazBleByteChannel,
-  LazBleCentralManager, LazBleClient, LazBleReconnect, LazBleFacade,
-  LazBleSync, LazBleNus, LazBleBattery, LazBleSimpleBleBackend;
+  LazBleTypes, LazBleBackend, LazBleOperation, LazBleGattOperation,
+  LazBleGattSubscription, LazBleGattSession, LazBleGattProfile,
+  LazBleByteChannel, LazBleClient, LazBleFacade, LazBleSync, LazBleNus,
+  LazBleBattery, LazBleSimpleBleBackend;
 
 implementation
 

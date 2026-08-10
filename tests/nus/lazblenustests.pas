@@ -10,17 +10,23 @@ uses
   testregistry,
   LazBleTypes,
   LazBleBackend,
+  LazBleOperation,
+  LazBleGattOperation,
   LazBleGattSubscription,
   LazBleGattSession,
   LazBleGattProfile,
   LazBleCentralManager,
+  LazBleByteChannel,
   LazBleNus,
-  FakeLazBleBackend;
+  FakeLazBleBackend,
+  TestLazBleAccess;
 
 type
   TTestNusProfile = class(TNusProfile)
   public
     procedure BindToSession(const ASession: TBleGattSession);
+    procedure AttachProfile;
+    function TestChannel: TBleByteChannel;
   end;
 
   TNusObserver = class
@@ -56,6 +62,7 @@ type
     procedure SendWritesToNusRxWithoutResponse;
     procedure DataIncludesDeviceIdentityAndOpaqueBytes;
     procedure DisconnectInvalidatesProfileReadiness;
+    procedure SendBeforeBindingReturnsFailedOperation;
   end;
 
 implementation
@@ -63,6 +70,16 @@ implementation
 procedure TTestNusProfile.BindToSession(const ASession: TBleGattSession);
 begin
   BindSession(ASession);
+end;
+
+procedure TTestNusProfile.AttachProfile;
+begin
+  Attach;
+end;
+
+function TTestNusProfile.TestChannel: TBleByteChannel;
+begin
+  Result := Channel;
 end;
 
 procedure TNusObserver.DataReceived(Sender: TObject; const ADeviceId: string;
@@ -95,13 +112,16 @@ end;
 
 procedure TLazBleNusTest.ActivateProfile;
 var
-  Subscription: TBleSubscription;
+  OperationId: TBleOperationId;
+  Subscription: IBleSubscription;
 begin
-  FProfile.Attach;
-  Subscription := FProfile.Channel.Subscription;
-  EmitEvent(lbekSubscribed, Subscription.OperationId, 31, []);
+  FProfile.AttachProfile;
+  Subscription := FProfile.TestChannel.Subscription;
+  OperationId := FBackendObject.OperationIds[
+    FBackendObject.CommandCount - 1];
+  EmitEvent(lbekSubscribed, OperationId, 31, []);
   AssertTrue(FBackendObject.CompleteOperation(
-    Subscription.OperationId, lbekOperationSucceeded));
+    OperationId, lbekOperationSucceeded));
   AssertTrue(FProfile.Ready);
 end;
 
@@ -113,7 +133,7 @@ begin
   FBackend := FBackendObject;
   FManager := TBleCentralManager.Create(FBackend);
   FSession := FManager.CreateSession('entime-1');
-  ConnectId := FSession.Connect;
+  ConnectId := LazBleTestConnect(FSession);
   EmitEvent(lbekConnected, ConnectId, InvalidBleSubscriptionId, []);
   EmitEvent(lbekServicesDiscovered, FBackendObject.OperationIds[1],
     InvalidBleSubscriptionId, []);
@@ -134,9 +154,9 @@ end;
 
 procedure TLazBleNusTest.AttachSubscribesToNusTx;
 begin
-  FProfile.Attach;
+  FProfile.AttachProfile;
 
-  AssertTrue(Assigned(FProfile.Channel.Subscription));
+  AssertTrue(Assigned(FProfile.TestChannel.Subscription));
 
   AssertEquals(Ord(lbckSubscribe), Ord(FBackendObject.Commands[2].Kind));
   AssertEquals(NusServiceUuid, FBackendObject.Commands[2].ServiceUuid);
@@ -170,7 +190,7 @@ begin
     ActivateProfile;
 
     EmitEvent(lbekNotification, InvalidBleOperationId,
-      FProfile.Channel.Subscription.SubscriptionId, [$00, $FF, $23]);
+      31, [$00, $FF, $23]);
 
     AssertEquals(1, Observer.CallCount);
     AssertEquals('entime-1', Observer.DeviceId);
@@ -187,11 +207,29 @@ var
 begin
   ActivateProfile;
 
-  DisconnectId := FSession.Disconnect;
+  DisconnectId := LazBleTestDisconnect(FSession);
   EmitEvent(lbekDisconnected, DisconnectId, InvalidBleSubscriptionId, []);
 
   AssertFalse(FProfile.Ready);
   AssertEquals(Ord(lbgpsError), Ord(FProfile.State));
+end;
+
+procedure TLazBleNusTest.SendBeforeBindingReturnsFailedOperation;
+var
+  Operation: IBleGattOperation;
+  Profile: TNusProfile;
+begin
+  Profile := TNusProfile.Create;
+  try
+    Operation := Profile.SendAsync([$01]);
+
+    AssertTrue(Assigned(Operation));
+    AssertEquals(Ord(lbopFailed), Ord(Operation.State));
+    AssertEquals('NUS profile is not bound to a client',
+      Operation.ErrorMessage);
+  finally
+    Profile.Free;
+  end;
 end;
 
 initialization

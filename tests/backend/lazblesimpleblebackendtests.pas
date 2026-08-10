@@ -12,9 +12,15 @@ uses
   testregistry,
   LazBleTypes,
   LazBleBackend,
+  LazBleSimpleBleDriverIntf,
   LazBleSimpleBleBackend;
 
 type
+  TTestSimpleBleBackend = class(TLazBleSimpleBleBackend)
+  public
+    constructor CreateInternal(const ADriver: ILazBleSimpleBleDriver);
+  end;
+
   TFakeSimpleBleDriver = class(TInterfacedObject, ILazBleSimpleBleDriver)
   private
     FStartedEvent: TEvent;
@@ -89,6 +95,12 @@ type
   end;
 
 implementation
+
+constructor TTestSimpleBleBackend.CreateInternal(
+  const ADriver: ILazBleSimpleBleDriver);
+begin
+  inherited Create(ADriver);
+end;
 
 constructor TFakeSimpleBleDriver.Create;
 begin
@@ -397,7 +409,7 @@ procedure TLazBleSimpleBleBackendTest.SetUp;
 begin
   FDriverObject := TFakeSimpleBleDriver.Create;
   FDriver := FDriverObject;
-  FBackend := TLazBleSimpleBleBackend.Create(FDriver);
+  FBackend := TTestSimpleBleBackend.CreateInternal(FDriver);
   FEventSinkObject := TThreadSafeEventSink.Create;
   FEventSink := FEventSinkObject;
   FBackend.SetEventSink(FEventSink);

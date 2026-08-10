@@ -7,6 +7,7 @@ interface
 uses
   SysUtils,
   LazBleTypes,
+  LazBleOperation,
   LazBleGattOperation,
   LazBleGattSubscription,
   LazBleGattSession;
@@ -25,16 +26,21 @@ type
 
   TBleByteChannel = class
   private
+    FLock: TRTLCriticalSection;
+    FCallbackLock: TRTLCriticalSection;
     FSession: TBleGattSession;
     FServiceUuid: string;
     FWriteCharacteristicUuid: string;
     FNotifyCharacteristicUuid: string;
     FWriteMode: TLazBleWriteMode;
-    FSubscription: TBleSubscription;
-    FDetachOperation: TBleGattOperation;
+    FSubscription: IBleSubscription;
+    FDetachOperation: IBleGattOperation;
     FOnData: TLazBleByteChannelDataEvent;
+    function GetSubscription: IBleSubscription;
     function GetState: TLazBleByteChannelState;
     function GetReady: Boolean;
+    function GetOnData: TLazBleByteChannelDataEvent;
+    procedure SetOnData(const AHandler: TLazBleByteChannelDataEvent);
     procedure SubscriptionDataReceived(Sender: TObject;
       const AValue: TBytes);
   public
@@ -43,26 +49,44 @@ type
       ANotifyCharacteristicUuid: string;
       const AWriteMode: TLazBleWriteMode);
     destructor Destroy; override;
-    function Attach: TBleSubscription;
-    function Detach: TBleGattOperation;
-    function SendAsync(const AValue: TBytes): TBleGattOperation;
+    function Attach: IBleSubscription;
+    function Detach: IBleGattOperation;
+    function SendAsync(const AValue: TBytes): IBleGattOperation;
     property ServiceUuid: string read FServiceUuid;
     property WriteCharacteristicUuid: string read FWriteCharacteristicUuid;
     property NotifyCharacteristicUuid: string read FNotifyCharacteristicUuid;
     property WriteMode: TLazBleWriteMode read FWriteMode;
-    property Subscription: TBleSubscription read FSubscription;
+    property Subscription: IBleSubscription read GetSubscription;
     property State: TLazBleByteChannelState read GetState;
     property Ready: Boolean read GetReady;
-    property OnData: TLazBleByteChannelDataEvent read FOnData write FOnData;
+    property OnData: TLazBleByteChannelDataEvent read GetOnData
+      write SetOnData;
   end;
 
 implementation
+
+type
+  TBleGattOperationAccess = class(TBleGattOperation)
+  public
+    constructor CreateTerminal(const AState: TLazBleOperationState;
+      const AErrorMessage: string);
+  end;
+
+constructor TBleGattOperationAccess.CreateTerminal(
+  const AState: TLazBleOperationState; const AErrorMessage: string);
+begin
+  inherited CreateCompleted(lbckWrite, AState, AErrorMessage);
+end;
 
 constructor TBleByteChannel.Create(const ASession: TBleGattSession;
   const AServiceUuid, AWriteCharacteristicUuid,
   ANotifyCharacteristicUuid: string; const AWriteMode: TLazBleWriteMode);
 begin
   inherited Create;
+  if not Assigned(ASession) then
+    raise EArgumentNilException.Create('ASession');
+  InitCriticalSection(FLock);
+  InitCriticalSection(FCallbackLock);
   FSession := ASession;
   FServiceUuid := AServiceUuid;
   FWriteCharacteristicUuid := AWriteCharacteristicUuid;
@@ -73,15 +97,38 @@ end;
 destructor TBleByteChannel.Destroy;
 begin
   Detach;
-  FSession := nil;
+  SetOnData(nil);
+  EnterCriticalSection(FLock);
+  try
+    FSession := nil;
+    FSubscription := nil;
+    FDetachOperation := nil;
+  finally
+    LeaveCriticalSection(FLock);
+  end;
+  DoneCriticalSection(FCallbackLock);
+  DoneCriticalSection(FLock);
   inherited Destroy;
 end;
 
-function TBleByteChannel.GetState: TLazBleByteChannelState;
+function TBleByteChannel.GetSubscription: IBleSubscription;
 begin
-  if not Assigned(FSubscription) then
+  EnterCriticalSection(FLock);
+  try
+    Result := FSubscription;
+  finally
+    LeaveCriticalSection(FLock);
+  end;
+end;
+
+function TBleByteChannel.GetState: TLazBleByteChannelState;
+var
+  CurrentSubscription: IBleSubscription;
+begin
+  CurrentSubscription := GetSubscription;
+  if not Assigned(CurrentSubscription) then
     Exit(lbchsDetached);
-  case FSubscription.State of
+  case CurrentSubscription.State of
     lbsubPending:
       Result := lbchsSubscribing;
     lbsubActive:
@@ -100,45 +147,94 @@ begin
   Result := GetState = lbchsReady;
 end;
 
+function TBleByteChannel.GetOnData: TLazBleByteChannelDataEvent;
+begin
+  EnterCriticalSection(FCallbackLock);
+  try
+    Result := FOnData;
+  finally
+    LeaveCriticalSection(FCallbackLock);
+  end;
+end;
+
+procedure TBleByteChannel.SetOnData(
+  const AHandler: TLazBleByteChannelDataEvent);
+begin
+  EnterCriticalSection(FCallbackLock);
+  try
+    FOnData := AHandler;
+  finally
+    LeaveCriticalSection(FCallbackLock);
+  end;
+end;
+
 procedure TBleByteChannel.SubscriptionDataReceived(Sender: TObject;
   const AValue: TBytes);
+var
+  Handler: TLazBleByteChannelDataEvent;
 begin
-  if Assigned(FOnData) then
-    FOnData(Self, AValue);
+  Handler := GetOnData;
+  if Assigned(Handler) then
+    Handler(Self, AValue);
 end;
 
-function TBleByteChannel.Attach: TBleSubscription;
+function TBleByteChannel.Attach: IBleSubscription;
+var
+  CurrentSubscription: IBleSubscription;
 begin
-  if Assigned(FSubscription) and
-    (FSubscription.State in [lbsubPending, lbsubActive,
+  CurrentSubscription := GetSubscription;
+  if Assigned(CurrentSubscription) and
+    (CurrentSubscription.State in [lbsubPending, lbsubActive,
       lbsubUnsubscribing]) then
-    Exit(FSubscription);
+    Exit(CurrentSubscription);
 
-  FDetachOperation := nil;
-  if not Assigned(FSession) then
-    Exit(nil);
-  FSubscription := FSession.SubscribeAsync(FServiceUuid,
+  CurrentSubscription := FSession.SubscribeAsync(FServiceUuid,
     FNotifyCharacteristicUuid);
-  FSubscription.OnData := @SubscriptionDataReceived;
-  Result := FSubscription;
+  CurrentSubscription.OnData := @SubscriptionDataReceived;
+  EnterCriticalSection(FLock);
+  try
+    FDetachOperation := nil;
+    FSubscription := CurrentSubscription;
+  finally
+    LeaveCriticalSection(FLock);
+  end;
+  Result := CurrentSubscription;
 end;
 
-function TBleByteChannel.Detach: TBleGattOperation;
+function TBleByteChannel.Detach: IBleGattOperation;
+var
+  CurrentSubscription: IBleSubscription;
 begin
-  if Assigned(FDetachOperation) then
-    Exit(FDetachOperation);
-  if not Assigned(FSubscription) then
-    Exit(nil);
+  EnterCriticalSection(FLock);
+  try
+    Result := FDetachOperation;
+    CurrentSubscription := FSubscription;
+  finally
+    LeaveCriticalSection(FLock);
+  end;
+  if Assigned(Result) then
+    Exit;
+  if not Assigned(CurrentSubscription) then
+    Exit(TBleGattOperationAccess.CreateTerminal(lbopSucceeded, ''));
 
-  FSubscription.OnData := nil;
-  FDetachOperation := FSubscription.Unsubscribe;
-  Result := FDetachOperation;
+  CurrentSubscription.OnData := nil;
+  Result := CurrentSubscription.Unsubscribe;
+  EnterCriticalSection(FLock);
+  try
+    if not Assigned(FDetachOperation) then
+      FDetachOperation := Result
+    else
+      Result := FDetachOperation;
+  finally
+    LeaveCriticalSection(FLock);
+  end;
 end;
 
-function TBleByteChannel.SendAsync(const AValue: TBytes): TBleGattOperation;
+function TBleByteChannel.SendAsync(const AValue: TBytes): IBleGattOperation;
 begin
   if not Ready or not Assigned(FSession) then
-    Exit(nil);
+    Exit(TBleGattOperationAccess.CreateTerminal(lbopFailed,
+      'BLE byte channel is not ready'));
   Result := FSession.WriteAsync(FServiceUuid, FWriteCharacteristicUuid,
     AValue, FWriteMode);
 end;

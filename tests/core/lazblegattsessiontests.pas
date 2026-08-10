@@ -10,11 +10,13 @@ uses
   testregistry,
   LazBleTypes,
   LazBleBackend,
+  LazBleOperation,
   LazBleGattOperation,
   LazBleGattSubscription,
   LazBleGattSession,
   LazBleCentralManager,
-  FakeLazBleBackend;
+  FakeLazBleBackend,
+  TestLazBleAccess;
 
 type
   TDataObserver = class
@@ -38,7 +40,7 @@ type
       const ASubscriptionId: TBleSubscriptionId;
       const AValue: array of Byte);
     procedure EmitServicesDiscovered(const AOperationId: TBleOperationId);
-    function Subscribe: TBleSubscription;
+    function Subscribe: IBleSubscription;
   protected
     procedure SetUp; override;
     procedure TearDown; override;
@@ -50,6 +52,8 @@ type
     procedure UnsubscribeIsIdempotent;
     procedure DisconnectInvalidatesSubscriptionAndIgnoresOldNotification;
     procedure DiscoveryPublishesAnIndependentGattSnapshot;
+    procedure CompletedOperationOutlivesSession;
+    procedure InvalidatedSubscriptionOutlivesSession;
   end;
 
 implementation
@@ -106,12 +110,16 @@ begin
   AssertTrue(FBackendObject.EmitProgress(BackendEvent));
 end;
 
-function TLazBleGattSessionTest.Subscribe: TBleSubscription;
+function TLazBleGattSessionTest.Subscribe: IBleSubscription;
+var
+  OperationId: TBleOperationId;
 begin
   Result := FSession.SubscribeAsync('service', 'notify');
-  EmitEvent(lbekSubscribed, Result.OperationId, 7, []);
+  OperationId := FBackendObject.OperationIds[
+    FBackendObject.CommandCount - 1];
+  EmitEvent(lbekSubscribed, OperationId, 7, []);
   AssertTrue(FBackendObject.CompleteOperation(
-    Result.OperationId, lbekOperationSucceeded));
+    OperationId, lbekOperationSucceeded));
   AssertEquals(Ord(lbsubActive), Ord(Result.State));
 end;
 
@@ -124,7 +132,7 @@ begin
   FBackend := FBackendObject;
   FManager := TBleCentralManager.Create(FBackend);
   FSession := FManager.CreateSession('device-1');
-  ConnectId := FSession.Connect;
+  ConnectId := LazBleTestConnect(FSession);
   EmitEvent(lbekConnected, ConnectId, InvalidBleSubscriptionId, []);
   DiscoveryId := FBackendObject.OperationIds[1];
   EmitServicesDiscovered(DiscoveryId);
@@ -167,22 +175,63 @@ end;
 
 procedure TLazBleGattSessionTest.ReadCompletesWithCopiedValue;
 var
-  Operation: TBleGattOperation;
+  Operation: IBleGattOperation;
+  OperationId: TBleOperationId;
+  Value: TBytes;
 begin
   Operation := FSession.ReadAsync('service', 'read');
-  EmitEvent(lbekReadResult, Operation.OperationId,
+  OperationId := FBackendObject.OperationIds[
+    FBackendObject.CommandCount - 1];
+  EmitEvent(lbekReadResult, OperationId,
     InvalidBleSubscriptionId, [$10, $20]);
   AssertTrue(FBackendObject.CompleteOperation(
-    Operation.OperationId, lbekOperationSucceeded));
+    OperationId, lbekOperationSucceeded));
 
-  AssertEquals(Ord(lbosSucceeded), Ord(Operation.State));
+  AssertEquals(Ord(lbopSucceeded), Ord(Operation.State));
   AssertEquals(2, Length(Operation.Value));
   AssertEquals($20, Integer(Operation.Value[1]));
+  Value := Operation.Value;
+  Value[1] := $FF;
+  AssertEquals($20, Integer(Operation.Value[1]));
+end;
+
+procedure TLazBleGattSessionTest.CompletedOperationOutlivesSession;
+var
+  Operation: IBleGattOperation;
+  OperationId: TBleOperationId;
+begin
+  Operation := FSession.ReadAsync('service', 'read');
+  OperationId := FBackendObject.OperationIds[
+    FBackendObject.CommandCount - 1];
+  EmitEvent(lbekReadResult, OperationId, InvalidBleSubscriptionId, [$42]);
+  AssertTrue(FBackendObject.CompleteOperation(OperationId,
+    lbekOperationSucceeded));
+
+  FManager.Free;
+  FManager := nil;
+  FSession := nil;
+
+  AssertEquals(Ord(lbopSucceeded), Ord(Operation.State));
+  AssertEquals($42, Integer(Operation.Value[0]));
+end;
+
+procedure TLazBleGattSessionTest.InvalidatedSubscriptionOutlivesSession;
+var
+  Subscription: IBleSubscription;
+begin
+  Subscription := Subscribe;
+
+  FManager.Free;
+  FManager := nil;
+  FSession := nil;
+
+  AssertEquals(Ord(lbsubInactive), Ord(Subscription.State));
+  AssertTrue(Assigned(Subscription.Unsubscribe));
 end;
 
 procedure TLazBleGattSessionTest.WritePreservesModeAndPayload;
 var
-  Operation: TBleGattOperation;
+  Operation: IBleGattOperation;
 begin
   Operation := FSession.WriteAsync('service', 'write', [$01, $02],
     lbwmCommand);
@@ -192,14 +241,15 @@ begin
     Ord(FBackendObject.Commands[2].WriteMode));
   AssertEquals(2, Length(FBackendObject.Commands[2].Value));
   AssertTrue(FBackendObject.CompleteOperation(
-    Operation.OperationId, lbekOperationFailed));
-  AssertEquals(Ord(lbosFailed), Ord(Operation.State));
+    FBackendObject.OperationIds[FBackendObject.CommandCount - 1],
+    lbekOperationFailed));
+  AssertEquals(Ord(lbopFailed), Ord(Operation.State));
 end;
 
 procedure TLazBleGattSessionTest.SubscribeDeliversNotifications;
 var
   Observer: TDataObserver;
-  Subscription: TBleSubscription;
+  Subscription: IBleSubscription;
 begin
   Observer := TDataObserver.Create;
   try
@@ -207,7 +257,7 @@ begin
     Subscription.OnData := @Observer.DataReceived;
 
     EmitEvent(lbekNotification, InvalidBleOperationId,
-      Subscription.SubscriptionId, [$31, $32]);
+      7, [$31, $32]);
 
     AssertEquals(1, Observer.CallCount);
     AssertEquals(2, Length(Observer.Value));
@@ -219,9 +269,9 @@ end;
 
 procedure TLazBleGattSessionTest.UnsubscribeIsIdempotent;
 var
-  FirstOperation: TBleGattOperation;
-  SecondOperation: TBleGattOperation;
-  Subscription: TBleSubscription;
+  FirstOperation: IBleGattOperation;
+  SecondOperation: IBleGattOperation;
+  Subscription: IBleSubscription;
 begin
   Subscription := Subscribe;
 
@@ -231,18 +281,20 @@ begin
   AssertTrue(FirstOperation = SecondOperation);
   AssertEquals(Ord(lbsubUnsubscribing), Ord(Subscription.State));
   AssertTrue(FBackendObject.CompleteOperation(
-    FirstOperation.OperationId, lbekOperationSucceeded));
+    FBackendObject.OperationIds[FBackendObject.CommandCount - 1],
+    lbekOperationSucceeded));
   AssertEquals(Ord(lbsubInactive), Ord(Subscription.State));
 end;
 
 procedure TLazBleGattSessionTest.SubscribeFailureMarksTokenFailed;
 var
-  Subscription: TBleSubscription;
+  Subscription: IBleSubscription;
 begin
   Subscription := FSession.SubscribeAsync('service', 'notify');
 
   AssertTrue(FBackendObject.CompleteOperation(
-    Subscription.OperationId, lbekOperationFailed));
+    FBackendObject.OperationIds[FBackendObject.CommandCount - 1],
+    lbekOperationFailed));
 
   AssertEquals(Ord(lbsubFailed), Ord(Subscription.State));
 end;
@@ -251,20 +303,20 @@ procedure TLazBleGattSessionTest.DisconnectInvalidatesSubscriptionAndIgnoresOldN
 var
   DisconnectId: TBleOperationId;
   Observer: TDataObserver;
-  Subscription: TBleSubscription;
+  Subscription: IBleSubscription;
 begin
   Observer := TDataObserver.Create;
   try
     Subscription := Subscribe;
     Subscription.OnData := @Observer.DataReceived;
-    DisconnectId := FSession.Disconnect;
+    DisconnectId := LazBleTestDisconnect(FSession);
     EmitEvent(lbekDisconnected, DisconnectId,
       InvalidBleSubscriptionId, []);
 
     AssertEquals(Ord(lbsubInactive), Ord(Subscription.State));
     AssertEquals(0, Length(FSession.Services));
     EmitEvent(lbekNotification, InvalidBleOperationId,
-      Subscription.SubscriptionId, [$44]);
+      7, [$44]);
     AssertEquals(0, Observer.CallCount);
   finally
     Observer.Free;

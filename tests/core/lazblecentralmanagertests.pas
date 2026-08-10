@@ -11,6 +11,7 @@ uses
   LazBleBackend,
   LazBleGattSession,
   LazBleCentralManager,
+  TestLazBleAccess,
   FakeLazBleBackend;
 
 type
@@ -143,7 +144,7 @@ var
   ConnectId: TBleOperationId;
   DiscoveryId: TBleOperationId;
 begin
-  ConnectId := ASession.Connect;
+  ConnectId := LazBleTestConnect(ASession);
   EmitOperationEvent(lbekConnected, ConnectId, ASession.DeviceId,
     ASession.Generation);
   DiscoveryId := FBackendObject.OperationIds[
@@ -194,10 +195,10 @@ var
 begin
   Session := FManager.CreateSession('device-1');
 
-  ConnectId := Session.Connect;
+  ConnectId := LazBleTestConnect(Session);
 
   AssertEquals(Ord(lbssConnecting), Ord(Session.State));
-  AssertTrue(Session.Connect = InvalidBleOperationId);
+  AssertTrue(LazBleTestConnect(Session) = InvalidBleOperationId);
   AssertEquals(1, FBackendObject.CommandCount);
   AssertEquals(Ord(lbckConnect),
     Ord(FBackendObject.Commands[0].Kind));
@@ -220,7 +221,7 @@ var
   Session: TBleGattSession;
 begin
   Session := FManager.CreateSession('device-1');
-  ConnectId := Session.Connect;
+  ConnectId := LazBleTestConnect(Session);
 
   AssertTrue(FBackendObject.CompleteOperation(
     ConnectId, lbekOperationFailed));
@@ -235,7 +236,7 @@ var
   Session: TBleGattSession;
 begin
   Session := FManager.CreateSession('device-1');
-  ConnectId := Session.Connect;
+  ConnectId := LazBleTestConnect(Session);
   EmitOperationEvent(lbekConnected, ConnectId, 'device-1',
     Session.Generation);
   DiscoveryId := FBackendObject.OperationIds[
@@ -266,7 +267,7 @@ begin
   Session := FManager.CreateSession('device-1');
   ConnectSession(Session);
 
-  DisconnectId := Session.Disconnect;
+  DisconnectId := LazBleTestDisconnect(Session);
 
   AssertEquals(Ord(lbssDisconnecting), Ord(Session.State));
   AssertEquals(Ord(lbckDisconnect),
@@ -283,12 +284,12 @@ var
 begin
   Session := FManager.CreateSession('device-1');
   ConnectSession(Session);
-  Session.Disconnect;
+  LazBleTestDisconnect(Session);
   EmitOperationEvent(lbekDisconnected,
     FBackendObject.OperationIds[FBackendObject.CommandCount - 1],
     'device-1', 1);
 
-  ConnectId := Session.Connect;
+  ConnectId := LazBleTestConnect(Session);
   AssertTrue(Session.Generation = 2);
   EmitOperationEvent(lbekConnected, ConnectId, 'device-1', 1);
 
@@ -403,7 +404,7 @@ begin
   try
     Session := FManager.CreateSession('device-1');
     Session.OnStateChanged := @Observer.SessionStateChanged;
-    Session.Connect;
+    LazBleTestConnect(Session);
     AssertEquals(Ord(lbssConnecting), Ord(Observer.LastSessionState));
 
     EmitOperationEvent(lbekConnected, FBackendObject.OperationIds[0],

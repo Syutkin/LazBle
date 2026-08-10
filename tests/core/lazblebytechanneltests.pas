@@ -10,12 +10,14 @@ uses
   testregistry,
   LazBleTypes,
   LazBleBackend,
+  LazBleOperation,
   LazBleGattOperation,
   LazBleGattSubscription,
   LazBleGattSession,
   LazBleCentralManager,
   LazBleByteChannel,
-  FakeLazBleBackend;
+  FakeLazBleBackend,
+  TestLazBleAccess;
 
 type
   TByteChannelObserver = class
@@ -48,7 +50,7 @@ type
     procedure SendUsesConfiguredWriteCharacteristicAndMode;
     procedure NotificationIsForwardedAsBytes;
     procedure DetachIsIdempotentAndStopsData;
-    procedure SendBeforeAttachReturnsNoOperation;
+    procedure SendBeforeAttachReturnsFailedOperation;
   end;
 
 implementation
@@ -83,12 +85,15 @@ end;
 
 procedure TLazBleByteChannelTest.ActivateChannel;
 var
-  Subscription: TBleSubscription;
+  OperationId: TBleOperationId;
+  Subscription: IBleSubscription;
 begin
   Subscription := FChannel.Attach;
-  EmitEvent(lbekSubscribed, Subscription.OperationId, 21, []);
+  OperationId := FBackendObject.OperationIds[
+    FBackendObject.CommandCount - 1];
+  EmitEvent(lbekSubscribed, OperationId, 21, []);
   AssertTrue(FBackendObject.CompleteOperation(
-    Subscription.OperationId, lbekOperationSucceeded));
+    OperationId, lbekOperationSucceeded));
   AssertTrue(FChannel.Ready);
 end;
 
@@ -100,7 +105,7 @@ begin
   FBackend := FBackendObject;
   FManager := TBleCentralManager.Create(FBackend);
   FSession := FManager.CreateSession('device-1');
-  ConnectId := FSession.Connect;
+  ConnectId := LazBleTestConnect(FSession);
   EmitEvent(lbekConnected, ConnectId, InvalidBleSubscriptionId, []);
   EmitEvent(lbekServicesDiscovered, FBackendObject.OperationIds[1],
     InvalidBleSubscriptionId, []);
@@ -121,7 +126,7 @@ end;
 
 procedure TLazBleByteChannelTest.AttachUsesConfiguredNotifyCharacteristic;
 var
-  Subscription: TBleSubscription;
+  Subscription: IBleSubscription;
 begin
   Subscription := FChannel.Attach;
 
@@ -136,7 +141,7 @@ end;
 
 procedure TLazBleByteChannelTest.SendUsesConfiguredWriteCharacteristicAndMode;
 var
-  Operation: TBleGattOperation;
+  Operation: IBleGattOperation;
 begin
   ActivateChannel;
 
@@ -163,7 +168,7 @@ begin
     ActivateChannel;
 
     EmitEvent(lbekNotification, InvalidBleOperationId,
-      FChannel.Subscription.SubscriptionId, [$10, $20]);
+      21, [$10, $20]);
 
     AssertEquals(1, Observer.CallCount);
     AssertEquals(2, Length(Observer.Value));
@@ -175,16 +180,16 @@ end;
 
 procedure TLazBleByteChannelTest.DetachIsIdempotentAndStopsData;
 var
-  FirstOperation: TBleGattOperation;
+  FirstOperation: IBleGattOperation;
   Observer: TByteChannelObserver;
-  SecondOperation: TBleGattOperation;
+  SecondOperation: IBleGattOperation;
   SubscriptionId: TBleSubscriptionId;
 begin
   Observer := TByteChannelObserver.Create;
   try
     FChannel.OnData := @Observer.DataReceived;
     ActivateChannel;
-    SubscriptionId := FChannel.Subscription.SubscriptionId;
+    SubscriptionId := 21;
 
     FirstOperation := FChannel.Detach;
     SecondOperation := FChannel.Detach;
@@ -198,9 +203,15 @@ begin
   end;
 end;
 
-procedure TLazBleByteChannelTest.SendBeforeAttachReturnsNoOperation;
+procedure TLazBleByteChannelTest.SendBeforeAttachReturnsFailedOperation;
+var
+  Operation: IBleGattOperation;
 begin
-  AssertFalse(Assigned(FChannel.SendAsync([$01])));
+  Operation := FChannel.SendAsync([$01]);
+
+  AssertTrue(Assigned(Operation));
+  AssertEquals(Ord(lbopFailed), Ord(Operation.State));
+  AssertEquals('BLE byte channel is not ready', Operation.ErrorMessage);
   AssertEquals(2, FBackendObject.CommandCount);
 end;
 

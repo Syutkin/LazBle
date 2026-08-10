@@ -8,6 +8,7 @@ uses
   SysUtils,
   LazBleTypes,
   LazBleBackend,
+  LazBleOperation,
   LazBleClient,
   LazBleFacade;
 
@@ -15,7 +16,7 @@ type
   TLazBleSync = class
   private
     FBle: TLazBle;
-    function WaitForOperation(const AOperation: TBleOperation;
+    function WaitForOperation(const AOperation: IBleOperation;
       const ATimeoutMs: Cardinal): Boolean;
   public
     constructor Create; overload;
@@ -88,7 +89,7 @@ begin
   inherited Destroy;
 end;
 
-function TLazBleSync.WaitForOperation(const AOperation: TBleOperation;
+function TLazBleSync.WaitForOperation(const AOperation: IBleOperation;
   const ATimeoutMs: Cardinal): Boolean;
 var
   Waiter: TOperationWaiter;
@@ -111,7 +112,7 @@ function TLazBleSync.Scan(const AAdapterId: string;
   const ATimeoutMs: Cardinal; out ADevices: TBleDeviceInfos;
   out AErrorMessage: string): Boolean;
 var
-  Operation: TBleScanOperation;
+  Operation: IBleScanOperation;
   WaitTimeoutMs: Cardinal;
 begin
   Operation := FBle.ScanAsync(AAdapterId, ATimeoutMs);
@@ -132,7 +133,7 @@ end;
 function TLazBleSync.Connect(const AClient: TBleClient;
   const ATimeoutMs: Cardinal; out AErrorMessage: string): Boolean;
 var
-  Operation: TBleOperation;
+  Operation: IBleOperation;
 begin
   if not Assigned(AClient) then
   begin
@@ -147,7 +148,7 @@ end;
 function TLazBleSync.Disconnect(const AClient: TBleClient;
   const ATimeoutMs: Cardinal; out AErrorMessage: string): Boolean;
 var
-  Operation: TBleOperation;
+  Operation: IBleOperation;
 begin
   if not Assigned(AClient) then
   begin
@@ -162,7 +163,7 @@ end;
 function TLazBleSync.Shutdown(const ATimeoutMs: Cardinal;
   out AErrorMessage: string): Boolean;
 var
-  Operation: TBleOperation;
+  Operation: IBleOperation;
 begin
   Operation := FBle.ShutdownAsync;
   Result := WaitForOperation(Operation, ATimeoutMs);

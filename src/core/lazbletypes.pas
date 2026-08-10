@@ -1,6 +1,7 @@
 unit LazBleTypes;
 
 {$mode objfpc}{$H+}
+{$modeswitch advancedrecords}
 
 interface
 
@@ -10,6 +11,14 @@ uses
 type
   TBleOperationId = type QWord;
   TBleSubscriptionId = type QWord;
+
+  TLazBleReconnectOptions = record
+    InitialDelayMs: Cardinal;
+    MaximumDelayMs: Cardinal;
+    MaximumAttempts: Cardinal;
+    class function Create(const AInitialDelayMs, AMaximumDelayMs,
+      AMaximumAttempts: Cardinal): TLazBleReconnectOptions; static;
+  end;
 
   TBleDeviceInfo = record
     DeviceId: string;
@@ -123,6 +132,14 @@ function LazBleCopyGattServices(
   const AServices: TLazBleGattServices): TLazBleGattServices;
 
 implementation
+
+class function TLazBleReconnectOptions.Create(const AInitialDelayMs,
+  AMaximumDelayMs, AMaximumAttempts: Cardinal): TLazBleReconnectOptions;
+begin
+  Result.InitialDelayMs := AInitialDelayMs;
+  Result.MaximumDelayMs := AMaximumDelayMs;
+  Result.MaximumAttempts := AMaximumAttempts;
+end;
 
 function LazBleBackendEventIsTerminal(
   const AEvent: TLazBleBackendEvent): Boolean;
