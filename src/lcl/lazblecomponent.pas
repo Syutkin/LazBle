@@ -58,6 +58,8 @@ type
     FBle: TLazBle;
     FScan: TLazBleLclScan;
     FClients: TList;
+    FShutdownOperation: IBleOperation;
+    FShutdownStarted: Boolean;
     FAdapterId: string;
     FScanTimeoutMs: Cardinal;
     FOnScanStateChanged: TLazBleLclScanStateChangedEvent;
@@ -65,6 +67,7 @@ type
     FOnScanCompleted: TLazBleLclScanCompletedEvent;
     FOnError: TLazBleLclErrorEvent;
     procedure Initialize(const ABle: TLazBle);
+    procedure EnsureOperational;
     function GetScanState: TLazBleLclScanState;
     function GetScanResults: TBleDeviceInfos;
     function GetLastErrorCode: Integer;
@@ -91,6 +94,7 @@ type
     procedure StartScan;
     procedure CancelScan;
     procedure ClearScanResults;
+    procedure Shutdown;
     function CreateClient(const ADeviceId: string): TLazBleLclClient;
     function FindClient(const ADeviceId: string): TLazBleLclClient;
     procedure RemoveClient(const AClient: TLazBleLclClient);
@@ -151,6 +155,7 @@ type
     procedure DisconnectCompleted(Sender: TObject);
     procedure DispatchMessage(Sender: TObject;
       const AMessage: TLazBleLclDispatchMessage);
+    procedure RootComponentShuttingDown(const ARoot: TLazBleComponent);
     procedure RootComponentDestroying(const ARoot: TLazBleComponent);
   protected
     procedure Notification(AComponent: TComponent;
@@ -345,6 +350,7 @@ destructor TLazBleComponent.Destroy;
 var
   Index: Integer;
 begin
+  Shutdown;
   if Assigned(FClients) then
     for Index := FClients.Count - 1 downto 0 do
       TLazBleLclClient(FClients[Index]).RootComponentDestroying(Self);
@@ -358,6 +364,7 @@ begin
   end;
   FScan.Free;
   FScan := nil;
+  FShutdownOperation := nil;
   FBle.Free;
   FBle := nil;
   FClients.Free;
@@ -380,8 +387,15 @@ begin
   FScan.OnCompleted := @ScanCompleted;
 end;
 
+procedure TLazBleComponent.EnsureOperational;
+begin
+  if FShutdownStarted then
+    raise EInvalidOperation.Create('LazBle component is shut down');
+end;
+
 procedure TLazBleComponent.StartScan;
 begin
+  EnsureOperational;
   FScan.Start(FAdapterId, FScanTimeoutMs);
 end;
 
@@ -395,9 +409,31 @@ begin
   FScan.ClearResults;
 end;
 
+procedure TLazBleComponent.Shutdown;
+var
+  Index: Integer;
+begin
+  if FShutdownStarted then
+    Exit;
+  FShutdownStarted := True;
+  if Assigned(FScan) then
+  begin
+    FScan.OnStateChanged := nil;
+    FScan.OnResult := nil;
+    FScan.OnCompleted := nil;
+    FScan.Shutdown;
+  end;
+  if Assigned(FClients) then
+    for Index := FClients.Count - 1 downto 0 do
+      TLazBleLclClient(FClients[Index]).RootComponentShuttingDown(Self);
+  if Assigned(FBle) then
+    FShutdownOperation := FBle.ShutdownAsync;
+end;
+
 function TLazBleComponent.CreateClient(
   const ADeviceId: string): TLazBleLclClient;
 begin
+  EnsureOperational;
   if ADeviceId = '' then
     raise EArgumentException.Create('BLE device id must not be empty');
   Result := TLazBleLclClient.Create(Self);
@@ -486,6 +522,7 @@ end;
 procedure TLazBleComponent.RegisterClient(
   const AClient: TLazBleLclClient);
 begin
+  EnsureOperational;
   if FClients.IndexOf(AClient) >= 0 then
     Exit;
   ValidateClientDeviceId(AClient, AClient.DeviceId);
@@ -573,7 +610,10 @@ begin
   if FLazBle = AValue then
     Exit;
   if Assigned(AValue) then
+  begin
+    AValue.EnsureOperational;
     AValue.ValidateClientDeviceId(Self, FDeviceId);
+  end;
   RemoveReplaceableCoreClient;
   if Assigned(FLazBle) then
   begin
@@ -660,6 +700,7 @@ begin
     Exit;
   if not Assigned(FLazBle) then
     raise EInvalidOperation.Create('LazBle component is not assigned');
+  FLazBle.EnsureOperational;
   if FDeviceId = '' then
     raise EInvalidOperation.Create('BLE device is not selected');
 
@@ -873,6 +914,15 @@ begin
   DetachCoreClient;
   ARoot.RemoveFreeNotification(Self);
   FLazBle := nil;
+end;
+
+procedure TLazBleLclClient.RootComponentShuttingDown(
+  const ARoot: TLazBleComponent);
+begin
+  if FLazBle <> ARoot then
+    Exit;
+  FDispatch.Detach;
+  DetachCoreClient;
 end;
 
 initialization

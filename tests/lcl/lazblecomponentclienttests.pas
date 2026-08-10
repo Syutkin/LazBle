@@ -9,7 +9,9 @@ uses
   SysUtils,
   FpcUnit,
   TestRegistry,
+  LazBleTypes,
   LazBleBackend,
+  LazBleClient,
   LazBleComponent,
   FakeLazBleBackend;
 
@@ -28,6 +30,9 @@ type
     FBackend: ILazBleBackend;
     FBackendObject: TFakeLazBleBackend;
     FLazBle: TLazBleComponent;
+    FStateChangeCount: Integer;
+    procedure ClientStateChanged(Sender: TObject;
+      const AState: TLazBleClientState);
   protected
     procedure SetUp; override;
     procedure TearDown; override;
@@ -37,6 +42,7 @@ type
     procedure DuplicateDeviceIdIsRejectedWithoutChangingExistingBinding;
     procedure RemoveClientFreesOnlyRootOwnedClient;
     procedure RemoveClientRejectsActiveConnection;
+    procedure ShutdownDetachesActiveClientAndSuppressesCallbacks;
     procedure RootDestructionDetachesPreplacedActiveClientFirst;
   end;
 
@@ -62,6 +68,7 @@ begin
   FBackendObject := TFakeLazBleBackend.Create;
   FBackend := FBackendObject;
   FLazBle := TLazBleComponent.Create(nil, FBackend);
+  FStateChangeCount := 0;
 end;
 
 procedure TLazBleComponentClientTest.TearDown;
@@ -71,6 +78,12 @@ begin
   FBackend := nil;
   FBackendObject := nil;
   inherited TearDown;
+end;
+
+procedure TLazBleComponentClientTest.ClientStateChanged(Sender: TObject;
+  const AState: TLazBleClientState);
+begin
+  Inc(FStateChangeCount);
 end;
 
 procedure TLazBleComponentClientTest.CreateClientRegistersRootOwnedClientWithoutBleOperation;
@@ -202,6 +215,57 @@ begin
   AssertEquals(1, FLazBle.ClientCount);
   AssertSame(Client, FLazBle.FindClient('active'));
   AssertSame(FLazBle, Client.LazBle);
+end;
+
+procedure TLazBleComponentClientTest.ShutdownDetachesActiveClientAndSuppressesCallbacks;
+var
+  Client: TLazBleLclClient;
+  Index: Integer;
+  OperationId: TBleOperationId;
+  OperationCount: Integer;
+  Raised: Boolean;
+  StateChangeCountBeforeShutdown: Integer;
+begin
+  Client := FLazBle.CreateClient('active');
+  Client.OnStateChanged := @ClientStateChanged;
+  Client.Connect;
+  OperationId := FBackendObject.OperationIds[0];
+  StateChangeCountBeforeShutdown := FStateChangeCount;
+
+  FLazBle.Shutdown;
+
+  AssertSame(FLazBle, Client.LazBle);
+  AssertNull(Client.CoreClient);
+  AssertEquals(Ord(lbcstDisconnected), Ord(Client.State));
+  AssertEquals(1, FLazBle.ClientCount);
+  AssertTrue('Active connect was not cancelled',
+    FBackendObject.CancellationWasRequested(OperationId));
+  CheckSynchronize;
+  AssertEquals(StateChangeCountBeforeShutdown, FStateChangeCount);
+
+  OperationCount := FBackendObject.CommandCount;
+  for Index := 0 to OperationCount - 1 do
+  begin
+    OperationId := FBackendObject.OperationIds[Index];
+    AssertTrue('Shutdown operation was not cancelled',
+      FBackendObject.CancellationWasRequested(OperationId));
+    AssertTrue('Cancelled operation did not accept its terminal event',
+      FBackendObject.CompleteOperation(OperationId,
+        lbekOperationCancelled));
+  end;
+  AssertTrue('Backend shutdown did not complete',
+    FBackendObject.CompleteShutdown);
+  CheckSynchronize;
+  AssertEquals(StateChangeCountBeforeShutdown, FStateChangeCount);
+
+  Raised := False;
+  try
+    Client.Connect;
+  except
+    on EInvalidOperation do
+      Raised := True;
+  end;
+  AssertTrue('Connect after component shutdown was accepted', Raised);
 end;
 
 procedure TLazBleComponentClientTest.RootDestructionDetachesPreplacedActiveClientFirst;

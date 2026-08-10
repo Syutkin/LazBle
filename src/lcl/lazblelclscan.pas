@@ -39,6 +39,7 @@ type
     FResults: TBleDeviceInfos;
     FErrorCode: Integer;
     FErrorMessage: string;
+    FShutdown: Boolean;
     FOnResult: TLazBleScanResultEvent;
     FOnStateChanged: TLazBleLclScanStateChangedEvent;
     FOnCompleted: TLazBleLclScanCompletedEvent;
@@ -61,6 +62,7 @@ type
     procedure Start(const AAdapterId: string; const ATimeoutMs: Cardinal);
     procedure Cancel;
     procedure ClearResults;
+    procedure Shutdown;
     property State: TLazBleLclScanState read GetState;
     property Results: TBleDeviceInfos read GetResults;
     property ErrorCode: Integer read GetErrorCode;
@@ -139,15 +141,7 @@ end;
 
 destructor TLazBleLclScan.Destroy;
 begin
-  FDispatch.Detach;
-  if Assigned(FOperation) then
-  begin
-    FOperation.OnResult := nil;
-    FOperation.OnCompleted := nil;
-    if FOperation.State = lbopPending then
-      FOperation.Cancel;
-  end;
-  FOperation := nil;
+  Shutdown;
   FDispatch.Free;
   FDispatch := nil;
   FBle := nil;
@@ -158,6 +152,8 @@ end;
 procedure TLazBleLclScan.Start(const AAdapterId: string;
   const ATimeoutMs: Cardinal);
 begin
+  if FShutdown then
+    raise EInvalidOperation.Create('BLE scan controller is shut down');
   if State = lblssScanning then
     raise ELazBleLclScanActive.Create('BLE scan is already active');
   FDispatch.NextGeneration;
@@ -187,6 +183,32 @@ begin
   EnterCriticalSection(FLock);
   try
     SetLength(FResults, 0);
+  finally
+    LeaveCriticalSection(FLock);
+  end;
+end;
+
+procedure TLazBleLclScan.Shutdown;
+var
+  Operation: IBleScanOperation;
+begin
+  if FShutdown then
+    Exit;
+  FShutdown := True;
+  FDispatch.Detach;
+  Operation := FOperation;
+  FOperation := nil;
+  if Assigned(Operation) then
+  begin
+    Operation.OnResult := nil;
+    Operation.OnCompleted := nil;
+    if Operation.State = lbopPending then
+      Operation.Cancel;
+  end;
+  EnterCriticalSection(FLock);
+  try
+    if FState = lblssScanning then
+      FState := lblssCancelled;
   finally
     LeaveCriticalSection(FLock);
   end;

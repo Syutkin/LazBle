@@ -95,6 +95,12 @@ attached again after service discovery.
 and nested `ReconnectOptions` properties. Loading them from an `.lfm` does not
 create a core client or start a BLE operation.
 
+Call `TLazBleComponent.Shutdown` when the LCL BLE subsystem is no longer
+needed. It is non-blocking, idempotent, cancels scan and client operations,
+stops pending reconnect, and suppresses queued LCL callbacks. Shutdown is
+terminal: new scans, clients, connections, and profile operations are rejected.
+The component destructor starts the same shutdown automatically.
+
 Console applications and tests can use the blocking `TLazBleSync` facade from
 `LazBleSync`. GUI applications should use the asynchronous API.
 

@@ -89,6 +89,8 @@ type
     procedure CancelScanCancelsActiveOperation;
     procedure FailedScanForwardsTerminalError;
     procedure ClearScanResultsClearsSnapshot;
+    procedure ShutdownCancelsScanAndSuppressesCallbacks;
+    procedure ShutdownIsIdempotentAndRejectsNewWork;
     procedure DestroyIgnoresQueuedCallbacksAndReleasesFacade;
   end;
 
@@ -405,6 +407,73 @@ begin
     Thread.WaitFor;
     Thread.Free;
   end;
+end;
+
+procedure TLazBleComponentTest.ShutdownCancelsScanAndSuppressesCallbacks;
+var
+  OperationId: TBleOperationId;
+  Thread: TComponentScanEmissionThread;
+begin
+  FComponent.StartScan;
+  OperationId := FBackendObject.OperationIds[0];
+
+  FComponent.Shutdown;
+
+  AssertTrue(FBackendObject.ShutdownOperationId <> InvalidBleOperationId);
+  AssertTrue(FBackendObject.CancellationWasRequested(OperationId));
+  Thread := TComponentScanEmissionThread.Create(FBackendObject, OperationId,
+    Device('device-a', 'Late result', -42), lbekOperationCancelled);
+  try
+    Thread.Start;
+    WaitForEmission(Thread);
+    AssertTrue(FBackendObject.CompleteShutdown);
+    CheckSynchronize;
+
+    AssertEquals(0, FResultCount);
+    AssertEquals(0, FCompletionCount);
+    AssertEquals(0, FErrorCount);
+    AssertEquals(1, Length(FStateChanges));
+    AssertEquals(Ord(lblssScanning), Ord(FStateChanges[0]));
+  finally
+    Thread.WaitFor;
+    Thread.Free;
+  end;
+end;
+
+procedure TLazBleComponentTest.ShutdownIsIdempotentAndRejectsNewWork;
+var
+  Client: TLazBleLclClient;
+  Raised: Boolean;
+  ShutdownOperationId: TBleOperationId;
+begin
+  FComponent.Shutdown;
+  ShutdownOperationId := FBackendObject.ShutdownOperationId;
+
+  FComponent.Shutdown;
+
+  AssertTrue(ShutdownOperationId <> InvalidBleOperationId);
+  AssertEquals(Int64(ShutdownOperationId),
+    Int64(FBackendObject.ShutdownOperationId));
+  Raised := False;
+  try
+    FComponent.StartScan;
+  except
+    on EInvalidOperation do
+      Raised := True;
+  end;
+  AssertTrue(Raised);
+
+  Client := nil;
+  Raised := False;
+  try
+    Client := FComponent.CreateClient('device-a');
+  except
+    on EInvalidOperation do
+      Raised := True;
+  end;
+  Client.Free;
+  AssertTrue(Raised);
+  AssertEquals(0, FComponent.ClientCount);
 end;
 
 procedure TLazBleComponentTest.DestroyIgnoresQueuedCallbacksAndReleasesFacade;
