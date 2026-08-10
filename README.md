@@ -64,6 +64,11 @@ scan snapshots, and inactive subscription tokens remain valid after their
 client or session is released. Do not call `Free` on operation or subscription
 interfaces.
 
+`IBleScanOperation.OnResult` reports every new or updated discovery while a
+scan is running. Its `Results` property remains a deduplicated snapshot in
+discovery order. Installing a handler does not replay results already present
+in the snapshot.
+
 `TLazBle` owns clients created by `CreateClient`. After successful
 `AddProfile`, a client owns the profile. `CreateClient` raises an exception for
 a duplicate device or after shutdown has started. Applications should call
@@ -89,9 +94,10 @@ Console applications and tests can use the blocking `TLazBleSync` facade from
 
 Backend events and asynchronous completion callbacks run on the thread that
 delivers the backend event; the SimpleBLE backend uses its worker thread.
-Reconnect events can run on the timer thread. LazBle does not marshal callbacks
-to the LCL main thread. Handlers must be short and thread-safe, and GUI
-applications must marshal them before accessing LCL controls.
+Scan result and reconnect callbacks follow the same rule; reconnect events can
+run on the timer thread. LazBle does not marshal callbacks to the LCL main
+thread. Handlers must be short and thread-safe, and GUI applications must
+marshal them before accessing LCL controls.
 
 Public readonly async state and result properties are synchronized. Callback
 properties can safely be installed or cleared concurrently with state changes;

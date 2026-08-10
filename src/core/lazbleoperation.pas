@@ -39,9 +39,13 @@ type
   end;
 
   IBleScanOperation = interface(IBleOperation)
-    ['{3D8E2E8C-A911-49F6-BA6D-C766FF684B91}']
+    ['{F9EA6B8B-E7D5-42B5-9F9B-58076D923CFA}']
     function GetResults: TBleDeviceInfos;
+    function GetOnResult: TLazBleScanResultEvent;
+    procedure SetOnResult(const AHandler: TLazBleScanResultEvent);
     property Results: TBleDeviceInfos read GetResults;
+    property OnResult: TLazBleScanResultEvent read GetOnResult
+      write SetOnResult;
   end;
 
   TBleOperation = class(TInterfacedObject, IBleOperation)
@@ -84,8 +88,12 @@ type
   TBleScanOperation = class(TBleOperation, IBleScanOperation)
   private
     FResultsLock: TRTLCriticalSection;
+    FResultCallbackLock: TRTLCriticalSection;
     FResults: TBleDeviceInfos;
+    FOnResult: TLazBleScanResultEvent;
     function GetResults: TBleDeviceInfos;
+    function GetOnResult: TLazBleScanResultEvent;
+    procedure SetOnResult(const AHandler: TLazBleScanResultEvent);
   protected
     constructor Create(const AOnCancel: TLazBleOperationCancelEvent);
     procedure AddOrUpdateResult(const ADeviceId, ADeviceName: string;
@@ -93,6 +101,8 @@ type
   public
     destructor Destroy; override;
     property Results: TBleDeviceInfos read GetResults;
+    property OnResult: TLazBleScanResultEvent read GetOnResult
+      write SetOnResult;
   end;
 
 implementation
@@ -311,10 +321,17 @@ constructor TBleScanOperation.Create(
 begin
   inherited Create(AOnCancel);
   InitCriticalSection(FResultsLock);
+  InitCriticalSection(FResultCallbackLock);
 end;
 
 destructor TBleScanOperation.Destroy;
 begin
+  EnterCriticalSection(FResultCallbackLock);
+  try
+    FOnResult := nil;
+  finally
+    LeaveCriticalSection(FResultCallbackLock);
+  end;
   EnterCriticalSection(FResultsLock);
   try
     FResults := nil;
@@ -322,14 +339,19 @@ begin
     LeaveCriticalSection(FResultsLock);
   end;
   DoneCriticalSection(FResultsLock);
+  DoneCriticalSection(FResultCallbackLock);
   inherited Destroy;
 end;
 
 procedure TBleScanOperation.AddOrUpdateResult(const ADeviceId,
   ADeviceName: string; const ARssi: SmallInt);
 var
+  Found: Boolean;
+  Handler: TLazBleScanResultEvent;
   Index: Integer;
+  ResultInfo: TBleDeviceInfo;
 begin
+  Found := False;
   EnterCriticalSection(FResultsLock);
   try
     for Index := 0 to High(FResults) do
@@ -337,16 +359,26 @@ begin
       begin
         FResults[Index].DeviceName := ADeviceName;
         FResults[Index].Rssi := ARssi;
-        Exit;
+        ResultInfo := FResults[Index];
+        Found := True;
+        Break;
       end;
-    Index := Length(FResults);
-    SetLength(FResults, Index + 1);
-    FResults[Index].DeviceId := ADeviceId;
-    FResults[Index].DeviceName := ADeviceName;
-    FResults[Index].Rssi := ARssi;
+    if not Found then
+    begin
+      Index := Length(FResults);
+      SetLength(FResults, Index + 1);
+      FResults[Index].DeviceId := ADeviceId;
+      FResults[Index].DeviceName := ADeviceName;
+      FResults[Index].Rssi := ARssi;
+      ResultInfo := FResults[Index];
+    end;
   finally
     LeaveCriticalSection(FResultsLock);
   end;
+  Handler := GetOnResult;
+  if Assigned(Handler) then
+    Handler(Self, ResultInfo.DeviceId, ResultInfo.DeviceName,
+      ResultInfo.Rssi);
 end;
 
 function TBleScanOperation.GetResults: TBleDeviceInfos;
@@ -356,6 +388,27 @@ begin
     Result := Copy(FResults);
   finally
     LeaveCriticalSection(FResultsLock);
+  end;
+end;
+
+function TBleScanOperation.GetOnResult: TLazBleScanResultEvent;
+begin
+  EnterCriticalSection(FResultCallbackLock);
+  try
+    Result := FOnResult;
+  finally
+    LeaveCriticalSection(FResultCallbackLock);
+  end;
+end;
+
+procedure TBleScanOperation.SetOnResult(
+  const AHandler: TLazBleScanResultEvent);
+begin
+  EnterCriticalSection(FResultCallbackLock);
+  try
+    FOnResult := AHandler;
+  finally
+    LeaveCriticalSection(FResultCallbackLock);
   end;
 end;
 

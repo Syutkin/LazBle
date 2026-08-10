@@ -19,8 +19,6 @@ type
     lbcsShutdown
   );
 
-  TLazBleScanResultEvent = procedure(Sender: TObject; const ADeviceId,
-    ADeviceName: string; const ARssi: SmallInt) of object;
   TLazBleScanCompletedEvent = procedure(Sender: TObject;
     const ASucceeded: Boolean; const AErrorCode: Integer;
     const AErrorMessage: string) of object;

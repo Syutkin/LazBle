@@ -58,6 +58,21 @@ type
     property CompletionCount: Integer read FCompletionCount;
   end;
 
+  TScanResultObserver = class
+  private
+    FResultCount: Integer;
+    FLastDeviceId: string;
+    FLastDeviceName: string;
+    FLastRssi: SmallInt;
+  public
+    procedure ResultReceived(Sender: TObject; const ADeviceId,
+      ADeviceName: string; const ARssi: SmallInt);
+    property ResultCount: Integer read FResultCount;
+    property LastDeviceId: string read FLastDeviceId;
+    property LastDeviceName: string read FLastDeviceName;
+    property LastRssi: SmallInt read FLastRssi;
+  end;
+
   TScanCompletionThread = class(TThread)
   private
     FBackend: TFakeLazBleBackend;
@@ -85,6 +100,7 @@ type
     procedure TearDown; override;
   published
     procedure ScanDeduplicatesWithoutChangingDiscoveryOrder;
+    procedure ScanPublishesEachNewAndUpdatedResult;
     procedure CancellingScanCancelsBackendOperation;
     procedure TimedOutScanKeepsTimedOutStateAfterTerminalEvent;
     procedure ConnectCompletesAfterServiceDiscovery;
@@ -135,6 +151,15 @@ type
     function TestGeneration: QWord;
     function TestProfileCount: Integer;
   end;
+
+procedure TScanResultObserver.ResultReceived(Sender: TObject;
+  const ADeviceId, ADeviceName: string; const ARssi: SmallInt);
+begin
+  Inc(FResultCount);
+  FLastDeviceId := ADeviceId;
+  FLastDeviceName := ADeviceName;
+  FLastRssi := ARssi;
+end;
 
 constructor TTestLazBleAccess.CreateInternal(const ABackend: ILazBleBackend;
   const AReconnectTimerFactory: ILazBleReconnectTimerFactory);
@@ -320,6 +345,39 @@ begin
   AssertEquals(-20, Integer(Devices[0].Rssi));
   AssertEquals('device-b', Devices[1].DeviceId);
   AssertEquals(-40, Integer(Devices[1].Rssi));
+end;
+
+procedure TLazBleClientTest.ScanPublishesEachNewAndUpdatedResult;
+var
+  Observer: TScanResultObserver;
+  Operation: IBleScanOperation;
+  OperationId: TBleOperationId;
+begin
+  Observer := TScanResultObserver.Create;
+  Operation := FBle.ScanAsync('hci0', 5000);
+  OperationId := FBackendObject.OperationIds[0];
+  try
+    EmitEvent(lbekScanResult, OperationId, 'device-existing',
+      'Existing', -90);
+    Operation.OnResult := @Observer.ResultReceived;
+    AssertEquals(0, Observer.ResultCount);
+
+    EmitEvent(lbekScanResult, OperationId, 'device-a', 'First', -80);
+    EmitEvent(lbekScanResult, OperationId, 'device-b', 'Second', -40);
+    EmitEvent(lbekScanResult, OperationId, 'device-a', 'First updated', -20);
+
+    AssertEquals(3, Observer.ResultCount);
+    AssertEquals('device-a', Observer.LastDeviceId);
+    AssertEquals('First updated', Observer.LastDeviceName);
+    AssertEquals(-20, Integer(Observer.LastRssi));
+
+    Operation.OnResult := nil;
+    EmitEvent(lbekScanResult, OperationId, 'device-c', 'Third', -60);
+    AssertEquals(3, Observer.ResultCount);
+  finally
+    Operation.OnResult := nil;
+    Observer.Free;
+  end;
 end;
 
 procedure TLazBleClientTest.CancellingScanCancelsBackendOperation;

@@ -26,6 +26,8 @@ type
     Rssi: SmallInt;
   end;
   TBleDeviceInfos = array of TBleDeviceInfo;
+  TLazBleScanResultEvent = procedure(Sender: TObject; const ADeviceId,
+    ADeviceName: string; const ARssi: SmallInt) of object;
 
 const
   InvalidBleOperationId: TBleOperationId = 0;
