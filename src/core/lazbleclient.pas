@@ -14,49 +14,51 @@ uses
   LazBleCentralManager;
 
 type
-  TLazBleClientOperationState = (
-    lbcopsPending,
-    lbcopsSucceeded,
-    lbcopsFailed,
-    lbcopsCancelled,
-    lbcopsTimedOut
+  ELazBleDuplicateClient = class(Exception);
+
+  TLazBleOperationState = (
+    lbopPending,
+    lbopSucceeded,
+    lbopFailed,
+    lbopCancelled,
+    lbopTimedOut
   );
 
-  TLazBleClientOperationCompletedEvent = procedure(Sender: TObject) of object;
-  TLazBleClientOperationCancelEvent = procedure(Sender: TObject) of object;
+  TLazBleOperationCompletedEvent = procedure(Sender: TObject) of object;
+  TLazBleOperationCancelEvent = procedure(Sender: TObject) of object;
 
-  TBleClientOperation = class
+  TBleOperation = class
   private
     FLock: TRTLCriticalSection;
     FCallbackLock: TRTLCriticalSection;
-    FState: TLazBleClientOperationState;
+    FState: TLazBleOperationState;
     FErrorCode: Integer;
     FErrorMessage: string;
     FCancelRequested: Boolean;
-    FOnCancel: TLazBleClientOperationCancelEvent;
-    FOnCompleted: TLazBleClientOperationCompletedEvent;
-    function GetState: TLazBleClientOperationState;
+    FOnCancel: TLazBleOperationCancelEvent;
+    FOnCompleted: TLazBleOperationCompletedEvent;
+    function GetState: TLazBleOperationState;
     function GetErrorCode: Integer;
     function GetErrorMessage: string;
     function GetCancelRequested: Boolean;
     procedure SetOnCompleted(
-      const AHandler: TLazBleClientOperationCompletedEvent);
-    procedure Complete(const AState: TLazBleClientOperationState;
+      const AHandler: TLazBleOperationCompletedEvent);
+    procedure Complete(const AState: TLazBleOperationState;
       const AErrorCode: Integer = 0; const AErrorMessage: string = '');
   public
-    constructor Create(const AOnCancel: TLazBleClientOperationCancelEvent);
+    constructor Create(const AOnCancel: TLazBleOperationCancelEvent);
     destructor Destroy; override;
     procedure Cancel;
     procedure Timeout;
-    property State: TLazBleClientOperationState read GetState;
+    property State: TLazBleOperationState read GetState;
     property ErrorCode: Integer read GetErrorCode;
     property ErrorMessage: string read GetErrorMessage;
     property CancelRequested: Boolean read GetCancelRequested;
-    property OnCompleted: TLazBleClientOperationCompletedEvent
+    property OnCompleted: TLazBleOperationCompletedEvent
       read FOnCompleted write SetOnCompleted;
   end;
 
-  TBleScanOperation = class(TBleClientOperation)
+  TBleScanOperation = class(TBleOperation)
   private
     FResultsLock: TRTLCriticalSection;
     FResults: TBleDeviceInfos;
@@ -64,60 +66,60 @@ type
       const ARssi: SmallInt);
     function GetResults: TBleDeviceInfos;
   public
-    constructor Create(const AOnCancel: TLazBleClientOperationCancelEvent);
+    constructor Create(const AOnCancel: TLazBleOperationCancelEvent);
     destructor Destroy; override;
     property Results: TBleDeviceInfos read GetResults;
   end;
 
-  TLazBleConnectionOperationKind = (
-    lbcokConnect,
-    lbcokDisconnect
+  TLazBleSessionOperationKind = (
+    lbsokConnect,
+    lbsokDisconnect
   );
 
-  TBleConnectionOperation = class(TBleClientOperation)
+  TBleSessionOperation = class(TBleOperation)
   private
-    FKind: TLazBleConnectionOperationKind;
+    FKind: TLazBleSessionOperationKind;
     FSession: TBleGattSession;
   public
     constructor Create(const ASession: TBleGattSession;
-      const AKind: TLazBleConnectionOperationKind;
-      const AOnCancel: TLazBleClientOperationCancelEvent);
-    property Kind: TLazBleConnectionOperationKind read FKind;
+      const AKind: TLazBleSessionOperationKind;
+      const AOnCancel: TLazBleOperationCancelEvent);
+    property Kind: TLazBleSessionOperationKind read FKind;
     property Session: TBleGattSession read FSession;
   end;
 
-  TLazBleConnectionState = (
-    lbcosDisconnected,
-    lbcosConnecting,
-    lbcosAttachingProfiles,
-    lbcosReady,
-    lbcosDisconnecting,
-    lbcosError
+  TLazBleClientState = (
+    lbcstDisconnected,
+    lbcstConnecting,
+    lbcstAttachingProfiles,
+    lbcstReady,
+    lbcstDisconnecting,
+    lbcstError
   );
 
-  TLazBleConnectionStateChangedEvent = procedure(Sender: TObject;
-    const AState: TLazBleConnectionState) of object;
+  TLazBleClientStateChangedEvent = procedure(Sender: TObject;
+    const AState: TLazBleClientState) of object;
 
-  TBleClient = class;
+  TLazBle = class;
 
-  TBleConnection = class
+  TBleClient = class
   private
-    FClient: TBleClient;
+    FBle: TLazBle;
     FSession: TBleGattSession;
     FProfiles: TList;
     FOperations: TList;
-    FState: TLazBleConnectionState;
+    FState: TLazBleClientState;
     FAttachingProfiles: Boolean;
     FEvaluatingProfiles: Boolean;
-    FConnectOperation: TBleClientOperation;
-    FDisconnectOperation: TBleClientOperation;
-    FSessionConnectOperation: TBleConnectionOperation;
-    FSessionDisconnectOperation: TBleConnectionOperation;
-    FOnStateChanged: TLazBleConnectionStateChangedEvent;
+    FConnectOperation: TBleOperation;
+    FDisconnectOperation: TBleOperation;
+    FSessionConnectOperation: TBleSessionOperation;
+    FSessionDisconnectOperation: TBleSessionOperation;
+    FOnStateChanged: TLazBleClientStateChangedEvent;
     function GetDeviceId: string;
     function GetProfileCount: Integer;
     function GetProfile(const AIndex: Integer): TBleGattProfile;
-    procedure SetState(const AState: TLazBleConnectionState);
+    procedure SetState(const AState: TLazBleClientState);
     procedure OperationCancelled(Sender: TObject);
     procedure SessionConnectCompleted(Sender: TObject);
     procedure SessionDisconnectCompleted(Sender: TObject);
@@ -129,29 +131,29 @@ type
     procedure DetachProfiles;
     procedure EvaluateProfiles;
   public
-    constructor Create(const AClient: TBleClient;
+    constructor Create(const ABle: TLazBle;
       const ASession: TBleGattSession);
     destructor Destroy; override;
     procedure AddProfile(const AProfile: TBleGattProfile;
       const ARequired: Boolean = True);
-    function ConnectAsync: TBleClientOperation;
-    function DisconnectAsync: TBleClientOperation;
+    function ConnectAsync: TBleOperation;
+    function DisconnectAsync: TBleOperation;
     property DeviceId: string read GetDeviceId;
     property Session: TBleGattSession read FSession;
     property Profiles[const AIndex: Integer]: TBleGattProfile read GetProfile;
     property ProfileCount: Integer read GetProfileCount;
-    property State: TLazBleConnectionState read FState;
-    property OnStateChanged: TLazBleConnectionStateChangedEvent
+    property State: TLazBleClientState read FState;
+    property OnStateChanged: TLazBleClientStateChangedEvent
       read FOnStateChanged write FOnStateChanged;
   end;
 
-  TBleClient = class
+  TLazBle = class
   private
     FManager: TBleCentralManager;
     FOperations: TList;
-    FConnections: TList;
+    FClients: TList;
     FActiveScan: TBleScanOperation;
-    FShutdownOperation: TBleClientOperation;
+    FShutdownOperation: TBleOperation;
     procedure OperationCancelled(Sender: TObject);
     procedure ScanResult(Sender: TObject; const ADeviceId,
       ADeviceName: string; const ARssi: SmallInt);
@@ -169,11 +171,13 @@ type
     destructor Destroy; override;
     function ScanAsync(const AAdapterId: string;
       const ATimeoutMs: Cardinal): TBleScanOperation;
-    function CreateConnection(const ADeviceId: string): TBleConnection;
-    function ConnectAsync(const ADeviceId: string): TBleConnectionOperation;
+    function CreateClient(const ADeviceId: string): TBleClient;
+    function FindClient(const ADeviceId: string): TBleClient;
+    procedure RemoveClient(const AClient: TBleClient);
+    function ConnectAsync(const ADeviceId: string): TBleSessionOperation;
     function DisconnectAsync(const ASession: TBleGattSession):
-      TBleConnectionOperation;
-    function ShutdownAsync: TBleClientOperation;
+      TBleSessionOperation;
+    function ShutdownAsync: TBleOperation;
     property Manager: TBleCentralManager read FManager;
   end;
 
@@ -183,23 +187,23 @@ uses
   LazBleSimpleBleBackend;
 
 type
-  TBleConnectionProfileEntry = class
+  TBleClientProfileEntry = class
   public
     Profile: TBleGattProfile;
     Required: Boolean;
   end;
 
-constructor TBleClientOperation.Create(
-  const AOnCancel: TLazBleClientOperationCancelEvent);
+constructor TBleOperation.Create(
+  const AOnCancel: TLazBleOperationCancelEvent);
 begin
   inherited Create;
   InitCriticalSection(FLock);
   InitCriticalSection(FCallbackLock);
-  FState := lbcopsPending;
+  FState := lbopPending;
   FOnCancel := AOnCancel;
 end;
 
-destructor TBleClientOperation.Destroy;
+destructor TBleOperation.Destroy;
 begin
   FOnCancel := nil;
   EnterCriticalSection(FCallbackLock);
@@ -213,7 +217,7 @@ begin
   inherited Destroy;
 end;
 
-function TBleClientOperation.GetState: TLazBleClientOperationState;
+function TBleOperation.GetState: TLazBleOperationState;
 begin
   EnterCriticalSection(FLock);
   try
@@ -223,7 +227,7 @@ begin
   end;
 end;
 
-function TBleClientOperation.GetErrorCode: Integer;
+function TBleOperation.GetErrorCode: Integer;
 begin
   EnterCriticalSection(FLock);
   try
@@ -233,7 +237,7 @@ begin
   end;
 end;
 
-function TBleClientOperation.GetErrorMessage: string;
+function TBleOperation.GetErrorMessage: string;
 begin
   EnterCriticalSection(FLock);
   try
@@ -243,7 +247,7 @@ begin
   end;
 end;
 
-function TBleClientOperation.GetCancelRequested: Boolean;
+function TBleOperation.GetCancelRequested: Boolean;
 begin
   EnterCriticalSection(FLock);
   try
@@ -253,8 +257,8 @@ begin
   end;
 end;
 
-procedure TBleClientOperation.SetOnCompleted(
-  const AHandler: TLazBleClientOperationCompletedEvent);
+procedure TBleOperation.SetOnCompleted(
+  const AHandler: TLazBleOperationCompletedEvent);
 var
   NotifyNow: Boolean;
 begin
@@ -263,7 +267,7 @@ begin
     EnterCriticalSection(FLock);
     try
       FOnCompleted := AHandler;
-      NotifyNow := Assigned(AHandler) and (FState <> lbcopsPending);
+      NotifyNow := Assigned(AHandler) and (FState <> lbopPending);
     finally
       LeaveCriticalSection(FLock);
     end;
@@ -274,15 +278,15 @@ begin
   end;
 end;
 
-procedure TBleClientOperation.Complete(
-  const AState: TLazBleClientOperationState; const AErrorCode: Integer;
+procedure TBleOperation.Complete(
+  const AState: TLazBleOperationState; const AErrorCode: Integer;
   const AErrorMessage: string);
 var
-  CompletedHandler: TLazBleClientOperationCompletedEvent;
+  CompletedHandler: TLazBleOperationCompletedEvent;
 begin
   EnterCriticalSection(FLock);
   try
-    if FState <> lbcopsPending then
+    if FState <> lbopPending then
       Exit;
     FState := AState;
     FErrorCode := AErrorCode;
@@ -300,13 +304,13 @@ begin
   end;
 end;
 
-procedure TBleClientOperation.Cancel;
+procedure TBleOperation.Cancel;
 var
-  CancelHandler: TLazBleClientOperationCancelEvent;
+  CancelHandler: TLazBleOperationCancelEvent;
 begin
   EnterCriticalSection(FLock);
   try
-    if (FState <> lbcopsPending) or FCancelRequested then
+    if (FState <> lbopPending) or FCancelRequested then
       Exit;
     FCancelRequested := True;
     CancelHandler := FOnCancel;
@@ -316,20 +320,20 @@ begin
   if Assigned(CancelHandler) then
     CancelHandler(Self)
   else
-    Complete(lbcopsCancelled);
+    Complete(lbopCancelled);
 end;
 
-procedure TBleClientOperation.Timeout;
+procedure TBleOperation.Timeout;
 var
-  CancelHandler: TLazBleClientOperationCancelEvent;
-  CompletedHandler: TLazBleClientOperationCompletedEvent;
+  CancelHandler: TLazBleOperationCancelEvent;
+  CompletedHandler: TLazBleOperationCompletedEvent;
 begin
   EnterCriticalSection(FLock);
   try
-    if FState <> lbcopsPending then
+    if FState <> lbopPending then
       Exit;
     FCancelRequested := True;
-    FState := lbcopsTimedOut;
+    FState := lbopTimedOut;
     FErrorCode := 0;
     FErrorMessage := 'BLE operation timed out';
     CancelHandler := FOnCancel;
@@ -349,7 +353,7 @@ begin
 end;
 
 constructor TBleScanOperation.Create(
-  const AOnCancel: TLazBleClientOperationCancelEvent);
+  const AOnCancel: TLazBleOperationCancelEvent);
 begin
   inherited Create(AOnCancel);
   InitCriticalSection(FResultsLock);
@@ -395,34 +399,34 @@ begin
   end;
 end;
 
-constructor TBleConnectionOperation.Create(const ASession: TBleGattSession;
-  const AKind: TLazBleConnectionOperationKind;
-  const AOnCancel: TLazBleClientOperationCancelEvent);
+constructor TBleSessionOperation.Create(const ASession: TBleGattSession;
+  const AKind: TLazBleSessionOperationKind;
+  const AOnCancel: TLazBleOperationCancelEvent);
 begin
   inherited Create(AOnCancel);
   FSession := ASession;
   FKind := AKind;
 end;
 
-constructor TBleConnection.Create(const AClient: TBleClient;
+constructor TBleClient.Create(const ABle: TLazBle;
   const ASession: TBleGattSession);
 begin
   inherited Create;
-  if not Assigned(AClient) then
-    raise EArgumentNilException.Create('AClient');
+  if not Assigned(ABle) then
+    raise EArgumentNilException.Create('ABle');
   if not Assigned(ASession) then
     raise EArgumentNilException.Create('ASession');
-  FClient := AClient;
+  FBle := ABle;
   FSession := ASession;
   FProfiles := TList.Create;
   FOperations := TList.Create;
-  FState := lbcosDisconnected;
+  FState := lbcstDisconnected;
   FSession.AddStateChangedHandler(@SessionStateChanged);
 end;
 
-destructor TBleConnection.Destroy;
+destructor TBleClient.Destroy;
 var
-  Entry: TBleConnectionProfileEntry;
+  Entry: TBleClientProfileEntry;
   Index: Integer;
 begin
   FOnStateChanged := nil;
@@ -434,7 +438,7 @@ begin
     FSession.RemoveStateChangedHandler(@SessionStateChanged);
   for Index := FProfiles.Count - 1 downto 0 do
   begin
-    Entry := TBleConnectionProfileEntry(FProfiles[Index]);
+    Entry := TBleClientProfileEntry(FProfiles[Index]);
     Entry.Profile.RemoveStateChangedHandler(@ProfileStateChanged);
     Entry.Profile.Detach;
     Entry.Profile.Free;
@@ -445,11 +449,11 @@ begin
     TObject(FOperations[Index]).Free;
   FOperations.Free;
   FSession := nil;
-  FClient := nil;
+  FBle := nil;
   inherited Destroy;
 end;
 
-function TBleConnection.GetDeviceId: string;
+function TBleClient.GetDeviceId: string;
 begin
   if Assigned(FSession) then
     Result := FSession.DeviceId
@@ -457,17 +461,17 @@ begin
     Result := '';
 end;
 
-function TBleConnection.GetProfileCount: Integer;
+function TBleClient.GetProfileCount: Integer;
 begin
   Result := FProfiles.Count;
 end;
 
-function TBleConnection.GetProfile(const AIndex: Integer): TBleGattProfile;
+function TBleClient.GetProfile(const AIndex: Integer): TBleGattProfile;
 begin
-  Result := TBleConnectionProfileEntry(FProfiles[AIndex]).Profile;
+  Result := TBleClientProfileEntry(FProfiles[AIndex]).Profile;
 end;
 
-procedure TBleConnection.SetState(const AState: TLazBleConnectionState);
+procedure TBleClient.SetState(const AState: TLazBleClientState);
 begin
   if FState = AState then
     Exit;
@@ -476,10 +480,10 @@ begin
     FOnStateChanged(Self, FState);
 end;
 
-procedure TBleConnection.AddProfile(const AProfile: TBleGattProfile;
+procedure TBleClient.AddProfile(const AProfile: TBleGattProfile;
   const ARequired: Boolean);
 var
-  Entry: TBleConnectionProfileEntry;
+  Entry: TBleClientProfileEntry;
   Index: Integer;
 begin
   if not Assigned(AProfile) then
@@ -487,65 +491,65 @@ begin
   if AProfile.Session <> FSession then
     raise EArgumentException.Create(
       'Profile must use the connection GATT session');
-  if FState <> lbcosDisconnected then
+  if FState <> lbcstDisconnected then
     raise EInvalidOperation.Create(
       'Profiles can only be added while disconnected');
   for Index := 0 to FProfiles.Count - 1 do
-    if TBleConnectionProfileEntry(FProfiles[Index]).Profile = AProfile then
+    if TBleClientProfileEntry(FProfiles[Index]).Profile = AProfile then
       raise EInvalidOperation.Create('Profile is already registered');
-  Entry := TBleConnectionProfileEntry.Create;
+  Entry := TBleClientProfileEntry.Create;
   Entry.Profile := AProfile;
   Entry.Required := ARequired;
   AProfile.AddStateChangedHandler(@ProfileStateChanged);
   FProfiles.Add(Entry);
 end;
 
-procedure TBleConnection.AttachProfiles;
+procedure TBleClient.AttachProfiles;
 var
   Index: Integer;
 begin
-  SetState(lbcosAttachingProfiles);
+  SetState(lbcstAttachingProfiles);
   FAttachingProfiles := True;
   try
     for Index := 0 to FProfiles.Count - 1 do
-      TBleConnectionProfileEntry(FProfiles[Index]).Profile.Attach;
+      TBleClientProfileEntry(FProfiles[Index]).Profile.Attach;
   finally
     FAttachingProfiles := False;
   end;
   EvaluateProfiles;
 end;
 
-procedure TBleConnection.DetachProfiles;
+procedure TBleClient.DetachProfiles;
 var
   Index: Integer;
 begin
   for Index := FProfiles.Count - 1 downto 0 do
-    TBleConnectionProfileEntry(FProfiles[Index]).Profile.Detach;
+    TBleClientProfileEntry(FProfiles[Index]).Profile.Detach;
 end;
 
-procedure TBleConnection.EvaluateProfiles;
+procedure TBleClient.EvaluateProfiles;
 var
   AllRequiredReady: Boolean;
-  Entry: TBleConnectionProfileEntry;
+  Entry: TBleClientProfileEntry;
   Index: Integer;
 begin
   if FAttachingProfiles or FEvaluatingProfiles or
-    not (FState in [lbcosAttachingProfiles, lbcosReady]) then
+    not (FState in [lbcstAttachingProfiles, lbcstReady]) then
     Exit;
   FEvaluatingProfiles := True;
   try
     AllRequiredReady := True;
     for Index := 0 to FProfiles.Count - 1 do
     begin
-      Entry := TBleConnectionProfileEntry(FProfiles[Index]);
+      Entry := TBleClientProfileEntry(FProfiles[Index]);
       if not Entry.Required then
         Continue;
       case Entry.Profile.State of
         lbgpsError:
           begin
-            SetState(lbcosError);
+            SetState(lbcstError);
             if Assigned(FConnectOperation) then
-              FConnectOperation.Complete(lbcopsFailed, 0,
+              FConnectOperation.Complete(lbopFailed, 0,
                 Entry.Profile.ClassName + ': ' +
                 Entry.Profile.ErrorMessage);
             Exit;
@@ -556,63 +560,63 @@ begin
           AllRequiredReady := False;
       end;
     end;
-    if AllRequiredReady and (FState = lbcosAttachingProfiles) then
+    if AllRequiredReady and (FState = lbcstAttachingProfiles) then
     begin
-      SetState(lbcosReady);
+      SetState(lbcstReady);
       if Assigned(FConnectOperation) then
-        FConnectOperation.Complete(lbcopsSucceeded);
+        FConnectOperation.Complete(lbopSucceeded);
     end;
   finally
     FEvaluatingProfiles := False;
   end;
 end;
 
-procedure TBleConnection.ProfileStateChanged(Sender: TObject;
+procedure TBleClient.ProfileStateChanged(Sender: TObject;
   const AState: TLazBleGattProfileState);
 begin
   EvaluateProfiles;
 end;
 
-procedure TBleConnection.SessionConnectCompleted(Sender: TObject);
+procedure TBleClient.SessionConnectCompleted(Sender: TObject);
 begin
   if Sender <> FSessionConnectOperation then
     Exit;
-  if FSessionConnectOperation.State = lbcopsSucceeded then
+  if FSessionConnectOperation.State = lbopSucceeded then
     AttachProfiles
   else
   begin
-    SetState(lbcosError);
+    SetState(lbcstError);
     if Assigned(FConnectOperation) then
-      if FSessionConnectOperation.State = lbcopsCancelled then
-        FConnectOperation.Complete(lbcopsCancelled)
+      if FSessionConnectOperation.State = lbopCancelled then
+        FConnectOperation.Complete(lbopCancelled)
       else
-        FConnectOperation.Complete(lbcopsFailed,
+        FConnectOperation.Complete(lbopFailed,
           FSessionConnectOperation.ErrorCode,
           FSessionConnectOperation.ErrorMessage);
   end;
 end;
 
-procedure TBleConnection.SessionDisconnectCompleted(Sender: TObject);
+procedure TBleClient.SessionDisconnectCompleted(Sender: TObject);
 begin
   if Sender <> FSessionDisconnectOperation then
     Exit;
-  if FSessionDisconnectOperation.State = lbcopsSucceeded then
+  if FSessionDisconnectOperation.State = lbopSucceeded then
   begin
-    SetState(lbcosDisconnected);
+    SetState(lbcstDisconnected);
     if Assigned(FDisconnectOperation) then
-      FDisconnectOperation.Complete(lbcopsSucceeded);
+      FDisconnectOperation.Complete(lbopSucceeded);
   end
   else
   begin
-    SetState(lbcosError);
+    SetState(lbcstError);
     if Assigned(FDisconnectOperation) then
-      FDisconnectOperation.Complete(lbcopsFailed,
+      FDisconnectOperation.Complete(lbopFailed,
         FSessionDisconnectOperation.ErrorCode,
         FSessionDisconnectOperation.ErrorMessage);
   end;
 end;
 
-procedure TBleConnection.SessionStateChanged(Sender: TObject;
+procedure TBleClient.SessionStateChanged(Sender: TObject;
   const AState: TLazBleSessionState);
 begin
   if Sender <> FSession then
@@ -620,79 +624,79 @@ begin
   if AState = lbssDisconnected then
   begin
     DetachProfiles;
-    SetState(lbcosDisconnected);
+    SetState(lbcstDisconnected);
     if Assigned(FConnectOperation) and
-      (FConnectOperation.State = lbcopsPending) then
+      (FConnectOperation.State = lbopPending) then
       if FConnectOperation.CancelRequested then
-        FConnectOperation.Complete(lbcopsCancelled)
+        FConnectOperation.Complete(lbopCancelled)
       else
-        FConnectOperation.Complete(lbcopsFailed, 0,
+        FConnectOperation.Complete(lbopFailed, 0,
           'BLE connection was closed');
   end;
 end;
 
-procedure TBleConnection.OperationCancelled(Sender: TObject);
+procedure TBleClient.OperationCancelled(Sender: TObject);
 begin
   if Sender = FConnectOperation then
   begin
     if Assigned(FSessionConnectOperation) and
-      (FSessionConnectOperation.State = lbcopsPending) then
+      (FSessionConnectOperation.State = lbopPending) then
       FSessionConnectOperation.Cancel
     else
     begin
       DetachProfiles;
-      FClient.DisconnectAsync(FSession);
-      FConnectOperation.Complete(lbcopsCancelled);
+      FBle.DisconnectAsync(FSession);
+      FConnectOperation.Complete(lbopCancelled);
     end;
   end
   else if Sender = FDisconnectOperation then
-    FDisconnectOperation.Complete(lbcopsCancelled);
+    FDisconnectOperation.Complete(lbopCancelled);
 end;
 
-function TBleConnection.ConnectAsync: TBleClientOperation;
+function TBleClient.ConnectAsync: TBleOperation;
 begin
   if Assigned(FConnectOperation) and
-    (FConnectOperation.State = lbcopsPending) then
+    (FConnectOperation.State = lbopPending) then
     Exit(FConnectOperation);
-  Result := TBleClientOperation.Create(@OperationCancelled);
+  Result := TBleOperation.Create(@OperationCancelled);
   FOperations.Add(Result);
   FConnectOperation := Result;
-  if FState = lbcosReady then
+  if FState = lbcstReady then
   begin
-    Result.Complete(lbcopsSucceeded);
+    Result.Complete(lbopSucceeded);
     Exit;
   end;
-  if FState <> lbcosDisconnected then
+  if FState <> lbcstDisconnected then
   begin
-    Result.Complete(lbcopsFailed, 0,
+    Result.Complete(lbopFailed, 0,
       'BLE connection must be disconnected before connecting');
     Exit;
   end;
-  SetState(lbcosConnecting);
-  FSessionConnectOperation := FClient.ConnectAsync(DeviceId);
+  SetState(lbcstConnecting);
+  FSessionConnectOperation := FBle.ConnectAsync(DeviceId);
   FSessionConnectOperation.OnCompleted := @SessionConnectCompleted;
 end;
 
-function TBleConnection.DisconnectAsync: TBleClientOperation;
+function TBleClient.DisconnectAsync: TBleOperation;
 begin
   if Assigned(FDisconnectOperation) and
-    (FDisconnectOperation.State = lbcopsPending) then
+    (FDisconnectOperation.State = lbopPending) then
     Exit(FDisconnectOperation);
-  Result := TBleClientOperation.Create(@OperationCancelled);
+  Result := TBleOperation.Create(@OperationCancelled);
   FOperations.Add(Result);
   FDisconnectOperation := Result;
-  if FState = lbcosDisconnected then
+  if FState = lbcstDisconnected then
   begin
-    Result.Complete(lbcopsSucceeded);
+    Result.Complete(lbopSucceeded);
     Exit;
   end;
-  SetState(lbcosDisconnecting);
+  SetState(lbcstDisconnecting);
   DetachProfiles;
-  FSessionDisconnectOperation := FClient.DisconnectAsync(FSession);
+  FSessionDisconnectOperation := FBle.DisconnectAsync(FSession);
   FSessionDisconnectOperation.OnCompleted := @SessionDisconnectCompleted;
 end;
 
-constructor TBleClient.Create;
+constructor TLazBle.Create;
 var
   Backend: ILazBleBackend;
 begin
@@ -700,18 +704,18 @@ begin
   Create(Backend);
 end;
 
-constructor TBleClient.Create(const ABackend: ILazBleBackend);
+constructor TLazBle.Create(const ABackend: ILazBleBackend);
 begin
   inherited Create;
   FOperations := TList.Create;
-  FConnections := TList.Create;
+  FClients := TList.Create;
   FManager := TBleCentralManager.Create(ABackend);
   FManager.OnScanResult := @ScanResult;
   FManager.OnScanCompleted := @ScanCompleted;
   FManager.OnStateChanged := @ManagerStateChanged;
 end;
 
-destructor TBleClient.Destroy;
+destructor TLazBle.Destroy;
 var
   Index: Integer;
 begin
@@ -721,13 +725,13 @@ begin
     FManager.OnScanCompleted := nil;
     FManager.OnStateChanged := nil;
   end;
-  for Index := FConnections.Count - 1 downto 0 do
-    TObject(FConnections[Index]).Free;
-  FConnections.Free;
+  for Index := FClients.Count - 1 downto 0 do
+    TObject(FClients[Index]).Free;
+  FClients.Free;
   for Index := 0 to FOperations.Count - 1 do
-    if (TObject(FOperations[Index]) is TBleConnectionOperation) and
-      Assigned(TBleConnectionOperation(FOperations[Index]).Session) then
-      TBleConnectionOperation(FOperations[Index]).Session.OnStateChanged := nil;
+    if (TObject(FOperations[Index]) is TBleSessionOperation) and
+      Assigned(TBleSessionOperation(FOperations[Index]).Session) then
+      TBleSessionOperation(FOperations[Index]).Session.OnStateChanged := nil;
   FManager.Free;
   FManager := nil;
   for Index := FOperations.Count - 1 downto 0 do
@@ -736,37 +740,37 @@ begin
   inherited Destroy;
 end;
 
-procedure TBleClient.OperationCancelled(Sender: TObject);
+procedure TLazBle.OperationCancelled(Sender: TObject);
 var
-  ConnectionOperation: TBleConnectionOperation;
+  ConnectionOperation: TBleSessionOperation;
 begin
   if Sender = FActiveScan then
   begin
     FManager.CancelScan;
     Exit;
   end;
-  if Sender is TBleConnectionOperation then
+  if Sender is TBleSessionOperation then
   begin
-    ConnectionOperation := TBleConnectionOperation(Sender);
-    if ConnectionOperation.Kind = lbcokConnect then
+    ConnectionOperation := TBleSessionOperation(Sender);
+    if ConnectionOperation.Kind = lbsokConnect then
     begin
       if Assigned(ConnectionOperation.Session) then
         ConnectionOperation.Session.Disconnect;
     end
     else
-      ConnectionOperation.Complete(lbcopsCancelled);
+      ConnectionOperation.Complete(lbopCancelled);
   end;
 end;
 
-procedure TBleClient.ScanResult(Sender: TObject; const ADeviceId,
+procedure TLazBle.ScanResult(Sender: TObject; const ADeviceId,
   ADeviceName: string; const ARssi: SmallInt);
 begin
   if Assigned(FActiveScan) and
-    (FActiveScan.State = lbcopsPending) then
+    (FActiveScan.State = lbopPending) then
     FActiveScan.AddOrUpdateResult(ADeviceId, ADeviceName, ARssi);
 end;
 
-procedure TBleClient.ScanCompleted(Sender: TObject;
+procedure TLazBle.ScanCompleted(Sender: TObject;
   const ASucceeded: Boolean; const AErrorCode: Integer;
   const AErrorMessage: string);
 var
@@ -777,67 +781,67 @@ begin
   if not Assigned(Operation) then
     Exit;
   if Operation.CancelRequested then
-    Operation.Complete(lbcopsCancelled)
+    Operation.Complete(lbopCancelled)
   else if ASucceeded then
-    Operation.Complete(lbcopsSucceeded)
+    Operation.Complete(lbopSucceeded)
   else
-    Operation.Complete(lbcopsFailed, AErrorCode, AErrorMessage);
+    Operation.Complete(lbopFailed, AErrorCode, AErrorMessage);
 end;
 
-procedure TBleClient.CompleteSessionOperations(
+procedure TLazBle.CompleteSessionOperations(
   const ASession: TBleGattSession; const AState: TLazBleSessionState);
 var
   Index: Integer;
-  Operation: TBleConnectionOperation;
+  Operation: TBleSessionOperation;
 begin
   for Index := 0 to FOperations.Count - 1 do
-    if TObject(FOperations[Index]) is TBleConnectionOperation then
+    if TObject(FOperations[Index]) is TBleSessionOperation then
     begin
-      Operation := TBleConnectionOperation(FOperations[Index]);
+      Operation := TBleSessionOperation(FOperations[Index]);
       if (Operation.Session <> ASession) or
-        (Operation.State <> lbcopsPending) then
+        (Operation.State <> lbopPending) then
         Continue;
       case Operation.Kind of
-        lbcokConnect:
+        lbsokConnect:
           if AState = lbssConnected then
-            Operation.Complete(lbcopsSucceeded)
+            Operation.Complete(lbopSucceeded)
           else if AState in [lbssDisconnected, lbssError] then
           begin
             if Operation.CancelRequested then
-              Operation.Complete(lbcopsCancelled)
+              Operation.Complete(lbopCancelled)
             else
-              Operation.Complete(lbcopsFailed, 0,
+              Operation.Complete(lbopFailed, 0,
                 'Could not connect and discover GATT services');
           end;
-        lbcokDisconnect:
+        lbsokDisconnect:
           if AState = lbssDisconnected then
-            Operation.Complete(lbcopsSucceeded)
+            Operation.Complete(lbopSucceeded)
           else if AState = lbssError then
-            Operation.Complete(lbcopsFailed, 0,
+            Operation.Complete(lbopFailed, 0,
               'Could not disconnect BLE session');
       end;
     end;
 end;
 
-procedure TBleClient.SessionStateChanged(Sender: TObject;
+procedure TLazBle.SessionStateChanged(Sender: TObject;
   const AState: TLazBleSessionState);
 begin
   if Sender is TBleGattSession then
     CompleteSessionOperations(TBleGattSession(Sender), AState);
 end;
 
-procedure TBleClient.ManagerStateChanged(Sender: TObject;
+procedure TLazBle.ManagerStateChanged(Sender: TObject;
   const AState: TLazBleCentralState);
 begin
   if Assigned(FShutdownOperation) and (AState = lbcsShutdown) then
-    FShutdownOperation.Complete(lbcopsSucceeded);
+    FShutdownOperation.Complete(lbopSucceeded);
 end;
 
-function TBleClient.ScanAsync(const AAdapterId: string;
+function TLazBle.ScanAsync(const AAdapterId: string;
   const ATimeoutMs: Cardinal): TBleScanOperation;
 begin
   if Assigned(FActiveScan) and
-    (FActiveScan.State = lbcopsPending) then
+    (FActiveScan.State = lbopPending) then
     Exit(FActiveScan);
   Result := TBleScanOperation.Create(@OperationCancelled);
   FOperations.Add(Result);
@@ -845,78 +849,103 @@ begin
   if FManager.StartScan(AAdapterId, ATimeoutMs) = InvalidBleOperationId then
   begin
     FActiveScan := nil;
-    Result.Complete(lbcopsFailed, 0, 'Could not start BLE scan');
+    Result.Complete(lbopFailed, 0, 'Could not start BLE scan');
   end;
 end;
 
-function TBleClient.CreateConnection(
-  const ADeviceId: string): TBleConnection;
+function TLazBle.FindClient(const ADeviceId: string): TBleClient;
 var
   Index: Integer;
-  Session: TBleGattSession;
 begin
-  for Index := 0 to FConnections.Count - 1 do
+  Result := nil;
+  for Index := 0 to FClients.Count - 1 do
   begin
-    Result := TBleConnection(FConnections[Index]);
-    if Result.DeviceId = ADeviceId then
+    Result := TBleClient(FClients[Index]);
+    if SameText(Result.DeviceId, ADeviceId) then
       Exit;
   end;
+  Result := nil;
+end;
+
+function TLazBle.CreateClient(const ADeviceId: string): TBleClient;
+var
+  Session: TBleGattSession;
+begin
+  if Assigned(FindClient(ADeviceId)) then
+    raise ELazBleDuplicateClient.CreateFmt(
+      'A BLE client already exists for device "%s"', [ADeviceId]);
   Session := FManager.CreateSession(ADeviceId);
   if not Assigned(Session) then
     Exit(nil);
-  Result := TBleConnection.Create(Self, Session);
-  FConnections.Add(Result);
+  Result := TBleClient.Create(Self, Session);
+  FClients.Add(Result);
 end;
 
-function TBleClient.ConnectAsync(
-  const ADeviceId: string): TBleConnectionOperation;
+procedure TLazBle.RemoveClient(const AClient: TBleClient);
+var
+  Index: Integer;
+begin
+  if not Assigned(AClient) then
+    raise EArgumentNilException.Create('AClient');
+  Index := FClients.IndexOf(AClient);
+  if Index < 0 then
+    raise EArgumentException.Create('Client does not belong to this LazBle');
+  if AClient.State <> lbcstDisconnected then
+    raise EInvalidOperation.Create(
+      'BLE client must be disconnected before it can be removed');
+  FClients.Delete(Index);
+  AClient.Free;
+end;
+
+function TLazBle.ConnectAsync(
+  const ADeviceId: string): TBleSessionOperation;
 var
   Session: TBleGattSession;
 begin
   Session := FManager.CreateSession(ADeviceId);
-  Result := TBleConnectionOperation.Create(Session, lbcokConnect,
+  Result := TBleSessionOperation.Create(Session, lbsokConnect,
     @OperationCancelled);
   FOperations.Add(Result);
   if not Assigned(Session) then
   begin
-    Result.Complete(lbcopsFailed, 0, 'Could not create BLE session');
+    Result.Complete(lbopFailed, 0, 'Could not create BLE session');
     Exit;
   end;
   Session.OnStateChanged := @SessionStateChanged;
   if Session.State = lbssConnected then
-    Result.Complete(lbcopsSucceeded)
+    Result.Complete(lbopSucceeded)
   else if Session.Connect = InvalidBleOperationId then
-    Result.Complete(lbcopsFailed, 0, 'Could not start BLE connection');
+    Result.Complete(lbopFailed, 0, 'Could not start BLE connection');
 end;
 
-function TBleClient.DisconnectAsync(const ASession: TBleGattSession):
-  TBleConnectionOperation;
+function TLazBle.DisconnectAsync(const ASession: TBleGattSession):
+  TBleSessionOperation;
 begin
-  Result := TBleConnectionOperation.Create(ASession, lbcokDisconnect,
+  Result := TBleSessionOperation.Create(ASession, lbsokDisconnect,
     @OperationCancelled);
   FOperations.Add(Result);
   if not Assigned(ASession) then
   begin
-    Result.Complete(lbcopsFailed, 0, 'BLE session is not assigned');
+    Result.Complete(lbopFailed, 0, 'BLE session is not assigned');
     Exit;
   end;
   ASession.OnStateChanged := @SessionStateChanged;
   if ASession.State = lbssDisconnected then
-    Result.Complete(lbcopsSucceeded)
+    Result.Complete(lbopSucceeded)
   else if ASession.Disconnect = InvalidBleOperationId then
-    Result.Complete(lbcopsFailed, 0, 'Could not start BLE disconnect');
+    Result.Complete(lbopFailed, 0, 'Could not start BLE disconnect');
 end;
 
-function TBleClient.ShutdownAsync: TBleClientOperation;
+function TLazBle.ShutdownAsync: TBleOperation;
 begin
   if Assigned(FShutdownOperation) then
     Exit(FShutdownOperation);
-  FShutdownOperation := TBleClientOperation.Create(nil);
+  FShutdownOperation := TBleOperation.Create(nil);
   FOperations.Add(FShutdownOperation);
   if FManager.State = lbcsShutdown then
-    FShutdownOperation.Complete(lbcopsSucceeded)
+    FShutdownOperation.Complete(lbopSucceeded)
   else if FManager.BeginShutdown = InvalidBleOperationId then
-    FShutdownOperation.Complete(lbcopsFailed, 0,
+    FShutdownOperation.Complete(lbopFailed, 0,
       'Could not start BLE shutdown');
   Result := FShutdownOperation;
 end;

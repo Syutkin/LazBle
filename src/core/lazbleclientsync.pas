@@ -12,12 +12,12 @@ uses
   LazBleClient;
 
 type
-  TBleConnection = LazBleClient.TBleConnection;
+  TBleClient = LazBleClient.TBleClient;
 
   TBleClientSync = class
   private
-    FClient: TBleClient;
-    function WaitForOperation(const AOperation: TBleClientOperation;
+    FClient: TLazBle;
+    function WaitForOperation(const AOperation: TBleOperation;
       const ATimeoutMs: Cardinal): Boolean;
   public
     constructor Create; overload;
@@ -25,17 +25,17 @@ type
     destructor Destroy; override;
     function Scan(const AAdapterId: string; const ATimeoutMs: Cardinal;
       out ADevices: TBleDeviceInfos; out AErrorMessage: string): Boolean;
-    function CreateConnection(const ADeviceId: string): TBleConnection;
+    function CreateClient(const ADeviceId: string): TBleClient;
     function Connect(const ADeviceId: string; const ATimeoutMs: Cardinal;
       out ASession: TBleGattSession; out AErrorMessage: string): Boolean;
       overload;
-    function Connect(const AConnection: TBleConnection;
+    function Connect(const AConnection: TBleClient;
       const ATimeoutMs: Cardinal; out AErrorMessage: string): Boolean;
       overload;
     function Disconnect(const ASession: TBleGattSession;
       const ATimeoutMs: Cardinal; out AErrorMessage: string): Boolean;
       overload;
-    function Disconnect(const AConnection: TBleConnection;
+    function Disconnect(const AConnection: TBleClient;
       const ATimeoutMs: Cardinal; out AErrorMessage: string): Boolean;
       overload;
     function Shutdown(const ATimeoutMs: Cardinal;
@@ -83,13 +83,13 @@ end;
 constructor TBleClientSync.Create;
 begin
   inherited Create;
-  FClient := TBleClient.Create;
+  FClient := TLazBle.Create;
 end;
 
 constructor TBleClientSync.Create(const ABackend: ILazBleBackend);
 begin
   inherited Create;
-  FClient := TBleClient.Create(ABackend);
+  FClient := TLazBle.Create(ABackend);
 end;
 
 destructor TBleClientSync.Destroy;
@@ -99,7 +99,7 @@ begin
 end;
 
 function TBleClientSync.WaitForOperation(
-  const AOperation: TBleClientOperation; const ATimeoutMs: Cardinal): Boolean;
+  const AOperation: TBleOperation; const ATimeoutMs: Cardinal): Boolean;
 var
   Waiter: TOperationWaiter;
 begin
@@ -108,10 +108,10 @@ begin
   Waiter := TOperationWaiter.Create;
   try
     AOperation.OnCompleted := @Waiter.Completed;
-    if (AOperation.State = lbcopsPending) and not Waiter.Wait(ATimeoutMs) then
+    if (AOperation.State = lbopPending) and not Waiter.Wait(ATimeoutMs) then
       AOperation.Timeout;
     AOperation.OnCompleted := nil;
-    Result := AOperation.State = lbcopsSucceeded;
+    Result := AOperation.State = lbopSucceeded;
   finally
     Waiter.Free;
   end;
@@ -134,17 +134,17 @@ begin
   AErrorMessage := Operation.ErrorMessage;
 end;
 
-function TBleClientSync.CreateConnection(
-  const ADeviceId: string): TBleConnection;
+function TBleClientSync.CreateClient(
+  const ADeviceId: string): TBleClient;
 begin
-  Result := FClient.CreateConnection(ADeviceId);
+  Result := FClient.CreateClient(ADeviceId);
 end;
 
 function TBleClientSync.Connect(const ADeviceId: string;
   const ATimeoutMs: Cardinal; out ASession: TBleGattSession;
   out AErrorMessage: string): Boolean;
 var
-  Operation: TBleConnectionOperation;
+  Operation: TBleSessionOperation;
 begin
   Operation := FClient.ConnectAsync(ADeviceId);
   Result := WaitForOperation(Operation, ATimeoutMs);
@@ -152,10 +152,10 @@ begin
   AErrorMessage := Operation.ErrorMessage;
 end;
 
-function TBleClientSync.Connect(const AConnection: TBleConnection;
+function TBleClientSync.Connect(const AConnection: TBleClient;
   const ATimeoutMs: Cardinal; out AErrorMessage: string): Boolean;
 var
-  Operation: TBleClientOperation;
+  Operation: TBleOperation;
 begin
   if not Assigned(AConnection) then
   begin
@@ -170,17 +170,17 @@ end;
 function TBleClientSync.Disconnect(const ASession: TBleGattSession;
   const ATimeoutMs: Cardinal; out AErrorMessage: string): Boolean;
 var
-  Operation: TBleConnectionOperation;
+  Operation: TBleSessionOperation;
 begin
   Operation := FClient.DisconnectAsync(ASession);
   Result := WaitForOperation(Operation, ATimeoutMs);
   AErrorMessage := Operation.ErrorMessage;
 end;
 
-function TBleClientSync.Disconnect(const AConnection: TBleConnection;
+function TBleClientSync.Disconnect(const AConnection: TBleClient;
   const ATimeoutMs: Cardinal; out AErrorMessage: string): Boolean;
 var
-  Operation: TBleClientOperation;
+  Operation: TBleOperation;
 begin
   if not Assigned(AConnection) then
   begin
@@ -195,7 +195,7 @@ end;
 function TBleClientSync.Shutdown(const ATimeoutMs: Cardinal;
   out AErrorMessage: string): Boolean;
 var
-  Operation: TBleClientOperation;
+  Operation: TBleOperation;
 begin
   Operation := FClient.ShutdownAsync;
   Result := WaitForOperation(Operation, ATimeoutMs);

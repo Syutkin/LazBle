@@ -19,7 +19,7 @@ type
   TNusTerminalApplication = class(TCustomApplication)
   private
     FClientSync: TBleClientSync;
-    FConnection: TBleConnection;
+    FConnection: TBleClient;
     FProfile: TNusProfile;
     FOutputLock: TRTLCriticalSection;
     procedure NusDataReceived(Sender: TObject; const ADeviceId: string;
@@ -219,7 +219,7 @@ begin
     Exit;
   end;
 
-  FConnection := FClientSync.CreateConnection(DeviceId);
+  FConnection := FClientSync.CreateClient(DeviceId);
   FProfile := TNusProfile.Create(FConnection.Session);
   FProfile.OnData := @NusDataReceived;
   FConnection.AddProfile(FProfile, True);

@@ -18,7 +18,7 @@ type
   TBatteryMonitorApplication = class(TCustomApplication)
   private
     FClientSync: TBleClientSync;
-    FConnection: TBleConnection;
+    FConnection: TBleClient;
     FProfile: TBleBatteryProfile;
     procedure BatteryLevelChanged(Sender: TObject; const ADeviceId: string;
       const ALevelPercent: Integer);
@@ -120,7 +120,7 @@ begin
     Exit;
   end;
 
-  FConnection := FClientSync.CreateConnection(DeviceId);
+  FConnection := FClientSync.CreateClient(DeviceId);
   FProfile := TBleBatteryProfile.Create(FConnection.Session);
   FProfile.OnLevelChanged := @BatteryLevelChanged;
   FConnection.AddProfile(FProfile, True);
