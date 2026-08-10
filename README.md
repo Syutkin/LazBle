@@ -68,6 +68,17 @@ scan snapshots, and inactive subscription tokens remain valid after their
 client or session is released. Do not call `Free` on operation or subscription
 interfaces.
 
+Bluetooth availability is checked explicitly and asynchronously; creating a
+facade or loading an LCL component does not load the native backend:
+
+```pascal
+AvailabilityOperation := Ble.CheckAvailabilityAsync(AdapterId);
+```
+
+On success, `IBleAvailabilityOperation.Availability` is either
+`lbaAvailable` or `lbaUnavailable`. A failed operation carries a backend or
+native-loader error instead of treating it as an ordinary unavailable result.
+
 `IBleScanOperation.OnResult` reports every new or updated discovery while a
 scan is running. Its `Results` property remains a deduplicated snapshot in
 discovery order. Installing a handler does not replay results already present
@@ -100,6 +111,11 @@ needed. It is non-blocking, idempotent, cancels scan and client operations,
 stops pending reconnect, and suppresses queued LCL callbacks. Shutdown is
 terminal: new scans, clients, connections, and profile operations are rejected.
 The component destructor starts the same shutdown automatically.
+
+`TLazBleComponent.RefreshAvailability` starts the explicit check. Its
+read-only `Availability` property transitions through `lbaChecking`, and the
+published `OnAvailabilityChanged` event is delivered on the LCL main thread.
+No check is started while an `.lfm` is loaded.
 
 Console applications and tests can use the blocking `TLazBleSync` facade from
 `LazBleSync`. GUI applications should use the asynchronous API.

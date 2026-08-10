@@ -24,6 +24,9 @@ type
     const AErrorMessage: string) of object;
   TLazBleCentralStateChangedEvent = procedure(Sender: TObject;
     const AState: TLazBleCentralState) of object;
+  TLazBleAvailabilityCompletedEvent = procedure(Sender: TObject;
+    const ASucceeded: Boolean; const AErrorCode: Integer;
+    const AErrorMessage: string) of object;
 
   TBleCentralManager = class;
 
@@ -45,9 +48,12 @@ type
     FSessions: TList;
     FState: TLazBleCentralState;
     FScanOperationId: TBleOperationId;
+    FAvailabilityOperationId: TBleOperationId;
     FShutdownOperationId: TBleOperationId;
     FOnScanResult: TLazBleScanResultEvent;
     FOnScanCompleted: TLazBleScanCompletedEvent;
+    FOnAvailabilityResult: TBleAvailabilityEvent;
+    FOnAvailabilityCompleted: TLazBleAvailabilityCompletedEvent;
     FOnStateChanged: TLazBleCentralStateChangedEvent;
     procedure SetState(const AState: TLazBleCentralState);
     function SubmitCommand(
@@ -60,6 +66,8 @@ type
     function StartScan(const AAdapterId: string;
       const ATimeoutMs: Cardinal): TBleOperationId;
     procedure CancelScan;
+    function CheckAvailability(const AAdapterId: string): TBleOperationId;
+    procedure CancelAvailabilityCheck;
     function CreateSession(const ADeviceId: string): TBleGattSession;
     function BeginShutdown: TBleOperationId;
     property State: TLazBleCentralState read FState;
@@ -67,6 +75,10 @@ type
       write FOnScanResult;
     property OnScanCompleted: TLazBleScanCompletedEvent read FOnScanCompleted
       write FOnScanCompleted;
+    property OnAvailabilityResult: TBleAvailabilityEvent
+      read FOnAvailabilityResult write FOnAvailabilityResult;
+    property OnAvailabilityCompleted: TLazBleAvailabilityCompletedEvent
+      read FOnAvailabilityCompleted write FOnAvailabilityCompleted;
     property OnStateChanged: TLazBleCentralStateChangedEvent
       read FOnStateChanged write FOnStateChanged;
   end;
@@ -186,7 +198,8 @@ var
   Command: TLazBleBackendCommand;
 begin
   Result := InvalidBleOperationId;
-  if FState <> lbcsIdle then
+  if (FState <> lbcsIdle) or
+    (FAvailabilityOperationId <> InvalidBleOperationId) then
     Exit;
   Command := Default(TLazBleBackendCommand);
   Command.Kind := lbckStartScan;
@@ -198,6 +211,29 @@ begin
     FScanOperationId := Result;
     SetState(lbcsScanning);
   end;
+end;
+
+function TBleCentralManager.CheckAvailability(
+  const AAdapterId: string): TBleOperationId;
+var
+  Command: TLazBleBackendCommand;
+begin
+  Result := InvalidBleOperationId;
+  if (FState <> lbcsIdle) or
+    (FAvailabilityOperationId <> InvalidBleOperationId) then
+    Exit;
+  Command := Default(TLazBleBackendCommand);
+  Command.Kind := lbckCheckAvailability;
+  Command.AdapterId := AAdapterId;
+  Result := SubmitCommand(Command);
+  if Result <> InvalidBleOperationId then
+    FAvailabilityOperationId := Result;
+end;
+
+procedure TBleCentralManager.CancelAvailabilityCheck;
+begin
+  if FAvailabilityOperationId <> InvalidBleOperationId then
+    CancelOperation(FAvailabilityOperationId);
 end;
 
 procedure TBleCentralManager.CancelScan;
@@ -249,6 +285,14 @@ begin
     (AEvent.OperationId = FScanOperationId) and Assigned(FOnScanResult) then
     FOnScanResult(Self, AEvent.DeviceId, AEvent.DeviceName, AEvent.Rssi);
 
+  if (AEvent.Kind = lbekAvailabilityResult) and
+    (AEvent.OperationId = FAvailabilityOperationId) and
+    Assigned(FOnAvailabilityResult) then
+    if AEvent.Available then
+      FOnAvailabilityResult(Self, lbaAvailable)
+    else
+      FOnAvailabilityResult(Self, lbaUnavailable);
+
   if (FState = lbcsShuttingDown) and
     (AEvent.Kind = lbekShutdownCompleted) and
     (AEvent.OperationId = FShutdownOperationId) then
@@ -273,6 +317,16 @@ begin
     if Assigned(FOnScanCompleted) then
       FOnScanCompleted(Self, AEvent.Kind = lbekOperationSucceeded,
         AEvent.ErrorCode, AEvent.ErrorMessage);
+  end;
+
+  if LazBleBackendEventIsTerminal(AEvent) and
+    (AEvent.OperationId = FAvailabilityOperationId) then
+  begin
+    FAvailabilityOperationId := InvalidBleOperationId;
+    if Assigned(FOnAvailabilityCompleted) then
+      FOnAvailabilityCompleted(Self,
+        AEvent.Kind = lbekOperationSucceeded, AEvent.ErrorCode,
+        AEvent.ErrorMessage);
   end;
 end;
 

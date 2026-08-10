@@ -103,6 +103,8 @@ type
     procedure ScanPublishesEachNewAndUpdatedResult;
     procedure CancellingScanCancelsBackendOperation;
     procedure TimedOutScanKeepsTimedOutStateAfterTerminalEvent;
+    procedure AvailabilityCheckReturnsTypedResult;
+    procedure AvailabilityCheckDoesNotOverlapScan;
     procedure ConnectCompletesAfterServiceDiscovery;
     procedure TwoClientsConnectIndependently;
     procedure ShutdownCompletesAfterBackendShutdown;
@@ -420,6 +422,64 @@ begin
     Operation.OnCompleted := nil;
     Observer.Free;
   end;
+end;
+
+procedure TLazBleClientTest.AvailabilityCheckReturnsTypedResult;
+var
+  BackendEvent: TLazBleBackendEvent;
+  Operation: IBleAvailabilityOperation;
+  OperationId: TBleOperationId;
+begin
+  Operation := FBle.CheckAvailabilityAsync('hci-test');
+  OperationId := FBackendObject.OperationIds[0];
+
+  AssertEquals(Ord(lbopPending), Ord(Operation.State));
+  AssertEquals(Ord(lbaUnknown), Ord(Operation.Availability));
+  AssertEquals(Ord(lbckCheckAvailability),
+    Ord(FBackendObject.Commands[0].Kind));
+  AssertEquals('hci-test', FBackendObject.Commands[0].AdapterId);
+
+  BackendEvent := Default(TLazBleBackendEvent);
+  BackendEvent.Kind := lbekAvailabilityResult;
+  BackendEvent.OperationId := OperationId;
+  BackendEvent.Available := True;
+  AssertTrue(FBackendObject.EmitProgress(BackendEvent));
+  AssertTrue(FBackendObject.CompleteOperation(OperationId,
+    lbekOperationSucceeded));
+
+  AssertEquals(Ord(lbopSucceeded), Ord(Operation.State));
+  AssertEquals(Ord(lbaAvailable), Ord(Operation.Availability));
+
+  Operation := FBle.CheckAvailabilityAsync('hci-test');
+  OperationId := FBackendObject.OperationIds[1];
+  BackendEvent.OperationId := OperationId;
+  BackendEvent.Available := False;
+  AssertTrue(FBackendObject.EmitProgress(BackendEvent));
+  AssertTrue(FBackendObject.CompleteOperation(OperationId,
+    lbekOperationSucceeded));
+  AssertEquals(Ord(lbopSucceeded), Ord(Operation.State));
+  AssertEquals(Ord(lbaUnavailable), Ord(Operation.Availability));
+end;
+
+procedure TLazBleClientTest.AvailabilityCheckDoesNotOverlapScan;
+var
+  AvailabilityOperation: IBleAvailabilityOperation;
+  AvailabilityOperationId: TBleOperationId;
+  ScanOperation: IBleScanOperation;
+begin
+  AvailabilityOperation := FBle.CheckAvailabilityAsync('');
+  AvailabilityOperationId := FBackendObject.OperationIds[0];
+
+  ScanOperation := FBle.ScanAsync('', 1000);
+
+  AssertEquals(Ord(lbopFailed), Ord(ScanOperation.State));
+  AssertTrue(FBackendObject.CompleteOperation(AvailabilityOperationId,
+    lbekOperationFailed, 7, 'availability failed'));
+  AssertEquals(Ord(lbopFailed), Ord(AvailabilityOperation.State));
+
+  ScanOperation := FBle.ScanAsync('', 1000);
+  AssertEquals(Ord(lbopPending), Ord(ScanOperation.State));
+  AssertEquals(2, FBackendObject.CommandCount);
 end;
 
 procedure TLazBleClientTest.ConnectCompletesAfterServiceDiscovery;

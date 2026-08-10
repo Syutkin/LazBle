@@ -48,6 +48,12 @@ type
       write SetOnResult;
   end;
 
+  IBleAvailabilityOperation = interface(IBleOperation)
+    ['{5E357BDF-4930-4D8A-A112-EAF6FBD1975F}']
+    function GetAvailability: TBleAvailability;
+    property Availability: TBleAvailability read GetAvailability;
+  end;
+
   TBleOperation = class(TInterfacedObject, IBleOperation)
   private
     FLock: TRTLCriticalSection;
@@ -105,6 +111,20 @@ type
       write SetOnResult;
   end;
 
+  TBleAvailabilityOperation = class(TBleOperation,
+    IBleAvailabilityOperation)
+  private
+    FAvailabilityLock: TRTLCriticalSection;
+    FAvailability: TBleAvailability;
+    function GetAvailability: TBleAvailability;
+  protected
+    constructor Create(const AOnCancel: TLazBleOperationCancelEvent);
+    procedure SetAvailability(const AAvailability: TBleAvailability);
+  public
+    destructor Destroy; override;
+    property Availability: TBleAvailability read GetAvailability;
+  end;
+
 implementation
 
 function SameCompletedHandler(const AFirst,
@@ -112,6 +132,44 @@ function SameCompletedHandler(const AFirst,
 begin
   Result := (TMethod(AFirst).Code = TMethod(ASecond).Code) and
     (TMethod(AFirst).Data = TMethod(ASecond).Data);
+end;
+
+constructor TBleAvailabilityOperation.Create(
+  const AOnCancel: TLazBleOperationCancelEvent);
+begin
+  inherited Create(AOnCancel);
+  InitCriticalSection(FAvailabilityLock);
+  FAvailability := lbaUnknown;
+end;
+
+destructor TBleAvailabilityOperation.Destroy;
+begin
+  DoneCriticalSection(FAvailabilityLock);
+  inherited Destroy;
+end;
+
+function TBleAvailabilityOperation.GetAvailability: TBleAvailability;
+begin
+  EnterCriticalSection(FAvailabilityLock);
+  try
+    Result := FAvailability;
+  finally
+    LeaveCriticalSection(FAvailabilityLock);
+  end;
+end;
+
+procedure TBleAvailabilityOperation.SetAvailability(
+  const AAvailability: TBleAvailability);
+begin
+  if AAvailability in [lbaUnknown, lbaChecking] then
+    raise EArgumentException.Create(
+      'A terminal BLE availability result is required');
+  EnterCriticalSection(FAvailabilityLock);
+  try
+    FAvailability := AAvailability;
+  finally
+    LeaveCriticalSection(FAvailabilityLock);
+  end;
 end;
 
 constructor TBleOperation.Create(

@@ -26,6 +26,8 @@ type
     FClients: TList;
     FActiveScan: IBleScanOperation;
     FActiveScanObject: TBleScanOperation;
+    FActiveAvailability: IBleAvailabilityOperation;
+    FActiveAvailabilityObject: TBleAvailabilityOperation;
     FShutdownOperation: IBleOperation;
     FShutdownOperationObject: TBleOperation;
     FReconnectTimerFactory: ILazBleReconnectTimerFactory;
@@ -34,6 +36,11 @@ type
       ADeviceName: string; const ARssi: SmallInt);
     procedure ScanCompleted(Sender: TObject; const ASucceeded: Boolean;
       const AErrorCode: Integer; const AErrorMessage: string);
+    procedure AvailabilityResult(Sender: TObject;
+      const AAvailability: TBleAvailability);
+    procedure AvailabilityCompleted(Sender: TObject;
+      const ASucceeded: Boolean; const AErrorCode: Integer;
+      const AErrorMessage: string);
     procedure SessionStateChanged(Sender: TObject;
       const AState: TLazBleSessionState);
     procedure ManagerStateChanged(Sender: TObject;
@@ -54,6 +61,8 @@ type
     destructor Destroy; override;
     function ScanAsync(const AAdapterId: string;
       const ATimeoutMs: Cardinal): IBleScanOperation;
+    function CheckAvailabilityAsync(const AAdapterId: string):
+      IBleAvailabilityOperation;
     function CreateClient(const ADeviceId: string): TBleClient;
     function FindClient(const ADeviceId: string): TBleClient;
     procedure RemoveClient(const AClient: TBleClient);
@@ -98,6 +107,15 @@ type
       const ARssi: SmallInt);
   end;
 
+  TBleAvailabilityOperationAccess = class(TBleAvailabilityOperation)
+  public
+    constructor CreateInternal(
+      const AOnCancel: TLazBleOperationCancelEvent);
+    procedure Finish(const AState: TLazBleOperationState;
+      const AErrorCode: Integer = 0; const AErrorMessage: string = '');
+    procedure StoreAvailability(const AAvailability: TBleAvailability);
+  end;
+
   TBleSessionOperationAccess = class(TBleSessionOperation)
   public
     procedure Finish(const AState: TLazBleOperationState;
@@ -139,6 +157,25 @@ constructor TBleScanOperationAccess.CreateInternal(
   const AOnCancel: TLazBleOperationCancelEvent);
 begin
   inherited Create(AOnCancel);
+end;
+
+constructor TBleAvailabilityOperationAccess.CreateInternal(
+  const AOnCancel: TLazBleOperationCancelEvent);
+begin
+  inherited Create(AOnCancel);
+end;
+
+procedure TBleAvailabilityOperationAccess.Finish(
+  const AState: TLazBleOperationState; const AErrorCode: Integer;
+  const AErrorMessage: string);
+begin
+  Complete(AState, AErrorCode, AErrorMessage);
+end;
+
+procedure TBleAvailabilityOperationAccess.StoreAvailability(
+  const AAvailability: TBleAvailability);
+begin
+  SetAvailability(AAvailability);
 end;
 
 procedure TBleOperationAccess.Finish(const AState: TLazBleOperationState;
@@ -193,6 +230,8 @@ begin
   FManager := TBleCentralManager.Create(ABackend);
   FManager.OnScanResult := @ScanResult;
   FManager.OnScanCompleted := @ScanCompleted;
+  FManager.OnAvailabilityResult := @AvailabilityResult;
+  FManager.OnAvailabilityCompleted := @AvailabilityCompleted;
   FManager.OnStateChanged := @ManagerStateChanged;
 end;
 
@@ -205,6 +244,8 @@ begin
   begin
     FManager.OnScanResult := nil;
     FManager.OnScanCompleted := nil;
+    FManager.OnAvailabilityResult := nil;
+    FManager.OnAvailabilityCompleted := nil;
     FManager.OnStateChanged := nil;
   end;
   for Index := FClients.Count - 1 downto 0 do
@@ -224,6 +265,8 @@ begin
   FOperations.Free;
   FActiveScan := nil;
   FActiveScanObject := nil;
+  FActiveAvailability := nil;
+  FActiveAvailabilityObject := nil;
   FShutdownOperation := nil;
   FShutdownOperationObject := nil;
   FReconnectTimerFactory := nil;
@@ -239,6 +282,11 @@ begin
   if Sender = FActiveScanObject then
   begin
     FManager.CancelScan;
+    Exit;
+  end;
+  if Sender = FActiveAvailabilityObject then
+  begin
+    FManager.CancelAvailabilityCheck;
     Exit;
   end;
   if Sender is TBleSessionOperation then
@@ -293,6 +341,41 @@ begin
   else
     TBleScanOperationAccess(OperationObject).Finish(lbopFailed, AErrorCode,
       AErrorMessage);
+end;
+
+procedure TLazBle.AvailabilityResult(Sender: TObject;
+  const AAvailability: TBleAvailability);
+begin
+  if Assigned(FActiveAvailability) and
+    (FActiveAvailability.State = lbopPending) then
+    TBleAvailabilityOperationAccess(
+      FActiveAvailabilityObject).StoreAvailability(AAvailability);
+end;
+
+procedure TLazBle.AvailabilityCompleted(Sender: TObject;
+  const ASucceeded: Boolean; const AErrorCode: Integer;
+  const AErrorMessage: string);
+var
+  Operation: IBleAvailabilityOperation;
+  OperationObject: TBleAvailabilityOperation;
+begin
+  Operation := FActiveAvailability;
+  OperationObject := FActiveAvailabilityObject;
+  FActiveAvailability := nil;
+  FActiveAvailabilityObject := nil;
+  if not Assigned(Operation) then
+    Exit;
+  if Operation.CancelRequested then
+    TBleAvailabilityOperationAccess(OperationObject).Finish(lbopCancelled)
+  else if ASucceeded and
+    (Operation.Availability in [lbaAvailable, lbaUnavailable]) then
+    TBleAvailabilityOperationAccess(OperationObject).Finish(lbopSucceeded)
+  else if ASucceeded then
+    TBleAvailabilityOperationAccess(OperationObject).Finish(lbopFailed, 0,
+      'BLE backend did not report availability')
+  else
+    TBleAvailabilityOperationAccess(OperationObject).Finish(lbopFailed,
+      AErrorCode, AErrorMessage);
 end;
 
 procedure TLazBle.CompleteSessionOperations(
@@ -357,6 +440,11 @@ var
   Index: Integer;
   OperationCount: Integer;
 begin
+  if Assigned(FActiveScan) and (FActiveScan.State = lbopPending) then
+    FActiveScan.Cancel;
+  if Assigned(FActiveAvailability) and
+    (FActiveAvailability.State = lbopPending) then
+    FActiveAvailability.Cancel;
   for Index := 0 to FClients.Count - 1 do
     TBleClientAccess(FClients[Index]).CancelForShutdown;
   OperationCount := FOperations.Count;
@@ -365,6 +453,28 @@ begin
     Entry := TBleSessionOperationEntry(FOperations[Index]);
     if Entry.Operation.State = lbopPending then
       Entry.Operation.Cancel;
+  end;
+end;
+
+function TLazBle.CheckAvailabilityAsync(const AAdapterId: string):
+  IBleAvailabilityOperation;
+var
+  Operation: TBleAvailabilityOperationAccess;
+begin
+  if Assigned(FActiveAvailability) and
+    (FActiveAvailability.State = lbopPending) then
+    Exit(FActiveAvailability);
+  Operation := TBleAvailabilityOperationAccess.CreateInternal(
+    @OperationCancelled);
+  Result := Operation;
+  FActiveAvailability := Result;
+  FActiveAvailabilityObject := Operation;
+  if FManager.CheckAvailability(AAdapterId) = InvalidBleOperationId then
+  begin
+    FActiveAvailability := nil;
+    FActiveAvailabilityObject := nil;
+    Operation.Finish(lbopFailed, 0,
+      'Could not start BLE availability check');
   end;
 end;
 

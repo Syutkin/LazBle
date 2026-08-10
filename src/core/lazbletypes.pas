@@ -29,6 +29,15 @@ type
   TLazBleScanResultEvent = procedure(Sender: TObject; const ADeviceId,
     ADeviceName: string; const ARssi: SmallInt) of object;
 
+  TBleAvailability = (
+    lbaUnknown,
+    lbaChecking,
+    lbaAvailable,
+    lbaUnavailable
+  );
+  TBleAvailabilityEvent = procedure(Sender: TObject;
+    const AAvailability: TBleAvailability) of object;
+
 const
   InvalidBleOperationId: TBleOperationId = 0;
   InvalidBleSubscriptionId: TBleSubscriptionId = 0;
@@ -77,7 +86,8 @@ type
     lbckRead,
     lbckWrite,
     lbckSubscribe,
-    lbckUnsubscribe
+    lbckUnsubscribe,
+    lbckCheckAvailability
   );
 
   TLazBleBackendCommand = record
@@ -105,6 +115,7 @@ type
     lbekSubscribed,
     lbekNotification,
     lbekUnsubscribed,
+    lbekAvailabilityResult,
     lbekOperationSucceeded,
     lbekOperationFailed,
     lbekOperationCancelled,
@@ -122,6 +133,7 @@ type
     ServiceUuid: string;
     CharacteristicUuid: string;
     Rssi: SmallInt;
+    Available: Boolean;
     Value: TBytes;
     ErrorCode: Integer;
     ErrorMessage: string;

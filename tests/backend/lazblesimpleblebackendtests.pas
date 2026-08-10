@@ -90,6 +90,7 @@ type
     procedure ExplicitShutdownAndDestroyCloseDriverOnce;
     procedure DriverFailureIsDeliveredAsynchronously;
     procedure GattCommandsPreserveTypedProgressEvents;
+    procedure AvailabilityCheckRunsAsynchronously;
     procedure EmitsNothingAfterTerminalShutdown;
     procedure DefaultBackendDoesNotLoadLibraryInConstructor;
   end;
@@ -159,6 +160,12 @@ begin
   BackendEvent.ServiceUuid := ACommand.ServiceUuid;
   BackendEvent.CharacteristicUuid := ACommand.CharacteristicUuid;
   case ACommand.Kind of
+    lbckCheckAvailability:
+      begin
+        BackendEvent.Kind := lbekAvailabilityResult;
+        BackendEvent.Available := True;
+        AEventSink.Emit(BackendEvent);
+      end;
     lbckStartScan:
       begin
         BackendEvent.Kind := lbekScanStarted;
@@ -626,6 +633,31 @@ begin
   AssertEquals($58, Integer(FEventSinkObject.Events[4].Value[0]));
   AssertTrue(FEventSinkObject.Events[8].SubscriptionId = 21);
   AssertTrue(FEventSinkObject.Events[10].SubscriptionId = 21);
+end;
+
+procedure TLazBleSimpleBleBackendTest.AvailabilityCheckRunsAsynchronously;
+var
+  Command: TLazBleBackendCommand;
+  OperationId: TBleOperationId;
+begin
+  FDriverObject.BlockCommand(lbckCheckAvailability);
+  Command := Default(TLazBleBackendCommand);
+  Command.Kind := lbckCheckAvailability;
+  Command.AdapterId := 'hci-test';
+
+  OperationId := FBackend.Submit(Command);
+
+  AssertTrue(FDriverObject.WaitUntilStarted);
+  AssertEquals(0, FEventSinkObject.EventCount);
+  FDriverObject.AllowCompletion;
+  AssertTrue(FEventSinkObject.WaitForEventCount(2));
+  AssertEquals(Ord(lbekAvailabilityResult),
+    Ord(FEventSinkObject.Events[0].Kind));
+  AssertTrue(FEventSinkObject.Events[0].Available);
+  AssertTrue(OperationId = FEventSinkObject.Events[0].OperationId);
+  AssertEquals(Ord(lbekOperationSucceeded),
+    Ord(FEventSinkObject.Events[1].Kind));
+  AssertEquals(1, FDriverObject.OpenCount);
 end;
 
 procedure TLazBleSimpleBleBackendTest.EmitsNothingAfterTerminalShutdown;

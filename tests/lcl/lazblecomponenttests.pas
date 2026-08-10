@@ -39,12 +39,36 @@ type
     function WaitUntilFinished(const ATimeoutMs: Cardinal): TWaitResult;
   end;
 
+  TComponentAvailabilityEmissionThread = class(TThread)
+  private
+    FBackend: TFakeLazBleBackend;
+    FOperationId: TBleOperationId;
+    FAvailable: Boolean;
+    FEmitResult: Boolean;
+    FTerminalKind: TLazBleBackendEventKind;
+    FErrorCode: Integer;
+    FErrorMessage: string;
+    FFinished: TEvent;
+  protected
+    procedure Execute; override;
+  public
+    constructor Create(const ABackend: TFakeLazBleBackend;
+      const AOperationId: TBleOperationId; const AAvailable,
+      AEmitResult: Boolean; const ATerminalKind: TLazBleBackendEventKind;
+      const AErrorCode: Integer = 0; const AErrorMessage: string = '');
+    destructor Destroy; override;
+    function WaitUntilFinished(const ATimeoutMs: Cardinal): TWaitResult;
+  end;
+
   TStreamingComponentOwner = class(TComponent)
   protected
     procedure GetChildren(Proc: TGetChildProc; Root: TComponent); override;
   public
     CompletionCount: Integer;
+    AvailabilityCount: Integer;
   published
+    procedure AvailabilityChanged(Sender: TObject;
+      const AAvailability: TBleAvailability);
     procedure ScanCompleted(Sender: TObject;
       const AState: TLazBleLclScanState);
   end;
@@ -67,6 +91,7 @@ type
     FErrorCode: Integer;
     FErrorMessage: string;
     FLastCallbackThreadId: TThreadID;
+    FAvailabilityChanges: array of TBleAvailability;
     procedure ScanResult(Sender: TObject; const ADeviceId,
       ADeviceName: string; const ARssi: SmallInt);
     procedure ScanStateChanged(Sender: TObject;
@@ -75,6 +100,8 @@ type
       const AState: TLazBleLclScanState);
     procedure ScanError(Sender: TObject; const AErrorCode: Integer;
       const AErrorMessage: string);
+    procedure AvailabilityChanged(Sender: TObject;
+      const AAvailability: TBleAvailability);
     procedure FindComponentClass(Reader: TReader; const AClassName: string;
       var AClass: TComponentClass);
     function Device(const ADeviceId, ADeviceName: string;
@@ -89,6 +116,9 @@ type
     procedure CancelScanCancelsActiveOperation;
     procedure FailedScanForwardsTerminalError;
     procedure ClearScanResultsClearsSnapshot;
+    procedure RefreshAvailabilityPublishesMainThreadResult;
+    procedure AvailabilityFailureUpdatesError;
+    procedure ShutdownSuppressesPendingAvailabilityCallback;
     procedure ShutdownCancelsScanAndSuppressesCallbacks;
     procedure ShutdownIsIdempotentAndRejectsNewWork;
     procedure DestroyIgnoresQueuedCallbacksAndReleasesFacade;
@@ -150,6 +180,62 @@ begin
   Result := FFinished.WaitFor(ATimeoutMs);
 end;
 
+constructor TComponentAvailabilityEmissionThread.Create(
+  const ABackend: TFakeLazBleBackend; const AOperationId: TBleOperationId;
+  const AAvailable, AEmitResult: Boolean;
+  const ATerminalKind: TLazBleBackendEventKind; const AErrorCode: Integer;
+  const AErrorMessage: string);
+begin
+  inherited Create(True);
+  FreeOnTerminate := False;
+  FBackend := ABackend;
+  FOperationId := AOperationId;
+  FAvailable := AAvailable;
+  FEmitResult := AEmitResult;
+  FTerminalKind := ATerminalKind;
+  FErrorCode := AErrorCode;
+  FErrorMessage := AErrorMessage;
+  FFinished := TEvent.Create(nil, True, False, '');
+end;
+
+destructor TComponentAvailabilityEmissionThread.Destroy;
+begin
+  FFinished.Free;
+  inherited Destroy;
+end;
+
+procedure TComponentAvailabilityEmissionThread.Execute;
+var
+  BackendEvent: TLazBleBackendEvent;
+begin
+  try
+    if FEmitResult then
+    begin
+      BackendEvent := Default(TLazBleBackendEvent);
+      BackendEvent.Kind := lbekAvailabilityResult;
+      BackendEvent.OperationId := FOperationId;
+      BackendEvent.Available := FAvailable;
+      FBackend.EmitProgress(BackendEvent);
+    end;
+    FBackend.CompleteOperation(FOperationId, FTerminalKind, FErrorCode,
+      FErrorMessage);
+  finally
+    FFinished.SetEvent;
+  end;
+end;
+
+function TComponentAvailabilityEmissionThread.WaitUntilFinished(
+  const ATimeoutMs: Cardinal): TWaitResult;
+begin
+  Result := FFinished.WaitFor(ATimeoutMs);
+end;
+
+procedure TStreamingComponentOwner.AvailabilityChanged(Sender: TObject;
+  const AAvailability: TBleAvailability);
+begin
+  Inc(AvailabilityCount);
+end;
+
 procedure TStreamingComponentOwner.ScanCompleted(Sender: TObject;
   const AState: TLazBleLclScanState);
 begin
@@ -180,6 +266,7 @@ begin
   FComponent.OnScanStateChanged := @ScanStateChanged;
   FComponent.OnScanCompleted := @ScanCompleted;
   FComponent.OnError := @ScanError;
+  FComponent.OnAvailabilityChanged := @AvailabilityChanged;
   FResultCount := 0;
   SetLength(FStateChanges, 0);
   FCompletionCount := 0;
@@ -188,6 +275,7 @@ begin
   FErrorCode := 0;
   FErrorMessage := '';
   FLastCallbackThreadId := 0;
+  SetLength(FAvailabilityChanges, 0);
 end;
 
 procedure TLazBleComponentTest.TearDown;
@@ -232,6 +320,17 @@ begin
   Inc(FErrorCount);
   FErrorCode := AErrorCode;
   FErrorMessage := AErrorMessage;
+  FLastCallbackThreadId := GetCurrentThreadId;
+end;
+
+procedure TLazBleComponentTest.AvailabilityChanged(Sender: TObject;
+  const AAvailability: TBleAvailability);
+var
+  Index: Integer;
+begin
+  Index := Length(FAvailabilityChanges);
+  SetLength(FAvailabilityChanges, Index + 1);
+  FAvailabilityChanges[Index] := AAvailability;
   FLastCallbackThreadId := GetCurrentThreadId;
 end;
 
@@ -284,6 +383,7 @@ begin
     Source.Name := 'LazBle1';
     Source.AdapterId := 'hci-test';
     Source.ScanTimeoutMs := 4321;
+    Source.OnAvailabilityChanged := @Owner.AvailabilityChanged;
     Source.OnScanCompleted := @Owner.ScanCompleted;
     WriteComponentAsTextToStream(Stream, Owner);
     Owner.Free;
@@ -302,7 +402,12 @@ begin
       TMethod(@LoadedOwner.ScanCompleted).Code);
     AssertTrue(TMethod(LoadedComponent.OnScanCompleted).Data =
       TMethod(@LoadedOwner.ScanCompleted).Data);
+    AssertTrue(TMethod(LoadedComponent.OnAvailabilityChanged).Code =
+      TMethod(@LoadedOwner.AvailabilityChanged).Code);
+    AssertTrue(TMethod(LoadedComponent.OnAvailabilityChanged).Data =
+      TMethod(@LoadedOwner.AvailabilityChanged).Data);
     AssertEquals(0, BackendObject.CommandCount);
+    AssertEquals(Ord(lbaUnknown), Ord(LoadedComponent.Availability));
     AssertEquals(Ord(lblssIdle), Ord(LoadedComponent.ScanState));
   finally
     Stream.Free;
@@ -310,6 +415,94 @@ begin
     Owner.Free;
     StreamingBackend := nil;
     Backend := nil;
+  end;
+end;
+
+procedure TLazBleComponentTest.RefreshAvailabilityPublishesMainThreadResult;
+var
+  Thread: TComponentAvailabilityEmissionThread;
+begin
+  FComponent.AdapterId := 'hci-test';
+  AssertEquals(Ord(lbaUnknown), Ord(FComponent.Availability));
+
+  FComponent.RefreshAvailability;
+
+  AssertEquals(Ord(lbaChecking), Ord(FComponent.Availability));
+  AssertEquals(1, Length(FAvailabilityChanges));
+  AssertEquals(Ord(lbaChecking), Ord(FAvailabilityChanges[0]));
+  AssertEquals(Ord(lbckCheckAvailability),
+    Ord(FBackendObject.Commands[0].Kind));
+  AssertEquals('hci-test', FBackendObject.Commands[0].AdapterId);
+  Thread := TComponentAvailabilityEmissionThread.Create(FBackendObject,
+    FBackendObject.OperationIds[0], True, True, lbekOperationSucceeded);
+  try
+    Thread.Start;
+    AssertEquals(Ord(wrSignaled), Ord(Thread.WaitUntilFinished(5000)));
+    AssertEquals(Ord(lbaChecking), Ord(FComponent.Availability));
+    CheckSynchronize;
+
+    AssertEquals(Ord(lbaAvailable), Ord(FComponent.Availability));
+    AssertEquals(2, Length(FAvailabilityChanges));
+    AssertEquals(Ord(lbaAvailable), Ord(FAvailabilityChanges[1]));
+    AssertEquals(Int64(MainThreadID), Int64(FLastCallbackThreadId));
+  finally
+    Thread.WaitFor;
+    Thread.Free;
+  end;
+end;
+
+procedure TLazBleComponentTest.AvailabilityFailureUpdatesError;
+var
+  Thread: TComponentAvailabilityEmissionThread;
+begin
+  FComponent.RefreshAvailability;
+  Thread := TComponentAvailabilityEmissionThread.Create(FBackendObject,
+    FBackendObject.OperationIds[0], False, False, lbekOperationFailed,
+    71, 'availability failed');
+  try
+    Thread.Start;
+    AssertEquals(Ord(wrSignaled), Ord(Thread.WaitUntilFinished(5000)));
+    CheckSynchronize;
+
+    AssertEquals(Ord(lbaUnavailable), Ord(FComponent.Availability));
+    AssertEquals(1, FErrorCount);
+    AssertEquals(71, FErrorCode);
+    AssertEquals('availability failed', FErrorMessage);
+    AssertEquals(71, FComponent.LastErrorCode);
+    AssertEquals('availability failed', FComponent.LastErrorMessage);
+    AssertEquals(Int64(MainThreadID), Int64(FLastCallbackThreadId));
+  finally
+    Thread.WaitFor;
+    Thread.Free;
+  end;
+end;
+
+procedure TLazBleComponentTest.ShutdownSuppressesPendingAvailabilityCallback;
+var
+  OperationId: TBleOperationId;
+  Thread: TComponentAvailabilityEmissionThread;
+begin
+  FComponent.RefreshAvailability;
+  OperationId := FBackendObject.OperationIds[0];
+  AssertEquals(1, Length(FAvailabilityChanges));
+
+  FComponent.Shutdown;
+
+  AssertTrue(FBackendObject.CancellationWasRequested(OperationId));
+  Thread := TComponentAvailabilityEmissionThread.Create(FBackendObject,
+    OperationId, True, True, lbekOperationCancelled);
+  try
+    Thread.Start;
+    AssertEquals(Ord(wrSignaled), Ord(Thread.WaitUntilFinished(5000)));
+    AssertTrue(FBackendObject.CompleteShutdown);
+    CheckSynchronize;
+
+    AssertEquals(Ord(lbaUnavailable), Ord(FComponent.Availability));
+    AssertEquals(1, Length(FAvailabilityChanges));
+    AssertEquals(0, FErrorCount);
+  finally
+    Thread.WaitFor;
+    Thread.Free;
   end;
 end;
 

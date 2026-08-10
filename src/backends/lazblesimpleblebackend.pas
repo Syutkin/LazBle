@@ -141,6 +141,8 @@ type
       TSimpleBleSubscriptionEntry;
     function ExecuteScan(const ACommand: TLazBleBackendCommand;
       out AErrorCode: Integer; out AErrorMessage: string): Boolean;
+    function ExecuteAvailability(const ACommand: TLazBleBackendCommand;
+      out AErrorCode: Integer; out AErrorMessage: string): Boolean;
     function ExecuteConnect(const ACommand: TLazBleBackendCommand;
       out AErrorCode: Integer; out AErrorMessage: string): Boolean;
     function ExecuteDisconnect(const ACommand: TLazBleBackendCommand;
@@ -628,6 +630,29 @@ begin
     AErrorMessage := 'SimpleBLE scan failed';
 end;
 
+function TLazBleNativeSimpleBleDriver.ExecuteAvailability(
+  const ACommand: TLazBleBackendCommand; out AErrorCode: Integer;
+  out AErrorMessage: string): Boolean;
+var
+  AdapterError: string;
+  BackendEvent: TLazBleBackendEvent;
+begin
+  BackendEvent := Default(TLazBleBackendEvent);
+  BackendEvent.Kind := lbekAvailabilityResult;
+  BackendEvent.OperationId := FOperationId;
+  BackendEvent.Available := SimpleBleAdapterIsBluetoothEnabled();
+  if BackendEvent.Available then
+    BackendEvent.Available := SelectAdapter(ACommand.AdapterId, AdapterError);
+  if BackendEvent.Available then
+    BackendEvent.AdapterId := FAdapterId
+  else
+    BackendEvent.AdapterId := ACommand.AdapterId;
+  FEventSink.Emit(BackendEvent);
+  AErrorCode := Ord(SIMPLEBLE_SUCCESS);
+  AErrorMessage := '';
+  Result := True;
+end;
+
 function TLazBleNativeSimpleBleDriver.ExecuteConnect(
   const ACommand: TLazBleBackendCommand; out AErrorCode: Integer;
   out AErrorMessage: string): Boolean;
@@ -950,6 +975,8 @@ begin
   FEventSink := AEventSink;
   FCurrentCommandKind := ACommand.Kind;
   case ACommand.Kind of
+    lbckCheckAvailability:
+      Result := ExecuteAvailability(ACommand, AErrorCode, AErrorMessage);
     lbckStartScan:
       Result := ExecuteScan(ACommand, AErrorCode, AErrorMessage);
     lbckConnect:

@@ -58,13 +58,19 @@ type
     FBle: TLazBle;
     FScan: TLazBleLclScan;
     FClients: TList;
+    FAvailabilityDispatch: TLazBleLclDispatch;
+    FAvailabilityOperation: IBleAvailabilityOperation;
+    FAvailability: TBleAvailability;
     FShutdownOperation: IBleOperation;
     FShutdownStarted: Boolean;
     FAdapterId: string;
     FScanTimeoutMs: Cardinal;
+    FLastErrorCode: Integer;
+    FLastErrorMessage: string;
     FOnScanStateChanged: TLazBleLclScanStateChangedEvent;
     FOnScanResult: TLazBleScanResultEvent;
     FOnScanCompleted: TLazBleLclScanCompletedEvent;
+    FOnAvailabilityChanged: TBleAvailabilityEvent;
     FOnError: TLazBleLclErrorEvent;
     procedure Initialize(const ABle: TLazBle);
     procedure EnsureOperational;
@@ -84,6 +90,10 @@ type
       ADeviceName: string; const ARssi: SmallInt);
     procedure ScanCompleted(Sender: TObject;
       const AState: TLazBleLclScanState);
+    procedure AvailabilityCompleted(Sender: TObject);
+    procedure AvailabilityDispatchMessage(Sender: TObject;
+      const AMessage: TLazBleLclDispatchMessage);
+    procedure SetAvailability(const AAvailability: TBleAvailability);
   protected
     function CreateFacade: TLazBle; virtual;
   public
@@ -94,11 +104,13 @@ type
     procedure StartScan;
     procedure CancelScan;
     procedure ClearScanResults;
+    procedure RefreshAvailability;
     procedure Shutdown;
     function CreateClient(const ADeviceId: string): TLazBleLclClient;
     function FindClient(const ADeviceId: string): TLazBleLclClient;
     procedure RemoveClient(const AClient: TLazBleLclClient);
     property ScanState: TLazBleLclScanState read GetScanState;
+    property Availability: TBleAvailability read FAvailability;
     property ScanResults: TBleDeviceInfos read GetScanResults;
     property LastErrorCode: Integer read GetLastErrorCode;
     property LastErrorMessage: string read GetLastErrorMessage;
@@ -116,6 +128,8 @@ type
       read FOnScanResult write FOnScanResult;
     property OnScanCompleted: TLazBleLclScanCompletedEvent
       read FOnScanCompleted write FOnScanCompleted;
+    property OnAvailabilityChanged: TBleAvailabilityEvent
+      read FOnAvailabilityChanged write FOnAvailabilityChanged;
     property OnError: TLazBleLclErrorEvent read FOnError write FOnError;
   end;
 
@@ -267,6 +281,23 @@ begin
 end;
 
 type
+  TLazBleLclAvailabilityMessage = class(TLazBleLclDispatchMessage)
+  private
+    FOperationState: TLazBleOperationState;
+    FAvailability: TBleAvailability;
+    FErrorCode: Integer;
+    FErrorMessage: string;
+  public
+    constructor Create(const AOperationState: TLazBleOperationState;
+      const AAvailability: TBleAvailability; const AErrorCode: Integer;
+      const AErrorMessage: string);
+    function Clone: TLazBleLclDispatchMessage; override;
+    property OperationState: TLazBleOperationState read FOperationState;
+    property Availability: TBleAvailability read FAvailability;
+    property ErrorCode: Integer read FErrorCode;
+    property ErrorMessage: string read FErrorMessage;
+  end;
+
   TLazBleLclClientOperationKind = (
     lblcokConnect,
     lblcokDisconnect
@@ -297,6 +328,24 @@ type
     property ErrorCode: Integer read FErrorCode;
     property ErrorMessage: string read FErrorMessage;
   end;
+
+constructor TLazBleLclAvailabilityMessage.Create(
+  const AOperationState: TLazBleOperationState;
+  const AAvailability: TBleAvailability; const AErrorCode: Integer;
+  const AErrorMessage: string);
+begin
+  inherited Create;
+  FOperationState := AOperationState;
+  FAvailability := AAvailability;
+  FErrorCode := AErrorCode;
+  FErrorMessage := AErrorMessage;
+end;
+
+function TLazBleLclAvailabilityMessage.Clone: TLazBleLclDispatchMessage;
+begin
+  Result := TLazBleLclAvailabilityMessage.Create(FOperationState,
+    FAvailability, FErrorCode, FErrorMessage);
+end;
 
 constructor TLazBleLclClientStateMessage.Create(
   const AState: TLazBleClientState);
@@ -364,6 +413,9 @@ begin
   end;
   FScan.Free;
   FScan := nil;
+  FAvailabilityDispatch.Free;
+  FAvailabilityDispatch := nil;
+  FAvailabilityOperation := nil;
   FShutdownOperation := nil;
   FBle.Free;
   FBle := nil;
@@ -381,6 +433,9 @@ procedure TLazBleComponent.Initialize(const ABle: TLazBle);
 begin
   FClients := TList.Create;
   FBle := ABle;
+  FAvailability := lbaUnknown;
+  FAvailabilityDispatch := TLazBleLclDispatch.Create(
+    @AvailabilityDispatchMessage);
   FScan := TLazBleLclScan.Create(FBle);
   FScan.OnStateChanged := @ScanStateChanged;
   FScan.OnResult := @ScanResult;
@@ -396,6 +451,8 @@ end;
 procedure TLazBleComponent.StartScan;
 begin
   EnsureOperational;
+  FLastErrorCode := 0;
+  FLastErrorMessage := '';
   FScan.Start(FAdapterId, FScanTimeoutMs);
 end;
 
@@ -409,6 +466,22 @@ begin
   FScan.ClearResults;
 end;
 
+procedure TLazBleComponent.RefreshAvailability;
+begin
+  EnsureOperational;
+  if Assigned(FAvailabilityOperation) and
+    (FAvailabilityOperation.State = lbopPending) then
+    Exit;
+  if Assigned(FAvailabilityOperation) then
+    FAvailabilityOperation.OnCompleted := nil;
+  FAvailabilityOperation := nil;
+  FLastErrorCode := 0;
+  FLastErrorMessage := '';
+  SetAvailability(lbaChecking);
+  FAvailabilityOperation := FBle.CheckAvailabilityAsync(FAdapterId);
+  FAvailabilityOperation.OnCompleted := @AvailabilityCompleted;
+end;
+
 procedure TLazBleComponent.Shutdown;
 var
   Index: Integer;
@@ -416,6 +489,12 @@ begin
   if FShutdownStarted then
     Exit;
   FShutdownStarted := True;
+  if Assigned(FAvailabilityDispatch) then
+    FAvailabilityDispatch.Detach;
+  if Assigned(FAvailabilityOperation) then
+    FAvailabilityOperation.OnCompleted := nil;
+  FAvailabilityOperation := nil;
+  FAvailability := lbaUnavailable;
   if Assigned(FScan) then
   begin
     FScan.OnStateChanged := nil;
@@ -487,12 +566,12 @@ end;
 
 function TLazBleComponent.GetLastErrorCode: Integer;
 begin
-  Result := FScan.ErrorCode;
+  Result := FLastErrorCode;
 end;
 
 function TLazBleComponent.GetLastErrorMessage: string;
 begin
-  Result := FScan.ErrorMessage;
+  Result := FLastErrorMessage;
 end;
 
 function TLazBleComponent.GetClientCount: Integer;
@@ -563,14 +642,71 @@ var
 begin
   if AState in [lblssTimedOut, lblssFailed] then
   begin
+    FLastErrorCode := FScan.ErrorCode;
+    FLastErrorMessage := FScan.ErrorMessage;
     ErrorHandler := FOnError;
     if Assigned(ErrorHandler) then
-      ErrorHandler(Self, FScan.ErrorCode, FScan.ErrorMessage);
+      ErrorHandler(Self, FLastErrorCode, FLastErrorMessage);
   end;
 
   CompletedHandler := FOnScanCompleted;
   if Assigned(CompletedHandler) then
     CompletedHandler(Self, AState);
+end;
+
+procedure TLazBleComponent.AvailabilityCompleted(Sender: TObject);
+var
+  Message: TLazBleLclAvailabilityMessage;
+  Operation: TBleAvailabilityOperation;
+begin
+  if not (Sender is TBleAvailabilityOperation) then
+    Exit;
+  Operation := TBleAvailabilityOperation(Sender);
+  Message := TLazBleLclAvailabilityMessage.Create(Operation.State,
+    Operation.Availability, Operation.ErrorCode, Operation.ErrorMessage);
+  try
+    FAvailabilityDispatch.Queue(Message);
+  finally
+    Message.Free;
+  end;
+end;
+
+procedure TLazBleComponent.AvailabilityDispatchMessage(Sender: TObject;
+  const AMessage: TLazBleLclDispatchMessage);
+var
+  AvailabilityMessage: TLazBleLclAvailabilityMessage;
+  ErrorHandler: TLazBleLclErrorEvent;
+begin
+  if not (AMessage is TLazBleLclAvailabilityMessage) then
+    Exit;
+  AvailabilityMessage := TLazBleLclAvailabilityMessage(AMessage);
+  FAvailabilityOperation := nil;
+  if AvailabilityMessage.OperationState = lbopSucceeded then
+    SetAvailability(AvailabilityMessage.Availability)
+  else if AvailabilityMessage.OperationState = lbopCancelled then
+    SetAvailability(lbaUnknown)
+  else
+  begin
+    FLastErrorCode := AvailabilityMessage.ErrorCode;
+    FLastErrorMessage := AvailabilityMessage.ErrorMessage;
+    SetAvailability(lbaUnavailable);
+    ErrorHandler := FOnError;
+    if Assigned(ErrorHandler) then
+      ErrorHandler(Self, FLastErrorCode, FLastErrorMessage);
+  end;
+end;
+
+procedure TLazBleComponent.SetAvailability(
+  const AAvailability: TBleAvailability);
+var
+  Handler: TBleAvailabilityEvent;
+begin
+  if FAvailability = AAvailability then
+    Exit;
+  FAvailability := AAvailability;
+  Handler := FOnAvailabilityChanged;
+  if Assigned(Handler) then
+    Handler(Self, FAvailability);
 end;
 
 constructor TLazBleLclClient.Create(AOwner: TComponent);
