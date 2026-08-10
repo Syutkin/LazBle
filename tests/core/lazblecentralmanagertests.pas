@@ -73,6 +73,7 @@ type
     procedure SessionConnectsThroughServiceDiscovery;
     procedure ReusesSessionForTheSameDevice;
     procedure ConnectFailureMovesSessionToError;
+    procedure DiscoveryFailureMovesSessionToError;
     procedure SessionDisconnects;
     procedure SessionIgnoresEventsFromOldGeneration;
     procedure ScanCancellationDoesNotInterruptShutdown;
@@ -223,6 +224,25 @@ begin
 
   AssertTrue(FBackendObject.CompleteOperation(
     ConnectId, lbekOperationFailed));
+
+  AssertEquals(Ord(lbssError), Ord(Session.State));
+end;
+
+procedure TLazBleCentralManagerTest.DiscoveryFailureMovesSessionToError;
+var
+  ConnectId: TBleOperationId;
+  DiscoveryId: TBleOperationId;
+  Session: TBleGattSession;
+begin
+  Session := FManager.CreateSession('device-1');
+  ConnectId := Session.Connect;
+  EmitOperationEvent(lbekConnected, ConnectId, 'device-1',
+    Session.Generation);
+  DiscoveryId := FBackendObject.OperationIds[
+    FBackendObject.CommandCount - 1];
+
+  AssertTrue(FBackendObject.CompleteOperation(
+    DiscoveryId, lbekOperationFailed));
 
   AssertEquals(Ord(lbssError), Ord(Session.State));
 end;

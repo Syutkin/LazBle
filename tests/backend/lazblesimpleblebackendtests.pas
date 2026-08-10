@@ -22,6 +22,9 @@ type
     FOpenCount: Integer;
     FCloseCount: Integer;
     FCancelCount: Integer;
+    FExecuteCount: Integer;
+    FBlockCommand: Boolean;
+    FBlockedCommandKind: TLazBleBackendCommandKind;
     FLastEventSink: ILazBleSimpleBleDriverEventSink;
   public
     constructor Create;
@@ -33,12 +36,14 @@ type
       const AEventSink: ILazBleSimpleBleDriverEventSink;
       out AErrorCode: Integer; out AErrorMessage: string): Boolean;
     procedure CancelCurrent;
+    procedure BlockCommand(const ACommandKind: TLazBleBackendCommandKind);
     function WaitUntilStarted: Boolean;
     procedure AllowCompletion;
     procedure EmitLateEvent;
     property OpenCount: Integer read FOpenCount;
     property CloseCount: Integer read FCloseCount;
     property CancelCount: Integer read FCancelCount;
+    property ExecuteCount: Integer read FExecuteCount;
   end;
 
   TThreadSafeEventSink = class(TInterfacedObject, ILazBleBackendEventSink)
@@ -70,7 +75,13 @@ type
   published
     procedure ScanRunsAsynchronouslyAndCopiesEvents;
     procedure CancelProducesOneCancelledTerminalEvent;
+    procedure CancelBeforeStartSkipsDriverAndCompletesOnce;
+    procedure CancelDuringGattIoCompletesOnce;
+    procedure CancelAfterCompletionDoesNothing;
     procedure ShutdownCancelsScanAndClosesDriverFirst;
+    procedure ShutdownCancelsActiveAndPendingGattOperations;
+    procedure DestroyCancelsActiveOperationAndDetachesDriverSink;
+    procedure ExplicitShutdownAndDestroyCloseDriverOnce;
     procedure DriverFailureIsDeliveredAsynchronously;
     procedure GattCommandsPreserveTypedProgressEvents;
     procedure EmitsNothingAfterTerminalShutdown;
@@ -84,6 +95,8 @@ begin
   inherited Create;
   FStartedEvent := TEvent.Create(nil, True, False, '');
   FReleaseEvent := TEvent.Create(nil, True, False, '');
+  FBlockCommand := True;
+  FBlockedCommandKind := lbckStartScan;
 end;
 
 destructor TFakeSimpleBleDriver.Destroy;
@@ -113,11 +126,18 @@ var
   BackendEvent: TLazBleBackendEvent;
 begin
   FLastEventSink := AEventSink;
+  Inc(FExecuteCount);
   if ACommand.Kind = lbckStopScan then
   begin
     AErrorCode := -1;
     AErrorMessage := 'Unsupported fake driver command';
     Exit(False);
+  end;
+
+  if FBlockCommand and (ACommand.Kind = FBlockedCommandKind) then
+  begin
+    FStartedEvent.SetEvent;
+    FReleaseEvent.WaitFor(INFINITE);
   end;
 
   BackendEvent := Default(TLazBleBackendEvent);
@@ -129,8 +149,6 @@ begin
   case ACommand.Kind of
     lbckStartScan:
       begin
-        FStartedEvent.SetEvent;
-        FReleaseEvent.WaitFor(INFINITE);
         BackendEvent.Kind := lbekScanStarted;
         BackendEvent.AdapterId := ACommand.AdapterId;
         AEventSink.Emit(BackendEvent);
@@ -187,10 +205,89 @@ begin
   Result := True;
 end;
 
+procedure TFakeSimpleBleDriver.BlockCommand(
+  const ACommandKind: TLazBleBackendCommandKind);
+begin
+  FBlockedCommandKind := ACommandKind;
+  FBlockCommand := True;
+  FStartedEvent.ResetEvent;
+  FReleaseEvent.ResetEvent;
+end;
+
 procedure TFakeSimpleBleDriver.CancelCurrent;
 begin
   Inc(FCancelCount);
   FReleaseEvent.SetEvent;
+end;
+
+procedure TLazBleSimpleBleBackendTest.CancelBeforeStartSkipsDriverAndCompletesOnce;
+var
+  ActiveCommand: TLazBleBackendCommand;
+  ActiveOperationId: TBleOperationId;
+  PendingCommand: TLazBleBackendCommand;
+  PendingOperationId: TBleOperationId;
+begin
+  FDriverObject.BlockCommand(lbckRead);
+  ActiveCommand := Default(TLazBleBackendCommand);
+  ActiveCommand.Kind := lbckRead;
+  ActiveOperationId := FBackend.Submit(ActiveCommand);
+  AssertTrue(FDriverObject.WaitUntilStarted);
+
+  PendingCommand := Default(TLazBleBackendCommand);
+  PendingCommand.Kind := lbckWrite;
+  PendingOperationId := FBackend.Submit(PendingCommand);
+  FBackend.Cancel(PendingOperationId);
+  FDriverObject.AllowCompletion;
+
+  AssertTrue(FEventSinkObject.WaitForEventCount(3));
+  AssertEquals(1, FDriverObject.ExecuteCount);
+  AssertEquals(Ord(lbekOperationSucceeded),
+    Ord(FEventSinkObject.Events[1].Kind));
+  AssertTrue(ActiveOperationId = FEventSinkObject.Events[1].OperationId);
+  AssertEquals(Ord(lbekOperationCancelled),
+    Ord(FEventSinkObject.Events[2].Kind));
+  AssertTrue(PendingOperationId = FEventSinkObject.Events[2].OperationId);
+end;
+
+procedure TLazBleSimpleBleBackendTest.CancelDuringGattIoCompletesOnce;
+var
+  Command: TLazBleBackendCommand;
+  OperationId: TBleOperationId;
+begin
+  FDriverObject.BlockCommand(lbckRead);
+  Command := Default(TLazBleBackendCommand);
+  Command.Kind := lbckRead;
+  OperationId := FBackend.Submit(Command);
+  AssertTrue(FDriverObject.WaitUntilStarted);
+
+  FBackend.Cancel(OperationId);
+
+  AssertTrue(FEventSinkObject.WaitForEventCount(2));
+  AssertEquals(1, FDriverObject.CancelCount);
+  AssertEquals(1, FDriverObject.ExecuteCount);
+  AssertEquals(Ord(lbekReadResult),
+    Ord(FEventSinkObject.Events[0].Kind));
+  AssertEquals(Ord(lbekOperationCancelled),
+    Ord(FEventSinkObject.Events[1].Kind));
+  AssertTrue(OperationId = FEventSinkObject.Events[1].OperationId);
+end;
+
+procedure TLazBleSimpleBleBackendTest.CancelAfterCompletionDoesNothing;
+var
+  Command: TLazBleBackendCommand;
+  EventCountAfterCompletion: Integer;
+  OperationId: TBleOperationId;
+begin
+  Command := Default(TLazBleBackendCommand);
+  Command.Kind := lbckConnect;
+  OperationId := FBackend.Submit(Command);
+  AssertTrue(FEventSinkObject.WaitForEventCount(2));
+  EventCountAfterCompletion := FEventSinkObject.EventCount;
+
+  FBackend.Cancel(OperationId);
+
+  AssertEquals(0, FDriverObject.CancelCount);
+  AssertEquals(EventCountAfterCompletion, FEventSinkObject.EventCount);
 end;
 
 function TFakeSimpleBleDriver.WaitUntilStarted: Boolean;
@@ -369,6 +466,87 @@ begin
   AssertEquals(Ord(lbekShutdownCompleted),
     Ord(FEventSinkObject.Events[4].Kind));
   AssertTrue(ShutdownId = FEventSinkObject.Events[4].OperationId);
+end;
+
+procedure TLazBleSimpleBleBackendTest.ShutdownCancelsActiveAndPendingGattOperations;
+var
+  ActiveCommand: TLazBleBackendCommand;
+  ActiveOperationId: TBleOperationId;
+  PendingCommand: TLazBleBackendCommand;
+  PendingOperationId: TBleOperationId;
+  SecondPendingOperationId: TBleOperationId;
+  ShutdownId: TBleOperationId;
+begin
+  FDriverObject.BlockCommand(lbckRead);
+  ActiveCommand := Default(TLazBleBackendCommand);
+  ActiveCommand.Kind := lbckRead;
+  ActiveOperationId := FBackend.Submit(ActiveCommand);
+  AssertTrue(FDriverObject.WaitUntilStarted);
+
+  PendingCommand := Default(TLazBleBackendCommand);
+  PendingCommand.Kind := lbckWrite;
+  PendingOperationId := FBackend.Submit(PendingCommand);
+  PendingCommand.Kind := lbckSubscribe;
+  SecondPendingOperationId := FBackend.Submit(PendingCommand);
+
+  ShutdownId := FBackend.BeginShutdown;
+
+  AssertTrue(FEventSinkObject.WaitForEventCount(5));
+  AssertEquals(1, FDriverObject.CancelCount);
+  AssertEquals(1, FDriverObject.ExecuteCount);
+  AssertEquals(1, FDriverObject.CloseCount);
+  AssertEquals(Ord(lbekOperationCancelled),
+    Ord(FEventSinkObject.Events[1].Kind));
+  AssertTrue(ActiveOperationId = FEventSinkObject.Events[1].OperationId);
+  AssertEquals(Ord(lbekOperationCancelled),
+    Ord(FEventSinkObject.Events[2].Kind));
+  AssertTrue(PendingOperationId = FEventSinkObject.Events[2].OperationId);
+  AssertEquals(Ord(lbekOperationCancelled),
+    Ord(FEventSinkObject.Events[3].Kind));
+  AssertTrue(SecondPendingOperationId =
+    FEventSinkObject.Events[3].OperationId);
+  AssertEquals(Ord(lbekShutdownCompleted),
+    Ord(FEventSinkObject.Events[4].Kind));
+  AssertTrue(ShutdownId = FEventSinkObject.Events[4].OperationId);
+end;
+
+procedure TLazBleSimpleBleBackendTest.DestroyCancelsActiveOperationAndDetachesDriverSink;
+var
+  Command: TLazBleBackendCommand;
+  EventCountAfterDestroy: Integer;
+begin
+  FDriverObject.BlockCommand(lbckRead);
+  Command := Default(TLazBleBackendCommand);
+  Command.Kind := lbckRead;
+  FBackend.Submit(Command);
+  AssertTrue(FDriverObject.WaitUntilStarted);
+
+  FBackend := nil;
+
+  AssertEquals(1, FDriverObject.CancelCount);
+  AssertEquals(1, FDriverObject.CloseCount);
+  EventCountAfterDestroy := FEventSinkObject.EventCount;
+  AssertTrue(EventCountAfterDestroy >= 3);
+  AssertEquals(Ord(lbekShutdownCompleted),
+    Ord(FEventSinkObject.Events[EventCountAfterDestroy - 1].Kind));
+
+  FDriverObject.EmitLateEvent;
+
+  AssertEquals(EventCountAfterDestroy, FEventSinkObject.EventCount);
+end;
+
+procedure TLazBleSimpleBleBackendTest.ExplicitShutdownAndDestroyCloseDriverOnce;
+var
+  ShutdownId: TBleOperationId;
+begin
+  ShutdownId := FBackend.BeginShutdown;
+  AssertTrue(ShutdownId <> InvalidBleOperationId);
+  AssertTrue(FEventSinkObject.WaitForEventCount(1));
+  AssertEquals(1, FDriverObject.CloseCount);
+
+  FBackend := nil;
+
+  AssertEquals(1, FDriverObject.CloseCount);
 end;
 
 procedure TLazBleSimpleBleBackendTest.DriverFailureIsDeliveredAsynchronously;

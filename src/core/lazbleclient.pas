@@ -136,6 +136,8 @@ type
     procedure AttachProfiles;
     procedure DetachProfiles;
     procedure EvaluateProfiles;
+  protected
+    procedure CancelForShutdown;
   public
     { Applications obtain clients from TLazBle.CreateClient. }
     constructor Create(const ASession: TBleGattSession;
@@ -658,6 +660,16 @@ begin
   end
   else if Sender = FDisconnectOperation then
     FDisconnectOperation.Complete(lbopCancelled);
+end;
+
+procedure TBleClient.CancelForShutdown;
+begin
+  if Assigned(FConnectOperation) and
+    (FConnectOperation.State = lbopPending) then
+    FConnectOperation.Cancel;
+  if Assigned(FDisconnectOperation) and
+    (FDisconnectOperation.State = lbopPending) then
+    FDisconnectOperation.Cancel;
 end;
 
 function TBleClient.ConnectAsync: TBleOperation;

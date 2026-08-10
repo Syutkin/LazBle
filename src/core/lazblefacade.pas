@@ -32,6 +32,7 @@ type
       const AState: TLazBleSessionState);
     procedure ManagerStateChanged(Sender: TObject;
       const AState: TLazBleCentralState);
+    procedure CancelPendingOperations;
     procedure CompleteSessionOperations(const ASession: TBleGattSession;
       const AState: TLazBleSessionState);
     function ConnectSessionAsync(const ADeviceId: string):
@@ -56,6 +57,8 @@ uses
   LazBleSimpleBleBackend;
 
 type
+  TBleClientAccess = class(TBleClient);
+
   TBleOperationAccess = class(TBleOperation)
   public
     procedure Finish(const AState: TLazBleOperationState;
@@ -243,6 +246,24 @@ begin
     TBleOperationAccess(FShutdownOperation).Finish(lbopSucceeded);
 end;
 
+procedure TLazBle.CancelPendingOperations;
+var
+  Index: Integer;
+  Operation: TBleOperation;
+  OperationCount: Integer;
+begin
+  for Index := 0 to FClients.Count - 1 do
+    TBleClientAccess(FClients[Index]).CancelForShutdown;
+  OperationCount := FOperations.Count;
+  for Index := 0 to OperationCount - 1 do
+    if TObject(FOperations[Index]) is TBleOperation then
+    begin
+      Operation := TBleOperation(FOperations[Index]);
+      if Operation.State = lbopPending then
+        Operation.Cancel;
+    end;
+end;
+
 function TLazBle.ScanAsync(const AAdapterId: string;
   const ATimeoutMs: Cardinal): TBleScanOperation;
 begin
@@ -351,6 +372,7 @@ function TLazBle.ShutdownAsync: TBleOperation;
 begin
   if Assigned(FShutdownOperation) then
     Exit(FShutdownOperation);
+  CancelPendingOperations;
   FShutdownOperation := TBleOperation.Create(nil);
   FOperations.Add(FShutdownOperation);
   if FManager.State = lbcsShutdown then

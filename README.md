@@ -23,6 +23,12 @@ Operation := Client.ConnectAsync;
 Console applications can use `TLazBleSync` from `LazBleSync`; GUI applications
 should use the asynchronous API.
 
+Backend events and asynchronous completion callbacks run on the thread that
+delivers the backend event; the SimpleBLE backend uses its worker thread.
+LazBle does not marshal callbacks to the LCL main thread. Handlers must be short
+and thread-safe, and GUI applications must marshal them before accessing LCL
+controls or application state confined to the main thread.
+
 ## Build and test
 
 ```sh

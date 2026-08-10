@@ -32,6 +32,18 @@ type
     property DetachCount: Integer read FDetachCount;
   end;
 
+  TTrackedGattProfile = class(TManualGattProfile)
+  private
+    FBackend: TFakeLazBleBackend;
+    FBackendHadSinkWhenDestroyed: PBoolean;
+    FDestroyCount: PInteger;
+  public
+    constructor Create(const ABackend: TFakeLazBleBackend;
+      const ADestroyCount: PInteger;
+      const ABackendHadSinkWhenDestroyed: PBoolean);
+    destructor Destroy; override;
+  end;
+
   TClientOperationObserver = class
   private
     FCompletionCount: Integer;
@@ -67,6 +79,7 @@ type
     procedure CancellingScanCancelsBackendOperation;
     procedure TimedOutScanKeepsTimedOutStateAfterTerminalEvent;
     procedure ConnectCompletesAfterServiceDiscovery;
+    procedure TwoClientsConnectIndependently;
     procedure ShutdownCompletesAfterBackendShutdown;
     procedure SyncScanWaitsForTerminalEvent;
     procedure DefaultFacadeDoesNotLoadNativeLibraryWhenCreated;
@@ -76,7 +89,8 @@ type
     procedure OptionalProfileFailureDoesNotFailClient;
     procedure RequiredProfileFailureFailsClient;
     procedure RequiredProfileFailureAfterReadyInvalidatesClient;
-    procedure ReconnectAttachesRegisteredProfilesAgain;
+    procedure SecondConnectAttachesRegisteredProfilesAgain;
+    procedure SecondConnectAttachesAllProfilesToTheSameClient;
     procedure CreateClientRejectsDuplicateDevice;
     procedure FindClientReturnsRegisteredClient;
     procedure RemoveClientReleasesDeviceRegistration;
@@ -84,6 +98,9 @@ type
     procedure ProfileCannotBeAddedToTwoClients;
     procedure ProfileCannotBeAddedAfterConnectStarts;
     procedure ClientExposesGattOperations;
+    procedure FacadeOwnsClientsProfilesAndDetachesBackend;
+    procedure ShutdownCancelsActiveClientConnection;
+    procedure ShutdownCancelsClientWhileProfileIsAttaching;
   end;
 
 implementation
@@ -106,6 +123,27 @@ end;
 procedure TManualGattProfile.FailAttach(const AMessage: string);
 begin
   MarkError(AMessage);
+end;
+
+constructor TTrackedGattProfile.Create(const ABackend: TFakeLazBleBackend;
+  const ADestroyCount: PInteger;
+  const ABackendHadSinkWhenDestroyed: PBoolean);
+begin
+  inherited Create;
+  FBackend := ABackend;
+  FDestroyCount := ADestroyCount;
+  FBackendHadSinkWhenDestroyed := ABackendHadSinkWhenDestroyed;
+end;
+
+destructor TTrackedGattProfile.Destroy;
+begin
+  if Assigned(FDestroyCount) then
+    Inc(FDestroyCount^);
+  if Assigned(FBackendHadSinkWhenDestroyed) then
+    FBackendHadSinkWhenDestroyed^ := Assigned(FBackend) and
+      FBackend.HasEventSink;
+  FBackend := nil;
+  inherited Destroy;
 end;
 
 procedure TClientOperationObserver.Completed(Sender: TObject);
@@ -256,6 +294,43 @@ begin
   AssertTrue(Client.Generation > 0);
 end;
 
+procedure TLazBleClientTest.TwoClientsConnectIndependently;
+var
+  FirstClient: TBleClient;
+  FirstConnectId: TBleOperationId;
+  FirstDiscoveryId: TBleOperationId;
+  SecondClient: TBleClient;
+  SecondConnectId: TBleOperationId;
+  SecondDiscoveryId: TBleOperationId;
+begin
+  FirstClient := FBle.CreateClient('device-a');
+  SecondClient := FBle.CreateClient('device-b');
+  FirstClient.ConnectAsync;
+  FirstConnectId := FBackendObject.OperationIds[0];
+  SecondClient.ConnectAsync;
+  SecondConnectId := FBackendObject.OperationIds[1];
+
+  EmitEvent(lbekConnected, FirstConnectId, FirstClient.DeviceId, '', 0,
+    FirstClient.Generation);
+  FirstDiscoveryId := FBackendObject.OperationIds[
+    FBackendObject.CommandCount - 1];
+  EmitEvent(lbekServicesDiscovered, FirstDiscoveryId,
+    FirstClient.DeviceId, '', 0, FirstClient.Generation);
+
+  AssertEquals(Ord(lbcstReady), Ord(FirstClient.State));
+  AssertEquals(Ord(lbcstConnecting), Ord(SecondClient.State));
+
+  EmitEvent(lbekConnected, SecondConnectId, SecondClient.DeviceId, '', 0,
+    SecondClient.Generation);
+  SecondDiscoveryId := FBackendObject.OperationIds[
+    FBackendObject.CommandCount - 1];
+  EmitEvent(lbekServicesDiscovered, SecondDiscoveryId,
+    SecondClient.DeviceId, '', 0, SecondClient.Generation);
+
+  AssertEquals(Ord(lbcstReady), Ord(FirstClient.State));
+  AssertEquals(Ord(lbcstReady), Ord(SecondClient.State));
+end;
+
 procedure TLazBleClientTest.ShutdownCompletesAfterBackendShutdown;
 var
   Operation: TBleOperation;
@@ -397,7 +472,7 @@ begin
   AssertEquals(Ord(lbcstError), Ord(Client.State));
 end;
 
-procedure TLazBleClientTest.ReconnectAttachesRegisteredProfilesAgain;
+procedure TLazBleClientTest.SecondConnectAttachesRegisteredProfilesAgain;
 var
   Client: TBleClient;
   DisconnectId: TBleOperationId;
@@ -428,6 +503,40 @@ begin
 
   AssertEquals(Ord(lbcstReady), Ord(Client.State));
   AssertEquals(Ord(lbopSucceeded), Ord(Operation.State));
+end;
+
+procedure TLazBleClientTest.SecondConnectAttachesAllProfilesToTheSameClient;
+var
+  Client: TBleClient;
+  DisconnectId: TBleOperationId;
+  FirstProfile: TManualGattProfile;
+  SecondProfile: TManualGattProfile;
+begin
+  Client := FBle.CreateClient('device-a');
+  FirstProfile := TManualGattProfile.Create;
+  SecondProfile := TManualGattProfile.Create;
+  Client.AddProfile(FirstProfile);
+  Client.AddProfile(SecondProfile);
+
+  Client.ConnectAsync;
+  CompleteTransportClient(Client);
+  FirstProfile.CompleteAttach;
+  SecondProfile.CompleteAttach;
+  AssertEquals(Ord(lbcstReady), Ord(Client.State));
+
+  Client.DisconnectAsync;
+  DisconnectId := FBackendObject.OperationIds[
+    FBackendObject.CommandCount - 1];
+  EmitEvent(lbekDisconnected, DisconnectId, Client.DeviceId, '', 0,
+    Client.Generation);
+
+  Client.ConnectAsync;
+  CompleteTransportClient(Client);
+
+  AssertEquals(2, FirstProfile.AttachCount);
+  AssertEquals(2, SecondProfile.AttachCount);
+  AssertTrue(FirstProfile.AttachedGeneration = Client.Generation);
+  AssertTrue(SecondProfile.AttachedGeneration = Client.Generation);
 end;
 
 procedure TLazBleClientTest.CreateClientRejectsDuplicateDevice;
@@ -555,6 +664,91 @@ begin
   AssertEquals(Ord(lbckRead), Ord(FBackendObject.Commands[2].Kind));
   AssertEquals(Ord(lbckWrite), Ord(FBackendObject.Commands[3].Kind));
   AssertEquals(Ord(lbckSubscribe), Ord(FBackendObject.Commands[4].Kind));
+end;
+
+procedure TLazBleClientTest.FacadeOwnsClientsProfilesAndDetachesBackend;
+var
+  BackendHadSinkWhenProfileDestroyed: Boolean;
+  Client: TBleClient;
+  DestroyCount: Integer;
+  Profile: TTrackedGattProfile;
+begin
+  BackendHadSinkWhenProfileDestroyed := False;
+  DestroyCount := 0;
+  Client := FBle.CreateClient('device-a');
+  Profile := TTrackedGattProfile.Create(FBackendObject, @DestroyCount,
+    @BackendHadSinkWhenProfileDestroyed);
+  Client.AddProfile(Profile);
+
+  FBle.Free;
+  FBle := nil;
+
+  AssertEquals(1, DestroyCount);
+  AssertTrue(BackendHadSinkWhenProfileDestroyed);
+  AssertFalse(FBackendObject.HasEventSink);
+end;
+
+procedure TLazBleClientTest.ShutdownCancelsActiveClientConnection;
+var
+  Client: TBleClient;
+  ConnectOperation: TBleOperation;
+  ConnectOperationId: TBleOperationId;
+  Index: Integer;
+  OperationCount: Integer;
+  ShutdownOperation: TBleOperation;
+begin
+  Client := FBle.CreateClient('device-a');
+  ConnectOperation := Client.ConnectAsync;
+  ConnectOperationId := FBackendObject.OperationIds[0];
+
+  ShutdownOperation := FBle.ShutdownAsync;
+
+  AssertTrue(FBackendObject.CancellationWasRequested(ConnectOperationId));
+  OperationCount := FBackendObject.CommandCount;
+  for Index := 0 to OperationCount - 1 do
+  begin
+    AssertTrue(FBackendObject.CancellationWasRequested(
+      FBackendObject.OperationIds[Index]));
+    AssertTrue(FBackendObject.CompleteOperation(
+      FBackendObject.OperationIds[Index], lbekOperationCancelled));
+  end;
+  AssertEquals(Ord(lbopCancelled), Ord(ConnectOperation.State));
+  AssertEquals(Ord(lbcstDisconnected), Ord(Client.State));
+  AssertTrue(FBackendObject.CompleteShutdown);
+  AssertEquals(Ord(lbopSucceeded), Ord(ShutdownOperation.State));
+  AssertFalse(FBackendObject.HasEventSink);
+end;
+
+procedure TLazBleClientTest.ShutdownCancelsClientWhileProfileIsAttaching;
+var
+  Client: TBleClient;
+  ConnectOperation: TBleOperation;
+  DisconnectOperationId: TBleOperationId;
+  Profile: TManualGattProfile;
+  ShutdownOperation: TBleOperation;
+begin
+  Client := FBle.CreateClient('device-a');
+  Profile := TManualGattProfile.Create;
+  Client.AddProfile(Profile);
+  ConnectOperation := Client.ConnectAsync;
+  CompleteTransportClient(Client);
+  AssertTrue(FBackendObject.CompleteOperation(
+    FBackendObject.OperationIds[0], lbekOperationSucceeded));
+  AssertTrue(FBackendObject.CompleteOperation(
+    FBackendObject.OperationIds[1], lbekOperationSucceeded));
+  AssertEquals(Ord(lbcstAttachingProfiles), Ord(Client.State));
+
+  ShutdownOperation := FBle.ShutdownAsync;
+
+  AssertEquals(Ord(lbopCancelled), Ord(ConnectOperation.State));
+  AssertEquals(1, Profile.DetachCount);
+  DisconnectOperationId := FBackendObject.OperationIds[
+    FBackendObject.CommandCount - 1];
+  AssertTrue(FBackendObject.CancellationWasRequested(DisconnectOperationId));
+  AssertTrue(FBackendObject.CompleteOperation(DisconnectOperationId,
+    lbekOperationCancelled));
+  AssertTrue(FBackendObject.CompleteShutdown);
+  AssertEquals(Ord(lbopSucceeded), Ord(ShutdownOperation.State));
 end;
 
 procedure TLazBleClientTest.DefaultFacadeDoesNotLoadNativeLibraryWhenCreated;
