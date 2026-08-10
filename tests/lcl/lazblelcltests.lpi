@@ -14,7 +14,7 @@
       <UseAppBundle Value="False"/>
       <ResourceType Value="res"/>
     </General>
-    <Units Count="4">
+    <Units Count="5">
       <Unit0>
         <Filename Value="lazblelcltests.lpr"/>
         <IsPartOfProject Value="True"/>
@@ -34,6 +34,11 @@
         <IsPartOfProject Value="True"/>
         <UnitName Value="FakeLazBleBackend"/>
       </Unit3>
+      <Unit4>
+        <Filename Value="lazblecomponenttests.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="LazBleComponentTests"/>
+      </Unit4>
     </Units>
     <RequiredPackages Count="1">
       <Item1>

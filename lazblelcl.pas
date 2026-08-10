@@ -8,7 +8,7 @@ unit LazBleLCL;
 interface
 
 uses
-  LazBleLclDispatch, LazBleLclScan;
+  LazBleLclDispatch, LazBleLclScan, LazBleComponent;
 
 implementation
 

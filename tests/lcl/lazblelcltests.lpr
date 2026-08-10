@@ -8,7 +8,8 @@ uses
   {$ENDIF}
   ConsoleTestRunner,
   LazBleLclDispatchTests,
-  LazBleLclScanTests;
+  LazBleLclScanTests,
+  LazBleComponentTests;
 
 var
   Runner: TTestRunner;
