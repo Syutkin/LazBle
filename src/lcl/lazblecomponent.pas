@@ -11,6 +11,9 @@ uses
   LazBleBackend,
   LazBleFacade,
   LazBleClient,
+  LazBleOperation,
+  LazBleGattProfile,
+  LazBleLclDispatch,
   LazBleLclScan;
 
 const
@@ -76,6 +79,12 @@ type
     FLazBle: TLazBleComponent;
     FDeviceId: string;
     FDeviceName: string;
+    FCoreClient: TBleClient;
+    FDispatch: TLazBleLclDispatch;
+    FConnectOperation: IBleOperation;
+    FDisconnectOperation: IBleOperation;
+    FLastErrorCode: Integer;
+    FLastErrorMessage: string;
     FOnConfigureClient: TNotifyEvent;
     FOnStateChanged: TLazBleClientStateChangedEvent;
     FOnConnected: TNotifyEvent;
@@ -83,13 +92,32 @@ type
     FOnError: TLazBleLclErrorEvent;
     procedure SetLazBle(const AValue: TLazBleComponent);
     procedure SetDeviceId(const AValue: string);
+    function GetState: TLazBleClientState;
+    procedure EnsureCoreClient;
+    procedure RemoveDisconnectedCoreClient;
+    procedure DetachCoreClient;
+    procedure CoreStateChanged(Sender: TObject;
+      const AState: TLazBleClientState);
+    procedure ConnectCompleted(Sender: TObject);
+    procedure DisconnectCompleted(Sender: TObject);
+    procedure DispatchMessage(Sender: TObject;
+      const AMessage: TLazBleLclDispatchMessage);
   protected
     procedure Notification(AComponent: TComponent;
       Operation: TOperation); override;
   public
+    constructor Create(AOwner: TComponent); override;
     destructor Destroy; override;
     procedure SelectDevice(const ADevice: TBleDeviceInfo);
+    procedure AddProfile(const AProfile: TBleGattProfile;
+      const ARequired: Boolean = True);
+    procedure Connect;
+    procedure Disconnect;
     property DeviceName: string read FDeviceName;
+    property State: TLazBleClientState read GetState;
+    property LastErrorCode: Integer read FLastErrorCode;
+    property LastErrorMessage: string read FLastErrorMessage;
+    property CoreClient: TBleClient read FCoreClient;
   published
     property LazBle: TLazBleComponent read FLazBle write SetLazBle;
     property DeviceId: string read FDeviceId write SetDeviceId;
@@ -104,6 +132,69 @@ type
   end;
 
 implementation
+
+type
+  TLazBleLclClientOperationKind = (
+    lblcokConnect,
+    lblcokDisconnect
+  );
+
+  TLazBleLclClientStateMessage = class(TLazBleLclDispatchMessage)
+  private
+    FState: TLazBleClientState;
+  public
+    constructor Create(const AState: TLazBleClientState);
+    function Clone: TLazBleLclDispatchMessage; override;
+    property State: TLazBleClientState read FState;
+  end;
+
+  TLazBleLclClientCompletedMessage = class(TLazBleLclDispatchMessage)
+  private
+    FKind: TLazBleLclClientOperationKind;
+    FState: TLazBleOperationState;
+    FErrorCode: Integer;
+    FErrorMessage: string;
+  public
+    constructor Create(const AKind: TLazBleLclClientOperationKind;
+      const AState: TLazBleOperationState; const AErrorCode: Integer;
+      const AErrorMessage: string);
+    function Clone: TLazBleLclDispatchMessage; override;
+    property Kind: TLazBleLclClientOperationKind read FKind;
+    property State: TLazBleOperationState read FState;
+    property ErrorCode: Integer read FErrorCode;
+    property ErrorMessage: string read FErrorMessage;
+  end;
+
+constructor TLazBleLclClientStateMessage.Create(
+  const AState: TLazBleClientState);
+begin
+  inherited Create;
+  FState := AState;
+end;
+
+function TLazBleLclClientStateMessage.Clone: TLazBleLclDispatchMessage;
+begin
+  Result := TLazBleLclClientStateMessage.Create(FState);
+end;
+
+constructor TLazBleLclClientCompletedMessage.Create(
+  const AKind: TLazBleLclClientOperationKind;
+  const AState: TLazBleOperationState; const AErrorCode: Integer;
+  const AErrorMessage: string);
+begin
+  inherited Create;
+  FKind := AKind;
+  FState := AState;
+  FErrorCode := AErrorCode;
+  FErrorMessage := AErrorMessage;
+end;
+
+function TLazBleLclClientCompletedMessage.Clone:
+  TLazBleLclDispatchMessage;
+begin
+  Result := TLazBleLclClientCompletedMessage.Create(FKind, FState,
+    FErrorCode, FErrorMessage);
+end;
 
 constructor TLazBleComponent.Create(AOwner: TComponent);
 begin
@@ -224,9 +315,27 @@ begin
     CompletedHandler(Self, AState);
 end;
 
-destructor TLazBleLclClient.Destroy;
+constructor TLazBleLclClient.Create(AOwner: TComponent);
 begin
-  SetLazBle(nil);
+  inherited Create(AOwner);
+  FDispatch := TLazBleLclDispatch.Create(@DispatchMessage);
+end;
+
+destructor TLazBleLclClient.Destroy;
+var
+  OldCoreClient: TBleClient;
+begin
+  FDispatch.Detach;
+  OldCoreClient := FCoreClient;
+  DetachCoreClient;
+  if Assigned(OldCoreClient) and Assigned(FLazBle) and
+    (OldCoreClient.State = lbcstDisconnected) then
+    FLazBle.Facade.RemoveClient(OldCoreClient);
+  if Assigned(FLazBle) then
+    FLazBle.RemoveFreeNotification(Self);
+  FLazBle := nil;
+  FDispatch.Free;
+  FDispatch := nil;
   inherited Destroy;
 end;
 
@@ -234,6 +343,7 @@ procedure TLazBleLclClient.SetLazBle(const AValue: TLazBleComponent);
 begin
   if FLazBle = AValue then
     Exit;
+  RemoveDisconnectedCoreClient;
   if Assigned(FLazBle) then
     FLazBle.RemoveFreeNotification(Self);
   FLazBle := AValue;
@@ -245,8 +355,71 @@ procedure TLazBleLclClient.SetDeviceId(const AValue: string);
 begin
   if FDeviceId = AValue then
     Exit;
+  RemoveDisconnectedCoreClient;
   FDeviceId := AValue;
   FDeviceName := '';
+end;
+
+function TLazBleLclClient.GetState: TLazBleClientState;
+begin
+  if Assigned(FCoreClient) then
+    Result := FCoreClient.State
+  else
+    Result := lbcstDisconnected;
+end;
+
+procedure TLazBleLclClient.EnsureCoreClient;
+var
+  Handler: TNotifyEvent;
+begin
+  if Assigned(FCoreClient) then
+    Exit;
+  if not Assigned(FLazBle) then
+    raise EInvalidOperation.Create('LazBle component is not assigned');
+  if FDeviceId = '' then
+    raise EInvalidOperation.Create('BLE device is not selected');
+
+  FCoreClient := FLazBle.Facade.CreateClient(FDeviceId);
+  FCoreClient.OnStateChanged := @CoreStateChanged;
+  try
+    Handler := FOnConfigureClient;
+    if Assigned(Handler) then
+      Handler(Self);
+  except
+    FCoreClient.OnStateChanged := nil;
+    FLazBle.Facade.RemoveClient(FCoreClient);
+    FCoreClient := nil;
+    raise;
+  end;
+end;
+
+procedure TLazBleLclClient.RemoveDisconnectedCoreClient;
+var
+  OldCoreClient: TBleClient;
+begin
+  if not Assigned(FCoreClient) then
+    Exit;
+  if FCoreClient.State <> lbcstDisconnected then
+    raise EInvalidOperation.Create(
+      'BLE device can only be changed while disconnected');
+  FDispatch.NextGeneration;
+  OldCoreClient := FCoreClient;
+  DetachCoreClient;
+  if Assigned(FLazBle) then
+    FLazBle.Facade.RemoveClient(OldCoreClient);
+end;
+
+procedure TLazBleLclClient.DetachCoreClient;
+begin
+  if Assigned(FConnectOperation) then
+    FConnectOperation.OnCompleted := nil;
+  if Assigned(FDisconnectOperation) then
+    FDisconnectOperation.OnCompleted := nil;
+  FConnectOperation := nil;
+  FDisconnectOperation := nil;
+  if Assigned(FCoreClient) then
+    FCoreClient.OnStateChanged := nil;
+  FCoreClient := nil;
 end;
 
 procedure TLazBleLclClient.Notification(AComponent: TComponent;
@@ -254,13 +427,156 @@ procedure TLazBleLclClient.Notification(AComponent: TComponent;
 begin
   inherited Notification(AComponent, Operation);
   if (Operation = opRemove) and (AComponent = FLazBle) then
+  begin
+    FDispatch.NextGeneration;
+    if Assigned(FConnectOperation) then
+      FConnectOperation.OnCompleted := nil;
+    if Assigned(FDisconnectOperation) then
+      FDisconnectOperation.OnCompleted := nil;
+    FConnectOperation := nil;
+    FDisconnectOperation := nil;
+    FCoreClient := nil;
     FLazBle := nil;
+  end;
 end;
 
 procedure TLazBleLclClient.SelectDevice(const ADevice: TBleDeviceInfo);
 begin
-  FDeviceId := ADevice.DeviceId;
+  SetDeviceId(ADevice.DeviceId);
   FDeviceName := ADevice.DeviceName;
+end;
+
+procedure TLazBleLclClient.AddProfile(const AProfile: TBleGattProfile;
+  const ARequired: Boolean);
+begin
+  EnsureCoreClient;
+  FCoreClient.AddProfile(AProfile, ARequired);
+end;
+
+procedure TLazBleLclClient.Connect;
+begin
+  if Assigned(FConnectOperation) and
+    (FConnectOperation.State = lbopPending) then
+    Exit;
+  if Assigned(FConnectOperation) then
+    FConnectOperation.OnCompleted := nil;
+  FConnectOperation := nil;
+  EnsureCoreClient;
+  FLastErrorCode := 0;
+  FLastErrorMessage := '';
+  FDispatch.NextGeneration;
+  FConnectOperation := FCoreClient.ConnectAsync;
+  FConnectOperation.OnCompleted := @ConnectCompleted;
+end;
+
+procedure TLazBleLclClient.Disconnect;
+begin
+  if not Assigned(FCoreClient) then
+    Exit;
+  if Assigned(FDisconnectOperation) and
+    (FDisconnectOperation.State = lbopPending) then
+    Exit;
+  if Assigned(FDisconnectOperation) then
+    FDisconnectOperation.OnCompleted := nil;
+  if Assigned(FConnectOperation) then
+    FConnectOperation.OnCompleted := nil;
+  FDisconnectOperation := nil;
+  FConnectOperation := nil;
+  FLastErrorCode := 0;
+  FLastErrorMessage := '';
+  FDispatch.NextGeneration;
+  FDisconnectOperation := FCoreClient.DisconnectAsync;
+  FDisconnectOperation.OnCompleted := @DisconnectCompleted;
+end;
+
+procedure TLazBleLclClient.CoreStateChanged(Sender: TObject;
+  const AState: TLazBleClientState);
+var
+  Message: TLazBleLclClientStateMessage;
+begin
+  Message := TLazBleLclClientStateMessage.Create(AState);
+  try
+    FDispatch.Queue(Message);
+  finally
+    Message.Free;
+  end;
+end;
+
+procedure TLazBleLclClient.ConnectCompleted(Sender: TObject);
+var
+  Message: TLazBleLclClientCompletedMessage;
+  Operation: TBleOperation;
+begin
+  if not (Sender is TBleOperation) then
+    Exit;
+  Operation := TBleOperation(Sender);
+  Message := TLazBleLclClientCompletedMessage.Create(lblcokConnect,
+    Operation.State, Operation.ErrorCode, Operation.ErrorMessage);
+  try
+    FDispatch.Queue(Message);
+  finally
+    Message.Free;
+  end;
+end;
+
+procedure TLazBleLclClient.DisconnectCompleted(Sender: TObject);
+var
+  Message: TLazBleLclClientCompletedMessage;
+  Operation: TBleOperation;
+begin
+  if not (Sender is TBleOperation) then
+    Exit;
+  Operation := TBleOperation(Sender);
+  Message := TLazBleLclClientCompletedMessage.Create(lblcokDisconnect,
+    Operation.State, Operation.ErrorCode, Operation.ErrorMessage);
+  try
+    FDispatch.Queue(Message);
+  finally
+    Message.Free;
+  end;
+end;
+
+procedure TLazBleLclClient.DispatchMessage(Sender: TObject;
+  const AMessage: TLazBleLclDispatchMessage);
+var
+  CompletedHandler: TNotifyEvent;
+  CompletedMessage: TLazBleLclClientCompletedMessage;
+  ErrorHandler: TLazBleLclErrorEvent;
+  StateHandler: TLazBleClientStateChangedEvent;
+begin
+  if AMessage is TLazBleLclClientStateMessage then
+  begin
+    StateHandler := FOnStateChanged;
+    if Assigned(StateHandler) then
+      StateHandler(Self, TLazBleLclClientStateMessage(AMessage).State);
+    Exit;
+  end;
+  if not (AMessage is TLazBleLclClientCompletedMessage) then
+    Exit;
+
+  CompletedMessage := TLazBleLclClientCompletedMessage(AMessage);
+  if CompletedMessage.Kind = lblcokConnect then
+    FConnectOperation := nil
+  else
+    FDisconnectOperation := nil;
+
+  if CompletedMessage.State = lbopSucceeded then
+  begin
+    if CompletedMessage.Kind = lblcokConnect then
+      CompletedHandler := FOnConnected
+    else
+      CompletedHandler := FOnDisconnected;
+    if Assigned(CompletedHandler) then
+      CompletedHandler(Self);
+  end
+  else if CompletedMessage.State in [lbopFailed, lbopTimedOut] then
+  begin
+    FLastErrorCode := CompletedMessage.ErrorCode;
+    FLastErrorMessage := CompletedMessage.ErrorMessage;
+    ErrorHandler := FOnError;
+    if Assigned(ErrorHandler) then
+      ErrorHandler(Self, FLastErrorCode, FLastErrorMessage);
+  end;
 end;
 
 initialization

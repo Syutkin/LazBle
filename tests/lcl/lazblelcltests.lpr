@@ -10,7 +10,8 @@ uses
   LazBleLclDispatchTests,
   LazBleLclScanTests,
   LazBleComponentTests,
-  LazBleLclClientTests;
+  LazBleLclClientTests,
+  LazBleLclClientConnectionTests;
 
 var
   Runner: TTestRunner;
