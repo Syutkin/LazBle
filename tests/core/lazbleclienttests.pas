@@ -81,6 +81,8 @@ type
     procedure CreateClientRejectsDuplicateDevice;
     procedure FindClientReturnsRegisteredClient;
     procedure RemoveClientReleasesDeviceRegistration;
+    procedure ProfileCannotBeAddedToTwoClients;
+    procedure ProfileCannotBeAddedAfterConnectStarts;
   end;
 
 implementation
@@ -297,8 +299,9 @@ var
   Profile: TManualGattProfile;
 begin
   Connection := FBle.CreateClient('device-a');
-  Profile := TManualGattProfile.Create(Connection.Session);
+  Profile := TManualGattProfile.Create;
   Connection.AddProfile(Profile, True);
+  AssertTrue(Profile.Bound);
 
   Operation := Connection.ConnectAsync;
   CompleteTransportConnection(Connection);
@@ -318,7 +321,7 @@ var
   Profile: TNusProfile;
 begin
   Connection := FBle.CreateClient('device-a');
-  Profile := TNusProfile.Create(Connection.Session);
+  Profile := TNusProfile.Create;
   Connection.AddProfile(Profile, True);
 
   Operation := Connection.ConnectAsync;
@@ -345,8 +348,8 @@ var
   RequiredProfile: TManualGattProfile;
 begin
   Connection := FBle.CreateClient('device-a');
-  RequiredProfile := TManualGattProfile.Create(Connection.Session);
-  OptionalProfile := TManualGattProfile.Create(Connection.Session);
+  RequiredProfile := TManualGattProfile.Create;
+  OptionalProfile := TManualGattProfile.Create;
   Connection.AddProfile(RequiredProfile, True);
   Connection.AddProfile(OptionalProfile, False);
 
@@ -367,7 +370,7 @@ var
   Profile: TManualGattProfile;
 begin
   Connection := FBle.CreateClient('device-a');
-  Profile := TManualGattProfile.Create(Connection.Session);
+  Profile := TManualGattProfile.Create;
   Connection.AddProfile(Profile, True);
 
   Operation := Connection.ConnectAsync;
@@ -385,7 +388,7 @@ var
   Profile: TManualGattProfile;
 begin
   Connection := FBle.CreateClient('device-a');
-  Profile := TManualGattProfile.Create(Connection.Session);
+  Profile := TManualGattProfile.Create;
   Connection.AddProfile(Profile, True);
   Connection.ConnectAsync;
   CompleteTransportConnection(Connection);
@@ -405,7 +408,7 @@ var
   Profile: TManualGattProfile;
 begin
   Connection := FBle.CreateClient('device-a');
-  Profile := TManualGattProfile.Create(Connection.Session);
+  Profile := TManualGattProfile.Create;
   Connection.AddProfile(Profile, True);
 
   Operation := Connection.ConnectAsync;
@@ -465,6 +468,57 @@ begin
 
   AssertNull(FBle.FindClient('device-a'));
   AssertNotNull(FBle.CreateClient('device-a'));
+end;
+
+procedure TLazBleClientTest.ProfileCannotBeAddedToTwoClients;
+var
+  FirstClient: TBleClient;
+  Profile: TManualGattProfile;
+  RaisedExpectedException: Boolean;
+  SecondClient: TBleClient;
+begin
+  FirstClient := FBle.CreateClient('device-a');
+  SecondClient := FBle.CreateClient('device-b');
+  Profile := TManualGattProfile.Create;
+  FirstClient.AddProfile(Profile);
+
+  RaisedExpectedException := False;
+  try
+    SecondClient.AddProfile(Profile);
+  except
+    on EInvalidOperation do
+      RaisedExpectedException := True;
+  end;
+
+  AssertTrue(RaisedExpectedException);
+  AssertEquals(1, FirstClient.ProfileCount);
+  AssertEquals(0, SecondClient.ProfileCount);
+end;
+
+procedure TLazBleClientTest.ProfileCannotBeAddedAfterConnectStarts;
+var
+  Client: TBleClient;
+  Profile: TManualGattProfile;
+  RaisedExpectedException: Boolean;
+begin
+  Client := FBle.CreateClient('device-a');
+  Client.ConnectAsync;
+  Profile := TManualGattProfile.Create;
+  try
+    RaisedExpectedException := False;
+    try
+      Client.AddProfile(Profile);
+    except
+      on EInvalidOperation do
+        RaisedExpectedException := True;
+    end;
+
+    AssertTrue(RaisedExpectedException);
+    AssertFalse(Profile.Bound);
+    AssertEquals(0, Client.ProfileCount);
+  finally
+    Profile.Free;
+  end;
 end;
 
 procedure TLazBleClientTest.DefaultClientDoesNotLoadNativeLibraryWhenCreated;

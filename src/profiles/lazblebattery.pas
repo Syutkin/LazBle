@@ -45,7 +45,7 @@ type
     procedure DoDetach; override;
     procedure RefreshState; override;
   public
-    constructor Create(const ASession: TBleGattSession);
+    constructor Create;
     destructor Destroy; override;
     property LevelPercent: Integer read FLevelPercent;
     property ReadOperation: TBleGattOperation read FReadOperation;
@@ -57,9 +57,9 @@ type
 
 implementation
 
-constructor TBleBatteryProfile.Create(const ASession: TBleGattSession);
+constructor TBleBatteryProfile.Create;
 begin
-  inherited Create(ASession);
+  inherited Create;
   FPhase := lbbpDetached;
   FLevelPercent := UnknownBatteryLevel;
 end;

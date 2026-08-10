@@ -20,6 +20,16 @@ uses
   FakeLazBleBackend;
 
 type
+  TTestBatteryProfile = class(TBleBatteryProfile)
+  public
+    procedure BindToSession(const ASession: TBleGattSession);
+  end;
+
+  TTestNusProfile = class(TNusProfile)
+  public
+    procedure BindToSession(const ASession: TBleGattSession);
+  end;
+
   TBatteryObserver = class
   private
     FCallCount: Integer;
@@ -48,7 +58,7 @@ type
     FBackendObject: TFakeLazBleBackend;
     FManager: TBleCentralManager;
     FSession: TBleGattSession;
-    FProfile: TBleBatteryProfile;
+    FProfile: TTestBatteryProfile;
     procedure EmitEvent(const AKind: TLazBleBackendEventKind;
       const AOperationId: TBleOperationId;
       const ASubscriptionId: TBleSubscriptionId;
@@ -70,6 +80,16 @@ type
   end;
 
 implementation
+
+procedure TTestBatteryProfile.BindToSession(const ASession: TBleGattSession);
+begin
+  BindSession(ASession);
+end;
+
+procedure TTestNusProfile.BindToSession(const ASession: TBleGattSession);
+begin
+  BindSession(ASession);
+end;
 
 procedure TBatteryObserver.LevelChanged(Sender: TObject;
   const ADeviceId: string; const ALevelPercent: Integer);
@@ -139,7 +159,8 @@ begin
   EmitEvent(lbekConnected, ConnectId, InvalidBleSubscriptionId, []);
   EmitEvent(lbekServicesDiscovered, FBackendObject.OperationIds[1],
     InvalidBleSubscriptionId, []);
-  FProfile := TBleBatteryProfile.Create(FSession);
+  FProfile := TTestBatteryProfile.Create;
+  FProfile.BindToSession(FSession);
 end;
 
 procedure TLazBleBatteryTest.TearDown;
@@ -260,11 +281,12 @@ end;
 
 procedure TLazBleBatteryTest.NusAndBatteryShareOneSession;
 var
-  NusProfile: TNusProfile;
+  NusProfile: TTestNusProfile;
   NusObserver: TNusObserver;
   NusSubscription: TBleSubscription;
 begin
-  NusProfile := TNusProfile.Create(FSession);
+  NusProfile := TTestNusProfile.Create;
+  NusProfile.BindToSession(FSession);
   NusObserver := TNusObserver.Create;
   try
     NusProfile.OnData := @NusObserver.DataReceived;

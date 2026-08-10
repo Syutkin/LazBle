@@ -9,7 +9,6 @@ uses
   LazBleTypes,
   LazBleGattOperation,
   LazBleGattSubscription,
-  LazBleGattSession,
   LazBleGattProfile,
   LazBleByteChannel;
 
@@ -30,11 +29,12 @@ type
     procedure SubscriptionStateChanged(Sender: TObject;
       const AState: TLazBleSubscriptionState);
   protected
+    procedure DoBind; override;
     procedure DoAttach; override;
     procedure DoDetach; override;
     procedure RefreshState; override;
   public
-    constructor Create(const ASession: TBleGattSession);
+    constructor Create;
     destructor Destroy; override;
     function SendAsync(const AValue: TBytes): TBleGattOperation;
     property Channel: TBleByteChannel read FChannel;
@@ -43,10 +43,14 @@ type
 
 implementation
 
-constructor TNusProfile.Create(const ASession: TBleGattSession);
+constructor TNusProfile.Create;
 begin
-  inherited Create(ASession);
-  FChannel := TBleByteChannel.Create(ASession, NusServiceUuid,
+  inherited Create;
+end;
+
+procedure TNusProfile.DoBind;
+begin
+  FChannel := TBleByteChannel.Create(Session, NusServiceUuid,
     NusRxCharacteristicUuid, NusTxCharacteristicUuid, lbwmCommand);
   FChannel.OnData := @ChannelDataReceived;
 end;
@@ -54,7 +58,8 @@ end;
 destructor TNusProfile.Destroy;
 begin
   Detach;
-  FChannel.OnData := nil;
+  if Assigned(FChannel) then
+    FChannel.OnData := nil;
   FChannel.Free;
   FChannel := nil;
   inherited Destroy;
@@ -75,6 +80,11 @@ end;
 
 procedure TNusProfile.DoAttach;
 begin
+  if not Assigned(FChannel) then
+  begin
+    MarkError('NUS profile is not bound to a client');
+    Exit;
+  end;
   FChannel.Attach;
   if Assigned(FChannel.Subscription) then
     FChannel.Subscription.OnStateChanged := @SubscriptionStateChanged;
@@ -84,6 +94,8 @@ end;
 
 procedure TNusProfile.DoDetach;
 begin
+  if not Assigned(FChannel) then
+    Exit;
   if Assigned(FChannel.Subscription) then
     FChannel.Subscription.OnStateChanged := nil;
   FChannel.Detach;
@@ -91,6 +103,8 @@ end;
 
 procedure TNusProfile.RefreshState;
 begin
+  if not Assigned(FChannel) then
+    Exit;
   case FChannel.State of
     lbchsReady:
       MarkReady;
@@ -103,7 +117,10 @@ end;
 
 function TNusProfile.SendAsync(const AValue: TBytes): TBleGattOperation;
 begin
-  Result := FChannel.SendAsync(AValue);
+  if Assigned(FChannel) then
+    Result := FChannel.SendAsync(AValue)
+  else
+    Result := nil;
 end;
 
 end.

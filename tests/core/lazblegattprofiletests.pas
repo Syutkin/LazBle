@@ -5,6 +5,8 @@ unit LazBleGattProfileTests;
 interface
 
 uses
+  Classes,
+  SysUtils,
   fpcunit,
   testregistry,
   LazBleGattSession,
@@ -19,6 +21,7 @@ type
     procedure DoAttach; override;
     procedure DoDetach; override;
   public
+    procedure BindToSession(const ASession: TBleGattSession);
     procedure CompleteAttach;
     procedure FailAttach(const AMessage: string);
     property AttachCount: Integer read FAttachCount;
@@ -36,6 +39,8 @@ type
     procedure AttachCapturesGenerationAndBecomesReady;
     procedure AttachAndDetachAreIdempotent;
     procedure DetachClearsErrorAndAllowsReattach;
+    procedure NewProfileStartsUnbound;
+    procedure AttachRequiresBinding;
   end;
 
 implementation
@@ -48,6 +53,11 @@ end;
 procedure TTestGattProfile.DoDetach;
 begin
   Inc(FDetachCount);
+end;
+
+procedure TTestGattProfile.BindToSession(const ASession: TBleGattSession);
+begin
+  BindSession(ASession);
 end;
 
 procedure TTestGattProfile.CompleteAttach;
@@ -64,7 +74,8 @@ procedure TLazBleGattProfileTest.SetUp;
 begin
   FSession := TBleGattSession.Create('device-1', nil, nil);
   FSession.Connect;
-  FProfile := TTestGattProfile.Create(FSession);
+  FProfile := TTestGattProfile.Create;
+  FProfile.BindToSession(FSession);
 end;
 
 procedure TLazBleGattProfileTest.TearDown;
@@ -115,6 +126,38 @@ begin
 
   AssertEquals(2, FProfile.AttachCount);
   AssertEquals(Ord(lbgpsAttaching), Ord(FProfile.State));
+end;
+
+procedure TLazBleGattProfileTest.NewProfileStartsUnbound;
+var
+  Profile: TTestGattProfile;
+begin
+  Profile := TTestGattProfile.Create;
+  try
+    AssertFalse(Profile.Bound);
+  finally
+    Profile.Free;
+  end;
+end;
+
+procedure TLazBleGattProfileTest.AttachRequiresBinding;
+var
+  Profile: TTestGattProfile;
+  RaisedExpectedException: Boolean;
+begin
+  Profile := TTestGattProfile.Create;
+  try
+    RaisedExpectedException := False;
+    try
+      Profile.Attach;
+    except
+      on EInvalidOperation do
+        RaisedExpectedException := True;
+    end;
+    AssertTrue(RaisedExpectedException);
+  finally
+    Profile.Free;
+  end;
 end;
 
 initialization

@@ -121,7 +121,7 @@ begin
   end;
 
   FConnection := FClientSync.CreateClient(DeviceId);
-  FProfile := TBleBatteryProfile.Create(FConnection.Session);
+  FProfile := TBleBatteryProfile.Create;
   FProfile.OnLevelChanged := @BatteryLevelChanged;
   FConnection.AddProfile(FProfile, True);
 

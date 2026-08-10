@@ -5,6 +5,7 @@ unit LazBleGattProfile;
 interface
 
 uses
+  Classes,
   SysUtils,
   LazBleGattSession;
 
@@ -32,16 +33,20 @@ type
     function GetDeviceId: string;
     function GetState: TLazBleGattProfileState;
     function GetReady: Boolean;
+    function GetBound: Boolean;
     procedure SetState(const AState: TLazBleGattProfileState);
   protected
+    procedure BindSession(const ASession: TBleGattSession);
+    procedure DoBind; virtual;
     procedure DoAttach; virtual; abstract;
     procedure DoDetach; virtual; abstract;
     procedure RefreshState; virtual;
     procedure MarkReady;
     procedure MarkError(const AMessage: string);
     property CurrentState: TLazBleGattProfileState read FState;
+    property Session: TBleGattSession read FSession;
   public
-    constructor Create(const ASession: TBleGattSession);
+    constructor Create;
     destructor Destroy; override;
     procedure Attach;
     procedure Detach;
@@ -49,7 +54,7 @@ type
       const AHandler: TLazBleGattProfileStateChangedEvent);
     procedure RemoveStateChangedHandler(
       const AHandler: TLazBleGattProfileStateChangedEvent);
-    property Session: TBleGattSession read FSession;
+    property Bound: Boolean read GetBound;
     property DeviceId: string read GetDeviceId;
     property AttachedGeneration: QWord read FAttachedGeneration;
     property State: TLazBleGattProfileState read GetState;
@@ -68,12 +73,9 @@ begin
     (TMethod(AFirst).Data = TMethod(ASecond).Data);
 end;
 
-constructor TBleGattProfile.Create(const ASession: TBleGattSession);
+constructor TBleGattProfile.Create;
 begin
   inherited Create;
-  if not Assigned(ASession) then
-    raise EArgumentNilException.Create('ASession');
-  FSession := ASession;
   FState := lbgpsDetached;
 end;
 
@@ -90,6 +92,30 @@ begin
     Result := FSession.DeviceId
   else
     Result := '';
+end;
+
+function TBleGattProfile.GetBound: Boolean;
+begin
+  Result := Assigned(FSession);
+end;
+
+procedure TBleGattProfile.BindSession(const ASession: TBleGattSession);
+begin
+  if not Assigned(ASession) then
+    raise EArgumentNilException.Create('ASession');
+  if Assigned(FSession) then
+    raise EInvalidOperation.Create('GATT profile is already bound');
+  FSession := ASession;
+  try
+    DoBind;
+  except
+    FSession := nil;
+    raise;
+  end;
+end;
+
+procedure TBleGattProfile.DoBind;
+begin
 end;
 
 function TBleGattProfile.GetState: TLazBleGattProfileState;
@@ -174,6 +200,8 @@ end;
 
 procedure TBleGattProfile.Attach;
 begin
+  if not Assigned(FSession) then
+    raise EInvalidOperation.Create('GATT profile is not bound to a client');
   if FState <> lbgpsDetached then
     Exit;
   FErrorMessage := '';

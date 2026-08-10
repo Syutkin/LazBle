@@ -187,6 +187,8 @@ uses
   LazBleSimpleBleBackend;
 
 type
+  TBleGattProfileAccess = class(TBleGattProfile);
+
   TBleClientProfileEntry = class
   public
     Profile: TBleGattProfile;
@@ -488,20 +490,25 @@ var
 begin
   if not Assigned(AProfile) then
     raise EArgumentNilException.Create('AProfile');
-  if AProfile.Session <> FSession then
-    raise EArgumentException.Create(
-      'Profile must use the connection GATT session');
   if FState <> lbcstDisconnected then
     raise EInvalidOperation.Create(
       'Profiles can only be added while disconnected');
+  if AProfile.Bound then
+    raise EInvalidOperation.Create('Profile is already bound to a client');
   for Index := 0 to FProfiles.Count - 1 do
     if TBleClientProfileEntry(FProfiles[Index]).Profile = AProfile then
       raise EInvalidOperation.Create('Profile is already registered');
   Entry := TBleClientProfileEntry.Create;
-  Entry.Profile := AProfile;
-  Entry.Required := ARequired;
-  AProfile.AddStateChangedHandler(@ProfileStateChanged);
-  FProfiles.Add(Entry);
+  try
+    TBleGattProfileAccess(AProfile).BindSession(FSession);
+    Entry.Profile := AProfile;
+    Entry.Required := ARequired;
+    AProfile.AddStateChangedHandler(@ProfileStateChanged);
+    FProfiles.Add(Entry);
+  except
+    Entry.Free;
+    raise;
+  end;
 end;
 
 procedure TBleClient.AttachProfiles;

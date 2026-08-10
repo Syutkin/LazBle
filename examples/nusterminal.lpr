@@ -220,7 +220,7 @@ begin
   end;
 
   FConnection := FClientSync.CreateClient(DeviceId);
-  FProfile := TNusProfile.Create(FConnection.Session);
+  FProfile := TNusProfile.Create;
   FProfile.OnData := @NusDataReceived;
   FConnection.AddProfile(FProfile, True);
 

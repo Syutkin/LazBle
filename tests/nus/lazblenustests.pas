@@ -18,6 +18,11 @@ uses
   FakeLazBleBackend;
 
 type
+  TTestNusProfile = class(TNusProfile)
+  public
+    procedure BindToSession(const ASession: TBleGattSession);
+  end;
+
   TNusObserver = class
   private
     FCallCount: Integer;
@@ -37,7 +42,7 @@ type
     FBackendObject: TFakeLazBleBackend;
     FManager: TBleCentralManager;
     FSession: TBleGattSession;
-    FProfile: TNusProfile;
+    FProfile: TTestNusProfile;
     procedure EmitEvent(const AKind: TLazBleBackendEventKind;
       const AOperationId: TBleOperationId;
       const ASubscriptionId: TBleSubscriptionId;
@@ -54,6 +59,11 @@ type
   end;
 
 implementation
+
+procedure TTestNusProfile.BindToSession(const ASession: TBleGattSession);
+begin
+  BindSession(ASession);
+end;
 
 procedure TNusObserver.DataReceived(Sender: TObject; const ADeviceId: string;
   const AValue: TBytes);
@@ -107,7 +117,8 @@ begin
   EmitEvent(lbekConnected, ConnectId, InvalidBleSubscriptionId, []);
   EmitEvent(lbekServicesDiscovered, FBackendObject.OperationIds[1],
     InvalidBleSubscriptionId, []);
-  FProfile := TNusProfile.Create(FSession);
+  FProfile := TTestNusProfile.Create;
+  FProfile.BindToSession(FSession);
 end;
 
 procedure TLazBleNusTest.TearDown;
