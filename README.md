@@ -23,6 +23,8 @@ dependencies to the core units.
 - `TLazBleComponent` is the LCL facade owner and scan component.
 - `TLazBleLclClient` is the persistent LCL component for one selected device;
   it keeps form event handlers while its core client is created lazily.
+- `TBleDeviceSelectForm` is a reusable modal device picker over the existing
+  LCL scan controller; it does not create or connect a BLE client.
 
 ## Usage
 
@@ -116,6 +118,26 @@ The component destructor starts the same shutdown automatically.
 read-only `Availability` property transitions through `lbaChecking`, and the
 published `OnAvailabilityChanged` event is delivered on the LCL main thread.
 No check is started while an `.lfm` is loaded.
+
+Use `TBleDeviceSelectForm` when a user needs to select a discovered device.
+Creating the dialog does not start BLE work; `Execute` starts a scan when one
+is not already active and returns the selected snapshot entry:
+
+```pascal
+Dialog := TBleDeviceSelectForm.Create(nil, LazBleComponent.ScanController);
+try
+  Dialog.AdapterId := LazBleComponent.AdapterId;
+  Dialog.ScanTimeoutMs := LazBleComponent.ScanTimeoutMs;
+  if Dialog.Execute(Device) then
+    LazBleClient.SelectDevice(Device);
+finally
+  Dialog.Free;
+end;
+```
+
+The list remains in discovery order. Advertising updates replace the matching
+row by stable device id without re-sorting the list. The dialog temporarily
+chains the scan controller events and restores existing handlers when released.
 
 Console applications and tests can use the blocking `TLazBleSync` facade from
 `LazBleSync`. GUI applications should use the asynchronous API.

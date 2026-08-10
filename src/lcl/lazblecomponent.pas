@@ -112,6 +112,7 @@ type
     property ScanState: TLazBleLclScanState read GetScanState;
     property Availability: TBleAvailability read FAvailability;
     property ScanResults: TBleDeviceInfos read GetScanResults;
+    property ScanController: TLazBleLclScan read FScan;
     property LastErrorCode: Integer read GetLastErrorCode;
     property LastErrorMessage: string read GetLastErrorMessage;
     property ClientCount: Integer read GetClientCount;

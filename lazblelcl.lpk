@@ -13,7 +13,7 @@
         <UnitOutputDirectory Value="lib\$(TargetCPU)-$(TargetOS)\lcl"/>
       </SearchPaths>
     </CompilerOptions>
-    <Files Count="3">
+    <Files Count="4">
       <Item1>
         <Filename Value="src\lcl\lazblelcldispatch.pas"/>
         <UnitName Value="LazBleLclDispatch"/>
@@ -26,6 +26,10 @@
         <Filename Value="src\lcl\lazblecomponent.pas"/>
         <UnitName Value="LazBleComponent"/>
       </Item3>
+      <Item4>
+        <Filename Value="src\lcl\lazbledeviceselectform.pas"/>
+        <UnitName Value="LazBleDeviceSelectForm"/>
+      </Item4>
     </Files>
     <RequiredPkgs Count="2">
       <Item1>

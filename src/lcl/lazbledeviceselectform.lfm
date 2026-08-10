@@ -1,0 +1,111 @@
+object BleDeviceSelectForm: TBleDeviceSelectForm
+  Left = 400
+  Height = 420
+  Top = 220
+  Width = 700
+  BorderIcons = [biSystemMenu, biMaximize]
+  Caption = 'Bluetooth devices'
+  ClientHeight = 420
+  ClientWidth = 700
+  Constraints.MinHeight = 320
+  Constraints.MinWidth = 560
+  OnCloseQuery = FormCloseQuery
+  Position = poScreenCenter
+  LCLVersion = '3.4.0.0'
+  object StatusLabel: TLabel
+    Left = 12
+    Height = 17
+    Top = 12
+    Width = 676
+    Anchors = [akTop, akLeft, akRight]
+    Caption = 'Ready to scan'
+  end
+  object DeviceGrid: TStringGrid
+    Left = 12
+    Height = 326
+    Top = 37
+    Width = 676
+    Anchors = [akTop, akLeft, akRight, akBottom]
+    ColCount = 3
+    Columns = <    
+      item
+        Title.Caption = 'Name'
+        Width = 220
+      end    
+      item
+        Title.Caption = 'Device ID'
+        Width = 330
+      end    
+      item
+        Title.Alignment = taRightJustify
+        Title.Caption = 'RSSI'
+        Width = 80
+      end>
+    FixedCols = 0
+    Options = [goFixedVertLine, goFixedHorzLine, goVertLine, goHorzLine, goRangeSelect, goRowSelect, goColSizing, goSmoothScroll]
+    RowCount = 1
+    TabOrder = 0
+    OnDblClick = DeviceGridDblClick
+    OnSelection = DeviceGridSelection
+  end
+  object ButtonPanel: TPanel
+    Left = 0
+    Height = 45
+    Top = 375
+    Width = 700
+    Align = alBottom
+    BevelOuter = bvNone
+    ClientHeight = 45
+    ClientWidth = 700
+    TabOrder = 1
+    object ButtonStart: TButton
+      Left = 12
+      Height = 30
+      Top = 8
+      Width = 72
+      Caption = 'Start'
+      TabOrder = 0
+      OnClick = ButtonStartClick
+    end
+    object ButtonStop: TButton
+      Left = 90
+      Height = 30
+      Top = 8
+      Width = 72
+      Caption = 'Stop'
+      TabOrder = 1
+      OnClick = ButtonStopClick
+    end
+    object ButtonRetry: TButton
+      Left = 168
+      Height = 30
+      Top = 8
+      Width = 72
+      Caption = 'Retry'
+      TabOrder = 2
+      OnClick = ButtonRetryClick
+    end
+    object ButtonSelect: TButton
+      Left = 532
+      Height = 30
+      Top = 8
+      Width = 72
+      Anchors = [akTop, akRight]
+      Caption = 'Select'
+      Default = True
+      TabOrder = 3
+      OnClick = ButtonSelectClick
+    end
+    object ButtonCancel: TButton
+      Left = 616
+      Height = 30
+      Top = 8
+      Width = 72
+      Anchors = [akTop, akRight]
+      Cancel = True
+      Caption = 'Cancel'
+      ModalResult = 2
+      TabOrder = 4
+    end
+  end
+end

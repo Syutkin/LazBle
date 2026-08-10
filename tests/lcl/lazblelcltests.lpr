@@ -6,6 +6,8 @@ uses
   {$IFDEF UNIX}
   CThreads,
   {$ENDIF}
+  Interfaces,
+  Forms,
   ConsoleTestRunner,
   LazBleLclDispatchTests,
   LazBleLclScanTests,
@@ -13,11 +15,13 @@ uses
   LazBleLclClientTests,
   LazBleLclClientConnectionTests,
   LazBleComponentClientTests,
-  LazBleLclClientReconnectTests;
+  LazBleLclClientReconnectTests,
+  LazBleDeviceSelectFormTests;
 
 var
   Runner: TTestRunner;
 begin
+  Application.Initialize;
   Runner := TTestRunner.Create(nil);
   try
     Runner.Initialize;
