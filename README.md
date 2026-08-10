@@ -3,7 +3,9 @@
 LazBle is an asynchronous BLE and GATT client library for Free Pascal.
 Lazarus can use the FPC-only core through `lazble.lpk`. The optional
 `lazblelcl.lpk` package provides main-thread LCL components without adding LCL
-dependencies to the core units.
+dependencies to the core units. `lazblelcldesign.lpk` is an IDE-only package
+that places the components on the Lazarus component palette; applications do
+not depend on it.
 
 ## Architecture
 
@@ -148,6 +150,12 @@ Binding or streaming the control does not start BLE work. The control and the
 provided selection dialog are optional; applications can build their own UI
 over `TLazBleComponent`, `TLazBleLclScan`, and `TLazBleLclClient`.
 
+To add the components to the Lazarus palette, open
+`lazblelcldesign.lpk` and choose **Use > Install**. Lazarus normally rebuilds
+and restarts its IDE executable once because design-time packages are linked
+into the IDE. This does not rebuild FPC or the complete Lazarus/LCL source
+tree. Merely building the package does not modify or rebuild the IDE.
+
 Console applications and tests can use the blocking `TLazBleSync` facade from
 `LazBleSync`. GUI applications should use the asynchronous API.
 
@@ -236,8 +244,10 @@ lazbuild --ws=qt6 lazble.lpk
 lazbuild --ws=qt6 tests/lazbletests.lpi
 tests/bin/lazbletests --all --format=plain
 lazbuild --ws=qt6 lazblelcl.lpk
+lazbuild --ws=qt6 lazblelcldesign.lpk
 lazbuild --ws=qt6 tests/lcl/lazblelcltests.lpi
 tests/bin/lazblelcltests --all --format=plain
+lazbuild --ws=qt6 examples/lcl/lazblelcldemo.lpi
 ```
 
 ## License

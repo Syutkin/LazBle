@@ -1,0 +1,29 @@
+object LazBleDemoForm: TLazBleDemoForm
+  Left = 480
+  Height = 160
+  Top = 260
+  Width = 620
+  Caption = 'LazBle LCL Demo'
+  ClientHeight = 160
+  ClientWidth = 620
+  Position = poScreenCenter
+  LCLVersion = '3.4.0.0'
+  object BleDeviceControl: TLazBleDeviceControl
+    Left = 16
+    Height = 64
+    Top = 48
+    Width = 588
+    Anchors = [akTop, akLeft, akRight]
+    Client = BleClient
+    TabOrder = 0
+  end
+  object LazBle: TLazBleComponent
+    Left = 24
+    Top = 8
+  end
+  object BleClient: TLazBleLclClient
+    LazBle = LazBle
+    Left = 72
+    Top = 8
+  end
+end
