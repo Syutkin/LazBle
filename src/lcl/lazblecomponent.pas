@@ -10,12 +10,15 @@ uses
   LazBleTypes,
   LazBleBackend,
   LazBleFacade,
+  LazBleClient,
   LazBleLclScan;
 
 const
   DefaultLazBleScanTimeoutMs = 10000;
 
 type
+  TLazBleLclClient = class;
+
   TLazBleLclErrorEvent = procedure(Sender: TObject; const AErrorCode: Integer;
     const AErrorMessage: string) of object;
 
@@ -65,6 +68,38 @@ type
       read FOnScanResult write FOnScanResult;
     property OnScanCompleted: TLazBleLclScanCompletedEvent
       read FOnScanCompleted write FOnScanCompleted;
+    property OnError: TLazBleLclErrorEvent read FOnError write FOnError;
+  end;
+
+  TLazBleLclClient = class(TComponent)
+  private
+    FLazBle: TLazBleComponent;
+    FDeviceId: string;
+    FDeviceName: string;
+    FOnConfigureClient: TNotifyEvent;
+    FOnStateChanged: TLazBleClientStateChangedEvent;
+    FOnConnected: TNotifyEvent;
+    FOnDisconnected: TNotifyEvent;
+    FOnError: TLazBleLclErrorEvent;
+    procedure SetLazBle(const AValue: TLazBleComponent);
+    procedure SetDeviceId(const AValue: string);
+  protected
+    procedure Notification(AComponent: TComponent;
+      Operation: TOperation); override;
+  public
+    destructor Destroy; override;
+    procedure SelectDevice(const ADevice: TBleDeviceInfo);
+    property DeviceName: string read FDeviceName;
+  published
+    property LazBle: TLazBleComponent read FLazBle write SetLazBle;
+    property DeviceId: string read FDeviceId write SetDeviceId;
+    property OnConfigureClient: TNotifyEvent read FOnConfigureClient
+      write FOnConfigureClient;
+    property OnStateChanged: TLazBleClientStateChangedEvent
+      read FOnStateChanged write FOnStateChanged;
+    property OnConnected: TNotifyEvent read FOnConnected write FOnConnected;
+    property OnDisconnected: TNotifyEvent read FOnDisconnected
+      write FOnDisconnected;
     property OnError: TLazBleLclErrorEvent read FOnError write FOnError;
   end;
 
@@ -189,10 +224,51 @@ begin
     CompletedHandler(Self, AState);
 end;
 
+destructor TLazBleLclClient.Destroy;
+begin
+  SetLazBle(nil);
+  inherited Destroy;
+end;
+
+procedure TLazBleLclClient.SetLazBle(const AValue: TLazBleComponent);
+begin
+  if FLazBle = AValue then
+    Exit;
+  if Assigned(FLazBle) then
+    FLazBle.RemoveFreeNotification(Self);
+  FLazBle := AValue;
+  if Assigned(FLazBle) then
+    FLazBle.FreeNotification(Self);
+end;
+
+procedure TLazBleLclClient.SetDeviceId(const AValue: string);
+begin
+  if FDeviceId = AValue then
+    Exit;
+  FDeviceId := AValue;
+  FDeviceName := '';
+end;
+
+procedure TLazBleLclClient.Notification(AComponent: TComponent;
+  Operation: TOperation);
+begin
+  inherited Notification(AComponent, Operation);
+  if (Operation = opRemove) and (AComponent = FLazBle) then
+    FLazBle := nil;
+end;
+
+procedure TLazBleLclClient.SelectDevice(const ADevice: TBleDeviceInfo);
+begin
+  FDeviceId := ADevice.DeviceId;
+  FDeviceName := ADevice.DeviceName;
+end;
+
 initialization
   RegisterClass(TLazBleComponent);
+  RegisterClass(TLazBleLclClient);
 
 finalization
+  UnregisterClass(TLazBleLclClient);
   UnregisterClass(TLazBleComponent);
 
 end.

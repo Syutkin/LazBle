@@ -9,7 +9,8 @@ uses
   ConsoleTestRunner,
   LazBleLclDispatchTests,
   LazBleLclScanTests,
-  LazBleComponentTests;
+  LazBleComponentTests,
+  LazBleLclClientTests;
 
 var
   Runner: TTestRunner;
