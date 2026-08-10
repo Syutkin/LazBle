@@ -14,7 +14,7 @@
       <UseAppBundle Value="False"/>
       <ResourceType Value="res"/>
     </General>
-    <Units Count="8">
+    <Units Count="9">
       <Unit0>
         <Filename Value="lazblelcltests.lpr"/>
         <IsPartOfProject Value="True"/>
@@ -54,6 +54,11 @@
         <IsPartOfProject Value="True"/>
         <UnitName Value="LazBleComponentClientTests"/>
       </Unit7>
+      <Unit8>
+        <Filename Value="lazblelclclientreconnecttests.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="LazBleLclClientReconnectTests"/>
+      </Unit8>
     </Units>
     <RequiredPackages Count="1">
       <Item1>

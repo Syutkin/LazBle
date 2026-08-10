@@ -162,6 +162,10 @@ begin
     SourceClient.Name := 'BleClient1';
     SourceClient.LazBle := SourceLazBle;
     SourceClient.DeviceId := 'streamed-device';
+    SourceClient.AutoReconnect := True;
+    SourceClient.ReconnectOptions.InitialDelayMs := 2500;
+    SourceClient.ReconnectOptions.MaximumDelayMs := 12000;
+    SourceClient.ReconnectOptions.MaximumAttempts := 8;
     SourceClient.OnConnected := @Owner.ClientConnected;
     SourceClient.OnError := @Owner.ClientError;
     WriteComponentAsTextToStream(Stream, Owner);
@@ -182,6 +186,13 @@ begin
     AssertSame(LoadedClient, LoadedLazBle.Clients[0]);
     AssertEquals('streamed-device', LoadedClient.DeviceId);
     AssertEquals('', LoadedClient.DeviceName);
+    AssertTrue(LoadedClient.AutoReconnect);
+    AssertEquals(2500,
+      Integer(LoadedClient.ReconnectOptions.InitialDelayMs));
+    AssertEquals(12000,
+      Integer(LoadedClient.ReconnectOptions.MaximumDelayMs));
+    AssertEquals(8,
+      Integer(LoadedClient.ReconnectOptions.MaximumAttempts));
     AssertTrue(TMethod(LoadedClient.OnConnected).Code =
       TMethod(@LoadedOwner.ClientConnected).Code);
     AssertTrue(TMethod(LoadedClient.OnConnected).Data =
@@ -191,6 +202,7 @@ begin
     AssertTrue(TMethod(LoadedClient.OnError).Data =
       TMethod(@LoadedOwner.ClientError).Data);
     AssertEquals(0, BackendObject.CommandCount);
+    AssertNull(LoadedClient.CoreClient);
   finally
     Stream.Free;
     LoadedOwner.Free;

@@ -12,7 +12,8 @@ uses
   LazBleComponentTests,
   LazBleLclClientTests,
   LazBleLclClientConnectionTests,
-  LazBleComponentClientTests;
+  LazBleComponentClientTests,
+  LazBleLclClientReconnectTests;
 
 var
   Runner: TTestRunner;

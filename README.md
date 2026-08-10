@@ -91,6 +91,10 @@ configured number of attempts. An initial connection failure is not retried.
 `False` cancels a pending retry. Registered profiles are detached on loss and
 attached again after service discovery.
 
+`TLazBleLclClient` exposes the same policy through published `AutoReconnect`
+and nested `ReconnectOptions` properties. Loading them from an `.lfm` does not
+create a core client or start a BLE operation.
+
 Console applications and tests can use the blocking `TLazBleSync` facade from
 `LazBleSync`. GUI applications should use the asynchronous API.
 

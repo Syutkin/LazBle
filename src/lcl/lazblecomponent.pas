@@ -18,6 +18,9 @@ uses
 
 const
   DefaultLazBleScanTimeoutMs = 10000;
+  DefaultLazBleReconnectInitialDelayMs = 1000;
+  DefaultLazBleReconnectMaximumDelayMs = 30000;
+  DefaultLazBleReconnectMaximumAttempts = 5;
 
 type
   TLazBleLclClient = class;
@@ -26,6 +29,29 @@ type
 
   TLazBleLclErrorEvent = procedure(Sender: TObject; const AErrorCode: Integer;
     const AErrorMessage: string) of object;
+
+  TLazBleReconnectSettings = class(TPersistent)
+  private
+    FInitialDelayMs: Cardinal;
+    FMaximumDelayMs: Cardinal;
+    FMaximumAttempts: Cardinal;
+    FOnChange: TNotifyEvent;
+    procedure SetInitialDelayMs(const AValue: Cardinal);
+    procedure SetMaximumDelayMs(const AValue: Cardinal);
+    procedure SetMaximumAttempts(const AValue: Cardinal);
+    procedure Changed;
+  public
+    constructor Create;
+    procedure Assign(Source: TPersistent); override;
+    function ToOptions: TLazBleReconnectOptions;
+  published
+    property InitialDelayMs: Cardinal read FInitialDelayMs
+      write SetInitialDelayMs default DefaultLazBleReconnectInitialDelayMs;
+    property MaximumDelayMs: Cardinal read FMaximumDelayMs
+      write SetMaximumDelayMs default DefaultLazBleReconnectMaximumDelayMs;
+    property MaximumAttempts: Cardinal read FMaximumAttempts
+      write SetMaximumAttempts default DefaultLazBleReconnectMaximumAttempts;
+  end;
 
   TLazBleComponent = class(TComponent)
   private
@@ -100,6 +126,8 @@ type
     FDisconnectOperation: IBleOperation;
     FLastErrorCode: Integer;
     FLastErrorMessage: string;
+    FAutoReconnect: Boolean;
+    FReconnectOptions: TLazBleReconnectSettings;
     FOnConfigureClient: TNotifyEvent;
     FOnStateChanged: TLazBleClientStateChangedEvent;
     FOnConnected: TNotifyEvent;
@@ -107,7 +135,13 @@ type
     FOnError: TLazBleLclErrorEvent;
     procedure SetLazBle(const AValue: TLazBleComponent);
     procedure SetDeviceId(const AValue: string);
+    procedure SetAutoReconnect(const AValue: Boolean);
+    procedure SetReconnectOptions(const AValue: TLazBleReconnectSettings);
     function GetState: TLazBleClientState;
+    function GetReconnectAttempt: Cardinal;
+    function GetReconnectDelayMs: Cardinal;
+    procedure ReconnectSettingsChanged(Sender: TObject);
+    procedure ApplyReconnectSettings;
     procedure EnsureCoreClient;
     procedure RemoveDisconnectedCoreClient;
     procedure DetachCoreClient;
@@ -133,10 +167,16 @@ type
     property State: TLazBleClientState read GetState;
     property LastErrorCode: Integer read FLastErrorCode;
     property LastErrorMessage: string read FLastErrorMessage;
+    property ReconnectAttempt: Cardinal read GetReconnectAttempt;
+    property ReconnectDelayMs: Cardinal read GetReconnectDelayMs;
     property CoreClient: TBleClient read FCoreClient;
   published
     property LazBle: TLazBleComponent read FLazBle write SetLazBle;
     property DeviceId: string read FDeviceId write SetDeviceId;
+    property AutoReconnect: Boolean read FAutoReconnect
+      write SetAutoReconnect default False;
+    property ReconnectOptions: TLazBleReconnectSettings
+      read FReconnectOptions write SetReconnectOptions;
     property OnConfigureClient: TNotifyEvent read FOnConfigureClient
       write FOnConfigureClient;
     property OnStateChanged: TLazBleClientStateChangedEvent
@@ -148,6 +188,78 @@ type
   end;
 
 implementation
+
+constructor TLazBleReconnectSettings.Create;
+begin
+  inherited Create;
+  FInitialDelayMs := DefaultLazBleReconnectInitialDelayMs;
+  FMaximumDelayMs := DefaultLazBleReconnectMaximumDelayMs;
+  FMaximumAttempts := DefaultLazBleReconnectMaximumAttempts;
+end;
+
+procedure TLazBleReconnectSettings.Assign(Source: TPersistent);
+var
+  Settings: TLazBleReconnectSettings;
+begin
+  if Source is TLazBleReconnectSettings then
+  begin
+    Settings := TLazBleReconnectSettings(Source);
+    FInitialDelayMs := Settings.InitialDelayMs;
+    FMaximumDelayMs := Settings.MaximumDelayMs;
+    FMaximumAttempts := Settings.MaximumAttempts;
+    Changed;
+  end
+  else
+    inherited Assign(Source);
+end;
+
+function TLazBleReconnectSettings.ToOptions: TLazBleReconnectOptions;
+begin
+  Result := TLazBleReconnectOptions.Create(FInitialDelayMs,
+    FMaximumDelayMs, FMaximumAttempts);
+end;
+
+procedure TLazBleReconnectSettings.SetInitialDelayMs(
+  const AValue: Cardinal);
+begin
+  if AValue = FInitialDelayMs then
+    Exit;
+  if (AValue = 0) or (AValue > FMaximumDelayMs) then
+    raise EArgumentOutOfRangeException.Create('InitialDelayMs');
+  FInitialDelayMs := AValue;
+  Changed;
+end;
+
+procedure TLazBleReconnectSettings.SetMaximumDelayMs(
+  const AValue: Cardinal);
+begin
+  if AValue = FMaximumDelayMs then
+    Exit;
+  if AValue < FInitialDelayMs then
+    raise EArgumentOutOfRangeException.Create('MaximumDelayMs');
+  FMaximumDelayMs := AValue;
+  Changed;
+end;
+
+procedure TLazBleReconnectSettings.SetMaximumAttempts(
+  const AValue: Cardinal);
+begin
+  if AValue = FMaximumAttempts then
+    Exit;
+  if AValue = 0 then
+    raise EArgumentOutOfRangeException.Create('MaximumAttempts');
+  FMaximumAttempts := AValue;
+  Changed;
+end;
+
+procedure TLazBleReconnectSettings.Changed;
+var
+  Handler: TNotifyEvent;
+begin
+  Handler := FOnChange;
+  if Assigned(Handler) then
+    Handler(Self);
+end;
 
 type
   TLazBleLclClientOperationKind = (
@@ -427,6 +539,8 @@ end;
 constructor TLazBleLclClient.Create(AOwner: TComponent);
 begin
   inherited Create(AOwner);
+  FReconnectOptions := TLazBleReconnectSettings.Create;
+  FReconnectOptions.FOnChange := @ReconnectSettingsChanged;
   FDispatch := TLazBleLclDispatch.Create(@DispatchMessage);
 end;
 
@@ -435,6 +549,7 @@ var
   OldCoreClient: TBleClient;
 begin
   FDispatch.Detach;
+  FReconnectOptions.FOnChange := nil;
   OldCoreClient := FCoreClient;
   DetachCoreClient;
   if Assigned(OldCoreClient) and Assigned(FLazBle) and
@@ -448,6 +563,8 @@ begin
   FLazBle := nil;
   FDispatch.Free;
   FDispatch := nil;
+  FReconnectOptions.Free;
+  FReconnectOptions := nil;
   inherited Destroy;
 end;
 
@@ -482,12 +599,57 @@ begin
   FDeviceName := '';
 end;
 
+procedure TLazBleLclClient.SetAutoReconnect(const AValue: Boolean);
+begin
+  if FAutoReconnect = AValue then
+    Exit;
+  FAutoReconnect := AValue;
+  if Assigned(FCoreClient) then
+    FCoreClient.AutoReconnect := FAutoReconnect;
+end;
+
+procedure TLazBleLclClient.SetReconnectOptions(
+  const AValue: TLazBleReconnectSettings);
+begin
+  if not Assigned(AValue) then
+    raise EArgumentNilException.Create('AValue');
+  FReconnectOptions.Assign(AValue);
+end;
+
 function TLazBleLclClient.GetState: TLazBleClientState;
 begin
   if Assigned(FCoreClient) then
     Result := FCoreClient.State
   else
     Result := lbcstDisconnected;
+end;
+
+function TLazBleLclClient.GetReconnectAttempt: Cardinal;
+begin
+  if Assigned(FCoreClient) then
+    Result := FCoreClient.ReconnectAttempt
+  else
+    Result := 0;
+end;
+
+function TLazBleLclClient.GetReconnectDelayMs: Cardinal;
+begin
+  if Assigned(FCoreClient) then
+    Result := FCoreClient.ReconnectDelayMs
+  else
+    Result := 0;
+end;
+
+procedure TLazBleLclClient.ReconnectSettingsChanged(Sender: TObject);
+begin
+  if Assigned(FCoreClient) then
+    FCoreClient.ReconnectOptions := FReconnectOptions.ToOptions;
+end;
+
+procedure TLazBleLclClient.ApplyReconnectSettings;
+begin
+  FCoreClient.ReconnectOptions := FReconnectOptions.ToOptions;
+  FCoreClient.AutoReconnect := FAutoReconnect;
 end;
 
 procedure TLazBleLclClient.EnsureCoreClient;
@@ -504,6 +666,7 @@ begin
   FCoreClient := FLazBle.Facade.CreateClient(FDeviceId);
   FCoreClient.OnStateChanged := @CoreStateChanged;
   try
+    ApplyReconnectSettings;
     Handler := FOnConfigureClient;
     if Assigned(Handler) then
       Handler(Self);
