@@ -10,6 +10,7 @@ uses
   LazBleGattOperation,
   LazBleGattSubscription,
   LazBleGattSession,
+  LazBleGattProfile,
   LazBleByteChannel;
 
 const
@@ -21,23 +22,22 @@ type
   TNusDataEvent = procedure(Sender: TObject; const ADeviceId: string;
     const AValue: TBytes) of object;
 
-  TNusProfile = class
+  TNusProfile = class(TBleGattProfile)
   private
-    FDeviceId: string;
     FChannel: TBleByteChannel;
     FOnData: TNusDataEvent;
     procedure ChannelDataReceived(Sender: TObject; const AValue: TBytes);
-    function GetReady: Boolean;
-    function GetState: TLazBleByteChannelState;
+    procedure SubscriptionStateChanged(Sender: TObject;
+      const AState: TLazBleSubscriptionState);
+  protected
+    procedure DoAttach; override;
+    procedure DoDetach; override;
+    procedure RefreshState; override;
   public
     constructor Create(const ASession: TBleGattSession);
     destructor Destroy; override;
-    function Attach: TBleSubscription;
-    function Detach: TBleGattOperation;
     function SendAsync(const AValue: TBytes): TBleGattOperation;
     property Channel: TBleByteChannel read FChannel;
-    property Ready: Boolean read GetReady;
-    property State: TLazBleByteChannelState read GetState;
     property OnData: TNusDataEvent read FOnData write FOnData;
   end;
 
@@ -45,10 +45,7 @@ implementation
 
 constructor TNusProfile.Create(const ASession: TBleGattSession);
 begin
-  inherited Create;
-  if not Assigned(ASession) then
-    raise EArgumentNilException.Create('ASession');
-  FDeviceId := ASession.DeviceId;
+  inherited Create(ASession);
   FChannel := TBleByteChannel.Create(ASession, NusServiceUuid,
     NusRxCharacteristicUuid, NusTxCharacteristicUuid, lbwmCommand);
   FChannel.OnData := @ChannelDataReceived;
@@ -56,6 +53,7 @@ end;
 
 destructor TNusProfile.Destroy;
 begin
+  Detach;
   FChannel.OnData := nil;
   FChannel.Free;
   FChannel := nil;
@@ -66,27 +64,41 @@ procedure TNusProfile.ChannelDataReceived(Sender: TObject;
   const AValue: TBytes);
 begin
   if Assigned(FOnData) then
-    FOnData(Self, FDeviceId, AValue);
+    FOnData(Self, DeviceId, AValue);
 end;
 
-function TNusProfile.GetReady: Boolean;
+procedure TNusProfile.SubscriptionStateChanged(Sender: TObject;
+  const AState: TLazBleSubscriptionState);
 begin
-  Result := FChannel.Ready;
+  RefreshState;
 end;
 
-function TNusProfile.GetState: TLazBleByteChannelState;
+procedure TNusProfile.DoAttach;
 begin
-  Result := FChannel.State;
+  FChannel.Attach;
+  if Assigned(FChannel.Subscription) then
+    FChannel.Subscription.OnStateChanged := @SubscriptionStateChanged;
+  if FChannel.State = lbchsError then
+    MarkError('Could not subscribe to NUS TX notifications');
 end;
 
-function TNusProfile.Attach: TBleSubscription;
+procedure TNusProfile.DoDetach;
 begin
-  Result := FChannel.Attach;
+  if Assigned(FChannel.Subscription) then
+    FChannel.Subscription.OnStateChanged := nil;
+  FChannel.Detach;
 end;
 
-function TNusProfile.Detach: TBleGattOperation;
+procedure TNusProfile.RefreshState;
 begin
-  Result := FChannel.Detach;
+  case FChannel.State of
+    lbchsReady:
+      MarkReady;
+    lbchsError:
+      MarkError('Could not subscribe to NUS TX notifications');
+    lbchsDetached:
+      MarkError('NUS TX subscription is no longer active');
+  end;
 end;
 
 function TNusProfile.SendAsync(const AValue: TBytes): TBleGattOperation;

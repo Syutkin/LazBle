@@ -35,6 +35,10 @@
         <UnitName Value="LazBleGattSession"/>
       </Item>
       <Item>
+        <Filename Value="src\core\lazblegattprofile.pas"/>
+        <UnitName Value="LazBleGattProfile"/>
+      </Item>
+      <Item>
         <Filename Value="src\core\lazblebytechannel.pas"/>
         <UnitName Value="LazBleByteChannel"/>
       </Item>

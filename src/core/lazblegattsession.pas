@@ -23,6 +23,8 @@ type
 
   TLazBleSessionStateChangedEvent = procedure(Sender: TObject;
     const AState: TLazBleSessionState) of object;
+  TLazBleSessionStateChangedEvents = array of
+    TLazBleSessionStateChangedEvent;
 
   TLazBleSubmitCommand = function(
     const ACommand: TLazBleBackendCommand): TBleOperationId of object;
@@ -43,6 +45,7 @@ type
     FSubscriptions: TList;
     FServices: TLazBleGattServices;
     FOnStateChanged: TLazBleSessionStateChangedEvent;
+    FStateChangedHandlers: TLazBleSessionStateChangedEvents;
     procedure SetState(const AState: TLazBleSessionState);
     function GetServices: TLazBleGattServices;
     function Submit(const AKind: TLazBleBackendCommandKind): TBleOperationId;
@@ -70,6 +73,10 @@ type
     procedure CancelSubscription(const ASubscription: TBleSubscription);
     procedure HandleBackendEvent(const AEvent: TLazBleBackendEvent);
     procedure HandleBackendShutdown;
+    procedure AddStateChangedHandler(
+      const AHandler: TLazBleSessionStateChangedEvent);
+    procedure RemoveStateChangedHandler(
+      const AHandler: TLazBleSessionStateChangedEvent);
     property DeviceId: string read FDeviceId;
     property Generation: QWord read FGeneration;
     property State: TLazBleSessionState read FState;
@@ -86,12 +93,59 @@ begin
 end;
 
 procedure TBleGattSession.SetState(const AState: TLazBleSessionState);
+var
+  Handler: TLazBleSessionStateChangedEvent;
+  Handlers: TLazBleSessionStateChangedEvents;
 begin
   if FState = AState then
     Exit;
   FState := AState;
   if Assigned(FOnStateChanged) then
     FOnStateChanged(Self, FState);
+  Handlers := Copy(FStateChangedHandlers);
+  for Handler in Handlers do
+    if Assigned(Handler) then
+      Handler(Self, FState);
+end;
+
+function SameStateChangedHandler(const AFirst,
+  ASecond: TLazBleSessionStateChangedEvent): Boolean;
+begin
+  Result := (TMethod(AFirst).Code = TMethod(ASecond).Code) and
+    (TMethod(AFirst).Data = TMethod(ASecond).Data);
+end;
+
+procedure TBleGattSession.AddStateChangedHandler(
+  const AHandler: TLazBleSessionStateChangedEvent);
+var
+  Handler: TLazBleSessionStateChangedEvent;
+  Index: Integer;
+begin
+  if not Assigned(AHandler) then
+    Exit;
+  for Handler in FStateChangedHandlers do
+    if SameStateChangedHandler(Handler, AHandler) then
+      Exit;
+  Index := Length(FStateChangedHandlers);
+  SetLength(FStateChangedHandlers, Index + 1);
+  FStateChangedHandlers[Index] := AHandler;
+end;
+
+procedure TBleGattSession.RemoveStateChangedHandler(
+  const AHandler: TLazBleSessionStateChangedEvent);
+var
+  Index: Integer;
+  MoveIndex: Integer;
+begin
+  for Index := 0 to High(FStateChangedHandlers) do
+    if SameStateChangedHandler(FStateChangedHandlers[Index], AHandler) then
+    begin
+      for MoveIndex := Index to High(FStateChangedHandlers) - 1 do
+        FStateChangedHandlers[MoveIndex] :=
+          FStateChangedHandlers[MoveIndex + 1];
+      SetLength(FStateChangedHandlers, Length(FStateChangedHandlers) - 1);
+      Exit;
+    end;
 end;
 
 constructor TBleGattSession.Create(const ADeviceId: string;

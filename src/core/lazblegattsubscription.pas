@@ -19,6 +19,8 @@ type
   );
 
   TLazBleDataEvent = procedure(Sender: TObject; const AValue: TBytes) of object;
+  TLazBleSubscriptionStateChangedEvent = procedure(Sender: TObject;
+    const AState: TLazBleSubscriptionState) of object;
   TBleSubscription = class;
   TLazBleUnsubscribe = function(
     const ASubscription: TBleSubscription): TBleGattOperation of object;
@@ -32,6 +34,8 @@ type
     FUnsubscribe: TLazBleUnsubscribe;
     FUnsubscribeOperation: TBleGattOperation;
     FOnData: TLazBleDataEvent;
+    FOnStateChanged: TLazBleSubscriptionStateChangedEvent;
+    procedure SetState(const AState: TLazBleSubscriptionState);
   public
     constructor Create(const AOperationId: TBleOperationId;
       const AGeneration: QWord; const AUnsubscribe: TLazBleUnsubscribe);
@@ -44,9 +48,20 @@ type
     property Generation: QWord read FGeneration;
     property State: TLazBleSubscriptionState read FState;
     property OnData: TLazBleDataEvent read FOnData write FOnData;
+    property OnStateChanged: TLazBleSubscriptionStateChangedEvent
+      read FOnStateChanged write FOnStateChanged;
   end;
 
 implementation
+
+procedure TBleSubscription.SetState(const AState: TLazBleSubscriptionState);
+begin
+  if FState = AState then
+    Exit;
+  FState := AState;
+  if Assigned(FOnStateChanged) then
+    FOnStateChanged(Self, FState);
+end;
 
 constructor TBleSubscription.Create(const AOperationId: TBleOperationId;
   const AGeneration: QWord; const AUnsubscribe: TLazBleUnsubscribe);
@@ -79,9 +94,9 @@ begin
   if Assigned(AOperation) then
   begin
     if AOperation.State = lbosFailed then
-      FState := lbsubFailed
+      SetState(lbsubFailed)
     else
-      FState := lbsubUnsubscribing;
+      SetState(lbsubUnsubscribing);
   end;
 end;
 
@@ -97,11 +112,11 @@ begin
       lbekSubscribed:
         begin
           FSubscriptionId := AEvent.SubscriptionId;
-          FState := lbsubActive;
+          SetState(lbsubActive);
         end;
       lbekOperationFailed,
       lbekOperationCancelled:
-        FState := lbsubFailed;
+        SetState(lbsubFailed);
     end;
 
   if (FState = lbsubUnsubscribing) and Assigned(FUnsubscribeOperation) and
@@ -109,9 +124,9 @@ begin
     LazBleBackendEventIsTerminal(AEvent) then
   begin
     if AEvent.Kind = lbekOperationFailed then
-      FState := lbsubFailed
+      SetState(lbsubFailed)
     else
-      FState := lbsubInactive;
+      SetState(lbsubInactive);
   end;
 
   if (FState = lbsubActive) and (AEvent.Kind = lbekNotification) and
@@ -123,7 +138,8 @@ procedure TBleSubscription.Invalidate;
 begin
   FUnsubscribe := nil;
   FOnData := nil;
-  FState := lbsubInactive;
+  SetState(lbsubInactive);
+  FOnStateChanged := nil;
 end;
 
 end.

@@ -12,6 +12,7 @@ uses
   LazBleBackend,
   LazBleGattSubscription,
   LazBleGattSession,
+  LazBleGattProfile,
   LazBleCentralManager,
   LazBleNus,
   FakeLazBleBackend;
@@ -49,6 +50,7 @@ type
     procedure AttachSubscribesToNusTx;
     procedure SendWritesToNusRxWithoutResponse;
     procedure DataIncludesDeviceIdentityAndOpaqueBytes;
+    procedure DisconnectInvalidatesProfileReadiness;
   end;
 
 implementation
@@ -85,7 +87,8 @@ procedure TLazBleNusTest.ActivateProfile;
 var
   Subscription: TBleSubscription;
 begin
-  Subscription := FProfile.Attach;
+  FProfile.Attach;
+  Subscription := FProfile.Channel.Subscription;
   EmitEvent(lbekSubscribed, Subscription.OperationId, 31, []);
   AssertTrue(FBackendObject.CompleteOperation(
     Subscription.OperationId, lbekOperationSucceeded));
@@ -120,7 +123,9 @@ end;
 
 procedure TLazBleNusTest.AttachSubscribesToNusTx;
 begin
-  AssertTrue(Assigned(FProfile.Attach));
+  FProfile.Attach;
+
+  AssertTrue(Assigned(FProfile.Channel.Subscription));
 
   AssertEquals(Ord(lbckSubscribe), Ord(FBackendObject.Commands[2].Kind));
   AssertEquals(NusServiceUuid, FBackendObject.Commands[2].ServiceUuid);
@@ -163,6 +168,19 @@ begin
   finally
     Observer.Free;
   end;
+end;
+
+procedure TLazBleNusTest.DisconnectInvalidatesProfileReadiness;
+var
+  DisconnectId: TBleOperationId;
+begin
+  ActivateProfile;
+
+  DisconnectId := FSession.Disconnect;
+  EmitEvent(lbekDisconnected, DisconnectId, InvalidBleSubscriptionId, []);
+
+  AssertFalse(FProfile.Ready);
+  AssertEquals(Ord(lbgpsError), Ord(FProfile.State));
 end;
 
 initialization

@@ -11,9 +11,7 @@ uses
   CustApp,
   LazBleTypes,
   LazBleGattOperation,
-  LazBleGattSession,
   LazBleClientSync,
-  LazBleByteChannel,
   LazBleNus,
   BleExampleUtils;
 
@@ -21,12 +19,11 @@ type
   TNusTerminalApplication = class(TCustomApplication)
   private
     FClientSync: TBleClientSync;
-    FSession: TBleGattSession;
+    FConnection: TBleConnection;
     FProfile: TNusProfile;
     FOutputLock: TRTLCriticalSection;
     procedure NusDataReceived(Sender: TObject; const ADeviceId: string;
       const AValue: TBytes);
-    function WaitForProfileReady(const ATimeoutMs: Cardinal): Boolean;
     function SendText(const AText: string; const ATimeoutMs: Cardinal): Boolean;
     procedure RunTerminal;
     procedure ShutdownBle;
@@ -101,23 +98,6 @@ begin
   end;
 end;
 
-function TNusTerminalApplication.WaitForProfileReady(
-  const ATimeoutMs: Cardinal): Boolean;
-var
-  Deadline: QWord;
-begin
-  Deadline := GetTickCount64 + ATimeoutMs;
-  repeat
-    if FProfile.Ready then
-      Exit(True);
-    if FProfile.State = lbchsError then
-      Exit(False);
-    if GetTickCount64 >= Deadline then
-      Exit(False);
-    Sleep(10);
-  until False;
-end;
-
 function TNusTerminalApplication.SendText(const AText: string;
   const ATimeoutMs: Cardinal): Boolean;
 var
@@ -174,14 +154,11 @@ var
   ErrorMessage: string;
 begin
   if Assigned(FProfile) then
-  begin
     FProfile.OnData := nil;
-    FProfile.Detach;
-    FreeAndNil(FProfile);
-  end;
-  if Assigned(FClientSync) and Assigned(FSession) then
-    FClientSync.Disconnect(FSession, 5000, ErrorMessage);
-  FSession := nil;
+  if Assigned(FClientSync) and Assigned(FConnection) then
+    FClientSync.Disconnect(FConnection, 5000, ErrorMessage);
+  FProfile := nil;
+  FConnection := nil;
   if Assigned(FClientSync) then
     FClientSync.Shutdown(5000, ErrorMessage);
   FreeAndNil(FClientSync);
@@ -242,22 +219,17 @@ begin
     Exit;
   end;
 
+  FConnection := FClientSync.CreateConnection(DeviceId);
+  FProfile := TNusProfile.Create(FConnection.Session);
+  FProfile.OnData := @NusDataReceived;
+  FConnection.AddProfile(FProfile, True);
+
   WriteLn('Connecting to ', DeviceId, '...');
-  if not FClientSync.Connect(DeviceId, 15000, FSession,
-    ErrorMessage) then
+  if not FClientSync.Connect(FConnection, 15000, ErrorMessage) then
   begin
     if ErrorMessage = '' then
       ErrorMessage := 'Could not connect and discover GATT services.';
     Fail(ErrorMessage);
-    Exit;
-  end;
-
-  FProfile := TNusProfile.Create(FSession);
-  FProfile.OnData := @NusDataReceived;
-  FProfile.Attach;
-  if not WaitForProfileReady(10000) then
-  begin
-    Fail('Could not subscribe to NUS TX notifications.');
     Exit;
   end;
 

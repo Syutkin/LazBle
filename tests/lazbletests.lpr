@@ -13,6 +13,7 @@ uses
   LazBleCentralManagerTests,
   LazBleClientTests,
   LazBleGattSessionTests,
+  LazBleGattProfileTests,
   LazBleByteChannelTests,
   LazBleNusTests,
   LazBleBatteryTests;

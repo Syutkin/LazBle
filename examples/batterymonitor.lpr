@@ -8,10 +8,8 @@ uses
   {$ENDIF}
   Classes,
   SysUtils,
-  SyncObjs,
   CustApp,
   LazBleTypes,
-  LazBleGattSession,
   LazBleClientSync,
   LazBleBattery,
   BleExampleUtils;
@@ -20,13 +18,10 @@ type
   TBatteryMonitorApplication = class(TCustomApplication)
   private
     FClientSync: TBleClientSync;
-    FSession: TBleGattSession;
+    FConnection: TBleConnection;
     FProfile: TBleBatteryProfile;
-    FBatteryLevelEvent: TEvent;
     procedure BatteryLevelChanged(Sender: TObject; const ADeviceId: string;
       const ALevelPercent: Integer);
-    function WaitForInitialBatteryLevel(const ATimeoutMs: Cardinal): Boolean;
-    function WaitForBatteryReady(const ATimeoutMs: Cardinal): Boolean;
     procedure ShutdownBle;
     procedure Fail(const AMessage: string);
   protected
@@ -41,13 +36,11 @@ constructor TBatteryMonitorApplication.Create(AOwner: TComponent);
 begin
   inherited Create(AOwner);
   StopOnException := True;
-  FBatteryLevelEvent := TEvent.Create(nil, True, False, '');
 end;
 
 destructor TBatteryMonitorApplication.Destroy;
 begin
   ShutdownBle;
-  FBatteryLevelEvent.Free;
   inherited Destroy;
 end;
 
@@ -55,46 +48,6 @@ procedure TBatteryMonitorApplication.BatteryLevelChanged(Sender: TObject;
   const ADeviceId: string; const ALevelPercent: Integer);
 begin
   WriteLn(ADeviceId, ': battery ', ALevelPercent, '%');
-  FBatteryLevelEvent.SetEvent;
-end;
-
-function TBatteryMonitorApplication.WaitForBatteryReady(
-  const ATimeoutMs: Cardinal): Boolean;
-var
-  Deadline: QWord;
-begin
-  Deadline := GetTickCount64 + ATimeoutMs;
-  repeat
-    if FProfile.Ready then
-      Exit(True);
-    if FProfile.State = lbbsError then
-      Exit(False);
-    if GetTickCount64 >= Deadline then
-      Exit(False);
-    Sleep(10);
-  until False;
-end;
-
-function TBatteryMonitorApplication.WaitForInitialBatteryLevel(
-  const ATimeoutMs: Cardinal): Boolean;
-var
-  Deadline: QWord;
-  RemainingMs: QWord;
-begin
-  Deadline := GetTickCount64 + ATimeoutMs;
-  repeat
-    if FProfile.LevelPercent <> UnknownBatteryLevel then
-      Exit(True);
-    if FProfile.State = lbbsError then
-      Exit(False);
-    if GetTickCount64 >= Deadline then
-      Exit(False);
-    RemainingMs := Deadline - GetTickCount64;
-    if RemainingMs > 100 then
-      RemainingMs := 100;
-    FBatteryLevelEvent.WaitFor(RemainingMs);
-    FBatteryLevelEvent.ResetEvent;
-  until False;
 end;
 
 procedure TBatteryMonitorApplication.ShutdownBle;
@@ -102,14 +55,11 @@ var
   ErrorMessage: string;
 begin
   if Assigned(FProfile) then
-  begin
     FProfile.OnLevelChanged := nil;
-    FProfile.Detach;
-    FreeAndNil(FProfile);
-  end;
-  if Assigned(FClientSync) and Assigned(FSession) then
-    FClientSync.Disconnect(FSession, 5000, ErrorMessage);
-  FSession := nil;
+  if Assigned(FClientSync) and Assigned(FConnection) then
+    FClientSync.Disconnect(FConnection, 5000, ErrorMessage);
+  FProfile := nil;
+  FConnection := nil;
   if Assigned(FClientSync) then
     FClientSync.Shutdown(5000, ErrorMessage);
   FreeAndNil(FClientSync);
@@ -170,33 +120,17 @@ begin
     Exit;
   end;
 
+  FConnection := FClientSync.CreateConnection(DeviceId);
+  FProfile := TBleBatteryProfile.Create(FConnection.Session);
+  FProfile.OnLevelChanged := @BatteryLevelChanged;
+  FConnection.AddProfile(FProfile, True);
+
   WriteLn('Connecting to ', DeviceId, '...');
-  if not FClientSync.Connect(DeviceId, 15000, FSession,
-    ErrorMessage) then
+  if not FClientSync.Connect(FConnection, 15000, ErrorMessage) then
   begin
     if ErrorMessage = '' then
       ErrorMessage := 'Could not connect and discover GATT services.';
     Fail(ErrorMessage);
-    Exit;
-  end;
-
-  FProfile := TBleBatteryProfile.Create(FSession);
-  FProfile.OnLevelChanged := @BatteryLevelChanged;
-  FProfile.Attach;
-  if not WaitForInitialBatteryLevel(10000) then
-  begin
-    if FProfile.ErrorMessage <> '' then
-      Fail(FProfile.ErrorMessage)
-    else
-      Fail('Could not read Battery Level.');
-    Exit;
-  end;
-  if not WaitForBatteryReady(5000) then
-  begin
-    if FProfile.ErrorMessage <> '' then
-      Fail(FProfile.ErrorMessage)
-    else
-      Fail('Could not subscribe to Battery Level notifications.');
     Exit;
   end;
 
