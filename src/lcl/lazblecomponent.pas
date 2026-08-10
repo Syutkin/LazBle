@@ -29,6 +29,7 @@ type
 
   TLazBleLclErrorEvent = procedure(Sender: TObject; const AErrorCode: Integer;
     const AErrorMessage: string) of object;
+  TLazBleLclClientChangedEvent = procedure(Sender: TObject) of object;
 
   TLazBleReconnectSettings = class(TPersistent)
   private
@@ -152,8 +153,10 @@ type
     FOnConnected: TNotifyEvent;
     FOnDisconnected: TNotifyEvent;
     FOnError: TLazBleLclErrorEvent;
+    FChangedHandlers: array of TLazBleLclClientChangedEvent;
     procedure SetLazBle(const AValue: TLazBleComponent);
     procedure SetDeviceId(const AValue: string);
+    procedure SetDeviceIdentity(const ADeviceId, ADeviceName: string);
     procedure SetAutoReconnect(const AValue: Boolean);
     procedure SetReconnectOptions(const AValue: TLazBleReconnectSettings);
     function GetState: TLazBleClientState;
@@ -170,6 +173,7 @@ type
     procedure DisconnectCompleted(Sender: TObject);
     procedure DispatchMessage(Sender: TObject;
       const AMessage: TLazBleLclDispatchMessage);
+    procedure NotifyChanged;
     procedure RootComponentShuttingDown(const ARoot: TLazBleComponent);
     procedure RootComponentDestroying(const ARoot: TLazBleComponent);
   protected
@@ -183,6 +187,9 @@ type
       const ARequired: Boolean = True);
     procedure Connect;
     procedure Disconnect;
+    procedure AddChangedHandler(const AHandler: TLazBleLclClientChangedEvent);
+    procedure RemoveChangedHandler(
+      const AHandler: TLazBleLclClientChangedEvent);
     property DeviceName: string read FDeviceName;
     property State: TLazBleClientState read GetState;
     property LastErrorCode: Integer read FLastErrorCode;
@@ -763,17 +770,26 @@ begin
     FLazBle.RegisterClient(Self);
     FLazBle.FreeNotification(Self);
   end;
+  NotifyChanged;
 end;
 
 procedure TLazBleLclClient.SetDeviceId(const AValue: string);
 begin
   if FDeviceId = AValue then
     Exit;
+  SetDeviceIdentity(AValue, '');
+end;
+
+procedure TLazBleLclClient.SetDeviceIdentity(const ADeviceId,
+  ADeviceName: string);
+begin
   if Assigned(FLazBle) then
-    FLazBle.ValidateClientDeviceId(Self, AValue);
-  RemoveReplaceableCoreClient;
-  FDeviceId := AValue;
-  FDeviceName := '';
+    FLazBle.ValidateClientDeviceId(Self, ADeviceId);
+  if FDeviceId <> ADeviceId then
+    RemoveReplaceableCoreClient;
+  FDeviceId := ADeviceId;
+  FDeviceName := ADeviceName;
+  NotifyChanged;
 end;
 
 procedure TLazBleLclClient.SetAutoReconnect(const AValue: Boolean);
@@ -900,13 +916,13 @@ begin
     FDisconnectOperation := nil;
     FCoreClient := nil;
     FLazBle := nil;
+    NotifyChanged;
   end;
 end;
 
 procedure TLazBleLclClient.SelectDevice(const ADevice: TBleDeviceInfo);
 begin
-  SetDeviceId(ADevice.DeviceId);
-  FDeviceName := ADevice.DeviceName;
+  SetDeviceIdentity(ADevice.DeviceId, ADevice.DeviceName);
 end;
 
 procedure TLazBleLclClient.AddProfile(const AProfile: TBleGattProfile;
@@ -924,6 +940,8 @@ begin
   if Assigned(FConnectOperation) then
     FConnectOperation.OnCompleted := nil;
   FConnectOperation := nil;
+  if Assigned(FCoreClient) and (FCoreClient.State = lbcstError) then
+    RemoveReplaceableCoreClient;
   EnsureCoreClient;
   FLastErrorCode := 0;
   FLastErrorMessage := '';
@@ -1012,6 +1030,7 @@ begin
     StateHandler := FOnStateChanged;
     if Assigned(StateHandler) then
       StateHandler(Self, TLazBleLclClientStateMessage(AMessage).State);
+    NotifyChanged;
     Exit;
   end;
   if not (AMessage is TLazBleLclClientCompletedMessage) then
@@ -1040,6 +1059,52 @@ begin
     if Assigned(ErrorHandler) then
       ErrorHandler(Self, FLastErrorCode, FLastErrorMessage);
   end;
+  NotifyChanged;
+end;
+
+procedure TLazBleLclClient.AddChangedHandler(
+  const AHandler: TLazBleLclClientChangedEvent);
+var
+  Handler: TLazBleLclClientChangedEvent;
+  Index: Integer;
+begin
+  if not Assigned(AHandler) then
+    Exit;
+  for Handler in FChangedHandlers do
+    if (TMethod(Handler).Code = TMethod(AHandler).Code) and
+      (TMethod(Handler).Data = TMethod(AHandler).Data) then
+      Exit;
+  Index := Length(FChangedHandlers);
+  SetLength(FChangedHandlers, Index + 1);
+  FChangedHandlers[Index] := AHandler;
+end;
+
+procedure TLazBleLclClient.RemoveChangedHandler(
+  const AHandler: TLazBleLclClientChangedEvent);
+var
+  Index: Integer;
+begin
+  for Index := 0 to High(FChangedHandlers) do
+    if (TMethod(FChangedHandlers[Index]).Code = TMethod(AHandler).Code) and
+      (TMethod(FChangedHandlers[Index]).Data = TMethod(AHandler).Data) then
+    begin
+      if Index < High(FChangedHandlers) then
+        Move(FChangedHandlers[Index + 1], FChangedHandlers[Index],
+          (High(FChangedHandlers) - Index) * SizeOf(FChangedHandlers[0]));
+      SetLength(FChangedHandlers, Length(FChangedHandlers) - 1);
+      Exit;
+    end;
+end;
+
+procedure TLazBleLclClient.NotifyChanged;
+var
+  Handler: TLazBleLclClientChangedEvent;
+  Handlers: array of TLazBleLclClientChangedEvent;
+begin
+  Handlers := Copy(FChangedHandlers);
+  for Handler in Handlers do
+    if Assigned(Handler) then
+      Handler(Self);
 end;
 
 procedure TLazBleLclClient.RootComponentDestroying(
@@ -1051,6 +1116,7 @@ begin
   DetachCoreClient;
   ARoot.RemoveFreeNotification(Self);
   FLazBle := nil;
+  NotifyChanged;
 end;
 
 procedure TLazBleLclClient.RootComponentShuttingDown(

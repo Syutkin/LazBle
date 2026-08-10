@@ -25,6 +25,8 @@ dependencies to the core units.
   it keeps form event handlers while its core client is created lazily.
 - `TBleDeviceSelectForm` is a reusable modal device picker over the existing
   LCL scan controller; it does not create or connect a BLE client.
+- `TLazBleDeviceControl` is an optional visual selector and connection-status
+  control bound to an existing `TLazBleLclClient`.
 
 ## Usage
 
@@ -138,6 +140,13 @@ end;
 The list remains in discovery order. Advertising updates replace the matching
 row by stable device id without re-sorting the list. The dialog temporarily
 chains the scan controller events and restores existing handlers when released.
+
+`TLazBleDeviceControl` can be placed on a form and linked through its published
+`Client` property. It uses the same client for selection, status, connect, and
+disconnect, while leaving the client's published event handlers untouched.
+Binding or streaming the control does not start BLE work. The control and the
+provided selection dialog are optional; applications can build their own UI
+over `TLazBleComponent`, `TLazBleLclScan`, and `TLazBleLclClient`.
 
 Console applications and tests can use the blocking `TLazBleSync` facade from
 `LazBleSync`. GUI applications should use the asynchronous API.

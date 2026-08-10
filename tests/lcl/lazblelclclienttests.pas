@@ -51,6 +51,7 @@ type
     procedure StreamingRestoresLazBleDeviceIdAndEventsWithoutOperations;
     procedure SelectDeviceKeepsComponentAndEventHandlers;
     procedure DirectDeviceIdChangeClearsStaleDeviceName;
+    procedure ChangedHandlersAreMulticastAndRemovable;
     procedure LazBleLinkClearsWhenComponentIsDestroyed;
   end;
 
@@ -248,6 +249,19 @@ begin
   AssertEquals('device-b', FClient.DeviceId);
   AssertEquals('', FClient.DeviceName);
   AssertEquals(0, FBackendObject.CommandCount);
+end;
+
+procedure TLazBleLclClientTest.ChangedHandlersAreMulticastAndRemovable;
+begin
+  FClient.AddChangedHandler(@ClientEvent);
+  FClient.AddChangedHandler(@ClientEvent);
+
+  FClient.SelectDevice(Device('device-a', 'First', -50));
+  AssertEquals(1, FEventCount);
+
+  FClient.RemoveChangedHandler(@ClientEvent);
+  FClient.DeviceId := 'device-b';
+  AssertEquals(1, FEventCount);
 end;
 
 procedure TLazBleLclClientTest.LazBleLinkClearsWhenComponentIsDestroyed;

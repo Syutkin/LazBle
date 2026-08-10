@@ -14,7 +14,7 @@
       <UseAppBundle Value="False"/>
       <ResourceType Value="res"/>
     </General>
-    <Units Count="10">
+    <Units Count="11">
       <Unit0>
         <Filename Value="lazblelcltests.lpr"/>
         <IsPartOfProject Value="True"/>
@@ -64,6 +64,11 @@
         <IsPartOfProject Value="True"/>
         <UnitName Value="LazBleDeviceSelectFormTests"/>
       </Unit9>
+      <Unit10>
+        <Filename Value="lazbledevicecontroltests.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="LazBleDeviceControlTests"/>
+      </Unit10>
     </Units>
     <RequiredPackages Count="1">
       <Item1>
