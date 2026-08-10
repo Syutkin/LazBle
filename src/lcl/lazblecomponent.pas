@@ -22,6 +22,8 @@ const
 type
   TLazBleLclClient = class;
 
+  ELazBleLclDuplicateClient = class(Exception);
+
   TLazBleLclErrorEvent = procedure(Sender: TObject; const AErrorCode: Integer;
     const AErrorMessage: string) of object;
 
@@ -29,6 +31,7 @@ type
   private
     FBle: TLazBle;
     FScan: TLazBleLclScan;
+    FClients: TList;
     FAdapterId: string;
     FScanTimeoutMs: Cardinal;
     FOnScanStateChanged: TLazBleLclScanStateChangedEvent;
@@ -40,6 +43,12 @@ type
     function GetScanResults: TBleDeviceInfos;
     function GetLastErrorCode: Integer;
     function GetLastErrorMessage: string;
+    function GetClientCount: Integer;
+    function GetClient(const AIndex: Integer): TLazBleLclClient;
+    procedure ValidateClientDeviceId(const AClient: TLazBleLclClient;
+      const ADeviceId: string);
+    procedure RegisterClient(const AClient: TLazBleLclClient);
+    procedure UnregisterClient(const AClient: TLazBleLclClient);
     procedure ScanStateChanged(Sender: TObject;
       const AState: TLazBleLclScanState);
     procedure ScanResult(Sender: TObject; const ADeviceId,
@@ -56,10 +65,16 @@ type
     procedure StartScan;
     procedure CancelScan;
     procedure ClearScanResults;
+    function CreateClient(const ADeviceId: string): TLazBleLclClient;
+    function FindClient(const ADeviceId: string): TLazBleLclClient;
+    procedure RemoveClient(const AClient: TLazBleLclClient);
     property ScanState: TLazBleLclScanState read GetScanState;
     property ScanResults: TBleDeviceInfos read GetScanResults;
     property LastErrorCode: Integer read GetLastErrorCode;
     property LastErrorMessage: string read GetLastErrorMessage;
+    property ClientCount: Integer read GetClientCount;
+    property Clients[const AIndex: Integer]: TLazBleLclClient
+      read GetClient;
     property Facade: TLazBle read FBle;
   published
     property AdapterId: string read FAdapterId write FAdapterId;
@@ -102,6 +117,7 @@ type
     procedure DisconnectCompleted(Sender: TObject);
     procedure DispatchMessage(Sender: TObject;
       const AMessage: TLazBleLclDispatchMessage);
+    procedure RootComponentDestroying(const ARoot: TLazBleComponent);
   protected
     procedure Notification(AComponent: TComponent;
       Operation: TOperation); override;
@@ -214,7 +230,14 @@ begin
 end;
 
 destructor TLazBleComponent.Destroy;
+var
+  Index: Integer;
 begin
+  if Assigned(FClients) then
+    for Index := FClients.Count - 1 downto 0 do
+      TLazBleLclClient(FClients[Index]).RootComponentDestroying(Self);
+  if Assigned(FClients) then
+    FClients.Clear;
   if Assigned(FScan) then
   begin
     FScan.OnStateChanged := nil;
@@ -225,6 +248,8 @@ begin
   FScan := nil;
   FBle.Free;
   FBle := nil;
+  FClients.Free;
+  FClients := nil;
   inherited Destroy;
 end;
 
@@ -235,6 +260,7 @@ end;
 
 procedure TLazBleComponent.Initialize(const ABle: TLazBle);
 begin
+  FClients := TList.Create;
   FBle := ABle;
   FScan := TLazBleLclScan.Create(FBle);
   FScan.OnStateChanged := @ScanStateChanged;
@@ -257,6 +283,50 @@ begin
   FScan.ClearResults;
 end;
 
+function TLazBleComponent.CreateClient(
+  const ADeviceId: string): TLazBleLclClient;
+begin
+  if ADeviceId = '' then
+    raise EArgumentException.Create('BLE device id must not be empty');
+  Result := TLazBleLclClient.Create(Self);
+  try
+    Result.DeviceId := ADeviceId;
+    Result.LazBle := Self;
+  except
+    Result.Free;
+    raise;
+  end;
+end;
+
+function TLazBleComponent.FindClient(
+  const ADeviceId: string): TLazBleLclClient;
+var
+  Index: Integer;
+begin
+  Result := nil;
+  if ADeviceId = '' then
+    Exit;
+  for Index := 0 to FClients.Count - 1 do
+    if SameText(TLazBleLclClient(FClients[Index]).DeviceId,
+      ADeviceId) then
+      Exit(TLazBleLclClient(FClients[Index]));
+end;
+
+procedure TLazBleComponent.RemoveClient(const AClient: TLazBleLclClient);
+var
+  OwnedClient: Boolean;
+begin
+  if not Assigned(AClient) then
+    raise EArgumentNilException.Create('AClient');
+  if (AClient.LazBle <> Self) or (FClients.IndexOf(AClient) < 0) then
+    raise EArgumentException.Create(
+      'Client does not belong to this LazBle component');
+  OwnedClient := AClient.Owner = Self;
+  AClient.LazBle := nil;
+  if OwnedClient then
+    AClient.Free;
+end;
+
 function TLazBleComponent.GetScanState: TLazBleLclScanState;
 begin
   Result := FScan.State;
@@ -275,6 +345,45 @@ end;
 function TLazBleComponent.GetLastErrorMessage: string;
 begin
   Result := FScan.ErrorMessage;
+end;
+
+function TLazBleComponent.GetClientCount: Integer;
+begin
+  Result := FClients.Count;
+end;
+
+function TLazBleComponent.GetClient(
+  const AIndex: Integer): TLazBleLclClient;
+begin
+  Result := TLazBleLclClient(FClients[AIndex]);
+end;
+
+procedure TLazBleComponent.ValidateClientDeviceId(
+  const AClient: TLazBleLclClient; const ADeviceId: string);
+var
+  ExistingClient: TLazBleLclClient;
+begin
+  if ADeviceId = '' then
+    Exit;
+  ExistingClient := FindClient(ADeviceId);
+  if Assigned(ExistingClient) and (ExistingClient <> AClient) then
+    raise ELazBleLclDuplicateClient.CreateFmt(
+      'A LazBle LCL client already uses device "%s"', [ADeviceId]);
+end;
+
+procedure TLazBleComponent.RegisterClient(
+  const AClient: TLazBleLclClient);
+begin
+  if FClients.IndexOf(AClient) >= 0 then
+    Exit;
+  ValidateClientDeviceId(AClient, AClient.DeviceId);
+  FClients.Add(AClient);
+end;
+
+procedure TLazBleComponent.UnregisterClient(
+  const AClient: TLazBleLclClient);
+begin
+  FClients.Remove(AClient);
 end;
 
 procedure TLazBleComponent.ScanStateChanged(Sender: TObject;
@@ -332,7 +441,10 @@ begin
     (OldCoreClient.State = lbcstDisconnected) then
     FLazBle.Facade.RemoveClient(OldCoreClient);
   if Assigned(FLazBle) then
+  begin
+    FLazBle.UnregisterClient(Self);
     FLazBle.RemoveFreeNotification(Self);
+  end;
   FLazBle := nil;
   FDispatch.Free;
   FDispatch := nil;
@@ -343,18 +455,28 @@ procedure TLazBleLclClient.SetLazBle(const AValue: TLazBleComponent);
 begin
   if FLazBle = AValue then
     Exit;
+  if Assigned(AValue) then
+    AValue.ValidateClientDeviceId(Self, FDeviceId);
   RemoveDisconnectedCoreClient;
   if Assigned(FLazBle) then
+  begin
+    FLazBle.UnregisterClient(Self);
     FLazBle.RemoveFreeNotification(Self);
+  end;
   FLazBle := AValue;
   if Assigned(FLazBle) then
+  begin
+    FLazBle.RegisterClient(Self);
     FLazBle.FreeNotification(Self);
+  end;
 end;
 
 procedure TLazBleLclClient.SetDeviceId(const AValue: string);
 begin
   if FDeviceId = AValue then
     Exit;
+  if Assigned(FLazBle) then
+    FLazBle.ValidateClientDeviceId(Self, AValue);
   RemoveDisconnectedCoreClient;
   FDeviceId := AValue;
   FDeviceName := '';
@@ -577,6 +699,17 @@ begin
     if Assigned(ErrorHandler) then
       ErrorHandler(Self, FLastErrorCode, FLastErrorMessage);
   end;
+end;
+
+procedure TLazBleLclClient.RootComponentDestroying(
+  const ARoot: TLazBleComponent);
+begin
+  if FLazBle <> ARoot then
+    Exit;
+  FDispatch.NextGeneration;
+  DetachCoreClient;
+  ARoot.RemoveFreeNotification(Self);
+  FLazBle := nil;
 end;
 
 initialization

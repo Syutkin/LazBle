@@ -178,6 +178,8 @@ begin
       TLazBleLclClient;
 
     AssertSame(LoadedLazBle, LoadedClient.LazBle);
+    AssertEquals(1, LoadedLazBle.ClientCount);
+    AssertSame(LoadedClient, LoadedLazBle.Clients[0]);
     AssertEquals('streamed-device', LoadedClient.DeviceId);
     AssertEquals('', LoadedClient.DeviceName);
     AssertTrue(TMethod(LoadedClient.OnConnected).Code =

@@ -1,8 +1,9 @@
 # LazBle
 
 LazBle is an asynchronous BLE and GATT client library for Free Pascal.
-Lazarus is supported through `lazble.lpk`, but the source units do not depend on
-LCL, LazUtils, or a widgetset.
+Lazarus can use the FPC-only core through `lazble.lpk`. The optional
+`lazblelcl.lpk` package provides main-thread LCL components without adding LCL
+dependencies to the core units.
 
 ## Architecture
 
@@ -19,6 +20,9 @@ LCL, LazUtils, or a widgetset.
   tests.
 - `ILazBleBackend` is the asynchronous boundary used by SimpleBLE and future
   backend implementations.
+- `TLazBleComponent` is the LCL facade owner and scan component.
+- `TLazBleLclClient` is the persistent LCL component for one selected device;
+  it keeps form event handlers while its core client is created lazily.
 
 ## Usage
 
@@ -174,6 +178,9 @@ fppkg build
 lazbuild --ws=qt6 lazble.lpk
 lazbuild --ws=qt6 tests/lazbletests.lpi
 tests/bin/lazbletests --all --format=plain
+lazbuild --ws=qt6 lazblelcl.lpk
+lazbuild --ws=qt6 tests/lcl/lazblelcltests.lpi
+tests/bin/lazblelcltests --all --format=plain
 ```
 
 ## License
