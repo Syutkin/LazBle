@@ -7,7 +7,8 @@ uses
   CThreads,
   {$ENDIF}
   ConsoleTestRunner,
-  LazBleLclDispatchTests;
+  LazBleLclDispatchTests,
+  LazBleLclScanTests;
 
 var
   Runner: TTestRunner;

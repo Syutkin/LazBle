@@ -42,7 +42,9 @@ type
     procedure Emit(const AEvent: TLazBleBackendEvent);
     function EmitProgress(const AEvent: TLazBleBackendEvent): Boolean;
     function CompleteOperation(const AOperationId: TBleOperationId;
-      const AEventKind: TLazBleBackendEventKind): Boolean;
+      const AEventKind: TLazBleBackendEventKind;
+      const AErrorCode: Integer = 0;
+      const AErrorMessage: string = ''): Boolean;
     function CompleteShutdown: Boolean;
     function CancellationWasRequested(
       const AOperationId: TBleOperationId): Boolean;
@@ -196,7 +198,8 @@ end;
 
 function TFakeLazBleBackend.CompleteOperation(
   const AOperationId: TBleOperationId;
-  const AEventKind: TLazBleBackendEventKind): Boolean;
+  const AEventKind: TLazBleBackendEventKind; const AErrorCode: Integer;
+  const AErrorMessage: string): Boolean;
 var
   BackendEvent: TLazBleBackendEvent;
   Index: Integer;
@@ -217,6 +220,8 @@ begin
   BackendEvent := Default(TLazBleBackendEvent);
   BackendEvent.Kind := AEventKind;
   BackendEvent.OperationId := AOperationId;
+  BackendEvent.ErrorCode := AErrorCode;
+  BackendEvent.ErrorMessage := AErrorMessage;
   Deliver(BackendEvent);
   Result := True;
 end;
