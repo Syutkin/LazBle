@@ -38,6 +38,15 @@ type
   TBleAvailabilityEvent = procedure(Sender: TObject;
     const AAvailability: TBleAvailability) of object;
 
+  TLazBleBackendInfo = record
+    Name: string;
+    Version: string;
+    AdapterId: string;
+  end;
+  TLazBleAvailabilityResultEvent = procedure(Sender: TObject;
+    const AAvailability: TBleAvailability;
+    const ABackendInfo: TLazBleBackendInfo) of object;
+
 const
   InvalidBleOperationId: TBleOperationId = 0;
   InvalidBleSubscriptionId: TBleSubscriptionId = 0;
@@ -127,6 +136,8 @@ type
     OperationId: TBleOperationId;
     SubscriptionId: TBleSubscriptionId;
     Generation: QWord;
+    BackendName: string;
+    BackendVersion: string;
     AdapterId: string;
     DeviceId: string;
     DeviceName: string;

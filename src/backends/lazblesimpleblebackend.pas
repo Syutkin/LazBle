@@ -636,10 +636,18 @@ function TLazBleNativeSimpleBleDriver.ExecuteAvailability(
 var
   AdapterError: string;
   BackendEvent: TLazBleBackendEvent;
+  VersionValue: PChar;
 begin
   BackendEvent := Default(TLazBleBackendEvent);
   BackendEvent.Kind := lbekAvailabilityResult;
   BackendEvent.OperationId := FOperationId;
+  BackendEvent.BackendName := 'SimpleBLE';
+  if Assigned(SimpleBleGetVersion) then
+  begin
+    VersionValue := SimpleBleGetVersion();
+    if VersionValue <> nil then
+      BackendEvent.BackendVersion := StrPas(VersionValue);
+  end;
   BackendEvent.Available := SelectAdapter(ACommand.AdapterId, AdapterError);
   if BackendEvent.Available and not SimpleBleAdapterIsBluetoothEnabled() then
   begin

@@ -217,6 +217,9 @@ begin
       BackendEvent.Kind := lbekAvailabilityResult;
       BackendEvent.OperationId := FOperationId;
       BackendEvent.Available := FAvailable;
+      BackendEvent.BackendName := 'FakeBLE';
+      BackendEvent.BackendVersion := '2.3.4';
+      BackendEvent.AdapterId := 'hci-selected';
       FBackend.EmitProgress(BackendEvent);
     end;
     FBackend.CompleteOperation(FOperationId, FTerminalKind, FErrorCode,
@@ -448,6 +451,9 @@ begin
     AssertEquals(Ord(lbaAvailable), Ord(FComponent.Availability));
     AssertEquals(2, Length(FAvailabilityChanges));
     AssertEquals(Ord(lbaAvailable), Ord(FAvailabilityChanges[1]));
+    AssertEquals('FakeBLE', FComponent.BackendInfo.Name);
+    AssertEquals('2.3.4', FComponent.BackendInfo.Version);
+    AssertEquals('hci-selected', FComponent.BackendInfo.AdapterId);
     AssertEquals(Int64(MainThreadID), Int64(FLastCallbackThreadId));
   finally
     Thread.WaitFor;

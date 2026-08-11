@@ -52,7 +52,7 @@ type
     FShutdownOperationId: TBleOperationId;
     FOnScanResult: TLazBleScanResultEvent;
     FOnScanCompleted: TLazBleScanCompletedEvent;
-    FOnAvailabilityResult: TBleAvailabilityEvent;
+    FOnAvailabilityResult: TLazBleAvailabilityResultEvent;
     FOnAvailabilityCompleted: TLazBleAvailabilityCompletedEvent;
     FOnStateChanged: TLazBleCentralStateChangedEvent;
     procedure SetState(const AState: TLazBleCentralState);
@@ -75,7 +75,7 @@ type
       write FOnScanResult;
     property OnScanCompleted: TLazBleScanCompletedEvent read FOnScanCompleted
       write FOnScanCompleted;
-    property OnAvailabilityResult: TBleAvailabilityEvent
+    property OnAvailabilityResult: TLazBleAvailabilityResultEvent
       read FOnAvailabilityResult write FOnAvailabilityResult;
     property OnAvailabilityCompleted: TLazBleAvailabilityCompletedEvent
       read FOnAvailabilityCompleted write FOnAvailabilityCompleted;
@@ -276,6 +276,7 @@ end;
 procedure TBleCentralManager.HandleBackendEvent(
   const AEvent: TLazBleBackendEvent);
 var
+  BackendInfo: TLazBleBackendInfo;
   Index: Integer;
 begin
   if FState = lbcsShutdown then
@@ -288,10 +289,16 @@ begin
   if (AEvent.Kind = lbekAvailabilityResult) and
     (AEvent.OperationId = FAvailabilityOperationId) and
     Assigned(FOnAvailabilityResult) then
+  begin
+    BackendInfo := Default(TLazBleBackendInfo);
+    BackendInfo.Name := AEvent.BackendName;
+    BackendInfo.Version := AEvent.BackendVersion;
+    BackendInfo.AdapterId := AEvent.AdapterId;
     if AEvent.Available then
-      FOnAvailabilityResult(Self, lbaAvailable)
+      FOnAvailabilityResult(Self, lbaAvailable, BackendInfo)
     else
-      FOnAvailabilityResult(Self, lbaUnavailable);
+      FOnAvailabilityResult(Self, lbaUnavailable, BackendInfo);
+  end;
 
   if (FState = lbcsShuttingDown) and
     (AEvent.Kind = lbekShutdownCompleted) and

@@ -79,6 +79,7 @@ type
     function GetScanResults: TBleDeviceInfos;
     function GetLastErrorCode: Integer;
     function GetLastErrorMessage: string;
+    function GetBackendInfo: TLazBleBackendInfo;
     function GetClientCount: Integer;
     function GetClient(const AIndex: Integer): TLazBleLclClient;
     procedure ValidateClientDeviceId(const AClient: TLazBleLclClient;
@@ -117,6 +118,7 @@ type
     property ScanController: TLazBleLclScan read FScan;
     property LastErrorCode: Integer read GetLastErrorCode;
     property LastErrorMessage: string read GetLastErrorMessage;
+    property BackendInfo: TLazBleBackendInfo read GetBackendInfo;
     property ClientCount: Integer read GetClientCount;
     property Clients[const AIndex: Integer]: TLazBleLclClient
       read GetClient;
@@ -584,6 +586,14 @@ end;
 function TLazBleComponent.GetLastErrorMessage: string;
 begin
   Result := FLastErrorMessage;
+end;
+
+function TLazBleComponent.GetBackendInfo: TLazBleBackendInfo;
+begin
+  if Assigned(FBle) then
+    Result := FBle.BackendInfo
+  else
+    Result := Default(TLazBleBackendInfo);
 end;
 
 function TLazBleComponent.GetClientCount: Integer;

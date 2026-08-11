@@ -443,12 +443,18 @@ begin
   BackendEvent.Kind := lbekAvailabilityResult;
   BackendEvent.OperationId := OperationId;
   BackendEvent.Available := True;
+  BackendEvent.BackendName := 'FakeBLE';
+  BackendEvent.BackendVersion := '2.3.4';
+  BackendEvent.AdapterId := 'hci-selected';
   AssertTrue(FBackendObject.EmitProgress(BackendEvent));
   AssertTrue(FBackendObject.CompleteOperation(OperationId,
     lbekOperationSucceeded));
 
   AssertEquals(Ord(lbopSucceeded), Ord(Operation.State));
   AssertEquals(Ord(lbaAvailable), Ord(Operation.Availability));
+  AssertEquals('FakeBLE', FBle.BackendInfo.Name);
+  AssertEquals('2.3.4', FBle.BackendInfo.Version);
+  AssertEquals('hci-selected', FBle.BackendInfo.AdapterId);
 
   Operation := FBle.CheckAvailabilityAsync('hci-test');
   OperationId := FBackendObject.OperationIds[1];

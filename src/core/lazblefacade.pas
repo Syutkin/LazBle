@@ -31,13 +31,18 @@ type
     FShutdownOperation: IBleOperation;
     FShutdownOperationObject: TBleOperation;
     FReconnectTimerFactory: ILazBleReconnectTimerFactory;
+    FBackendInfoLock: TRTLCriticalSection;
+    FBackendInfo: TLazBleBackendInfo;
+    function GetBackendInfo: TLazBleBackendInfo;
+    procedure SetBackendInfo(const ABackendInfo: TLazBleBackendInfo);
     procedure OperationCancelled(Sender: TObject);
     procedure ScanResult(Sender: TObject; const ADeviceId,
       ADeviceName: string; const ARssi: SmallInt);
     procedure ScanCompleted(Sender: TObject; const ASucceeded: Boolean;
       const AErrorCode: Integer; const AErrorMessage: string);
     procedure AvailabilityResult(Sender: TObject;
-      const AAvailability: TBleAvailability);
+      const AAvailability: TBleAvailability;
+      const ABackendInfo: TLazBleBackendInfo);
     procedure AvailabilityCompleted(Sender: TObject;
       const ASucceeded: Boolean; const AErrorCode: Integer;
       const AErrorMessage: string);
@@ -67,6 +72,7 @@ type
     function FindClient(const ADeviceId: string): TBleClient;
     procedure RemoveClient(const AClient: TBleClient);
     function ShutdownAsync: IBleOperation;
+    property BackendInfo: TLazBleBackendInfo read GetBackendInfo;
   end;
 
 implementation
@@ -224,6 +230,8 @@ begin
     raise EArgumentNilException.Create('ABackend');
   if not Assigned(AReconnectTimerFactory) then
     raise EArgumentNilException.Create('AReconnectTimerFactory');
+  InitCriticalSection(FBackendInfoLock);
+  FBackendInfo := Default(TLazBleBackendInfo);
   FReconnectTimerFactory := AReconnectTimerFactory;
   FOperations := TList.Create;
   FClients := TList.Create;
@@ -270,7 +278,29 @@ begin
   FShutdownOperation := nil;
   FShutdownOperationObject := nil;
   FReconnectTimerFactory := nil;
+  DoneCriticalSection(FBackendInfoLock);
   inherited Destroy;
+end;
+
+function TLazBle.GetBackendInfo: TLazBleBackendInfo;
+begin
+  EnterCriticalSection(FBackendInfoLock);
+  try
+    Result := FBackendInfo;
+  finally
+    LeaveCriticalSection(FBackendInfoLock);
+  end;
+end;
+
+procedure TLazBle.SetBackendInfo(
+  const ABackendInfo: TLazBleBackendInfo);
+begin
+  EnterCriticalSection(FBackendInfoLock);
+  try
+    FBackendInfo := ABackendInfo;
+  finally
+    LeaveCriticalSection(FBackendInfoLock);
+  end;
 end;
 
 procedure TLazBle.OperationCancelled(Sender: TObject);
@@ -344,8 +374,10 @@ begin
 end;
 
 procedure TLazBle.AvailabilityResult(Sender: TObject;
-  const AAvailability: TBleAvailability);
+  const AAvailability: TBleAvailability;
+  const ABackendInfo: TLazBleBackendInfo);
 begin
+  SetBackendInfo(ABackendInfo);
   if Assigned(FActiveAvailability) and
     (FActiveAvailability.State = lbopPending) then
     TBleAvailabilityOperationAccess(
@@ -464,6 +496,7 @@ begin
   if Assigned(FActiveAvailability) and
     (FActiveAvailability.State = lbopPending) then
     Exit(FActiveAvailability);
+  SetBackendInfo(Default(TLazBleBackendInfo));
   Operation := TBleAvailabilityOperationAccess.CreateInternal(
     @OperationCancelled);
   Result := Operation;
