@@ -517,27 +517,34 @@ begin
 end;
 
 procedure TBleClient.SessionConnectCompleted(Sender: TObject);
+var
+  Operation: IBleOperation;
 begin
-  if FSessionConnectOperation.State = lbopSucceeded then
+  if not Supports(Sender, IBleOperation, Operation) then
+    Exit;
+  if Operation.State = lbopSucceeded then
     AttachProfiles
   else
   begin
     SetState(lbcstError);
     if Assigned(FConnectOperation) then
-      if FSessionConnectOperation.State = lbopCancelled then
+      if Operation.State = lbopCancelled then
         TBleOperationAccess(FConnectOperationObject).Finish(lbopCancelled)
       else
         TBleOperationAccess(FConnectOperationObject).Finish(lbopFailed,
-          FSessionConnectOperation.ErrorCode,
-          FSessionConnectOperation.ErrorMessage);
+          Operation.ErrorCode, Operation.ErrorMessage);
     if FReconnectCycleActive then
       ScheduleReconnect;
   end;
 end;
 
 procedure TBleClient.SessionDisconnectCompleted(Sender: TObject);
+var
+  Operation: IBleOperation;
 begin
-  if FSessionDisconnectOperation.State = lbopSucceeded then
+  if not Supports(Sender, IBleOperation, Operation) then
+    Exit;
+  if Operation.State = lbopSucceeded then
   begin
     SetState(lbcstDisconnected);
     if Assigned(FDisconnectOperation) then
@@ -548,8 +555,7 @@ begin
     SetState(lbcstError);
     if Assigned(FDisconnectOperation) then
       TBleOperationAccess(FDisconnectOperationObject).Finish(lbopFailed,
-        FSessionDisconnectOperation.ErrorCode,
-        FSessionDisconnectOperation.ErrorMessage);
+        Operation.ErrorCode, Operation.ErrorMessage);
     if FReconnectCycleActive then
       ScheduleReconnect;
   end;

@@ -33,9 +33,11 @@ type
   TLazBleManagerEventSink = class(TInterfacedObject,
     ILazBleBackendEventSink)
   private
+    FLock: TRTLCriticalSection;
     FManager: TBleCentralManager;
   public
     constructor Create(const AManager: TBleCentralManager);
+    destructor Destroy; override;
     procedure Detach;
     procedure HandleBackendEvent(const AEvent: TLazBleBackendEvent);
   end;
@@ -60,6 +62,8 @@ type
       const ACommand: TLazBleBackendCommand): TBleOperationId;
     procedure CancelOperation(const AOperationId: TBleOperationId);
     procedure HandleBackendEvent(const AEvent: TLazBleBackendEvent);
+  protected
+    procedure DetachBackendEvents;
   public
     constructor Create(const ABackend: ILazBleBackend);
     destructor Destroy; override;
@@ -126,7 +130,15 @@ constructor TLazBleManagerEventSink.Create(
   const AManager: TBleCentralManager);
 begin
   inherited Create;
+  InitCriticalSection(FLock);
   FManager := AManager;
+end;
+
+destructor TLazBleManagerEventSink.Destroy;
+begin
+  Detach;
+  DoneCriticalSection(FLock);
+  inherited Destroy;
 end;
 
 procedure TBleCentralManager.CancelOperation(
@@ -139,14 +151,24 @@ end;
 
 procedure TLazBleManagerEventSink.Detach;
 begin
-  FManager := nil;
+  EnterCriticalSection(FLock);
+  try
+    FManager := nil;
+  finally
+    LeaveCriticalSection(FLock);
+  end;
 end;
 
 procedure TLazBleManagerEventSink.HandleBackendEvent(
   const AEvent: TLazBleBackendEvent);
 begin
-  if Assigned(FManager) then
-    FManager.HandleBackendEvent(AEvent);
+  EnterCriticalSection(FLock);
+  try
+    if Assigned(FManager) then
+      FManager.HandleBackendEvent(AEvent);
+  finally
+    LeaveCriticalSection(FLock);
+  end;
 end;
 
 constructor TBleCentralManager.Create(const ABackend: ILazBleBackend);
@@ -166,11 +188,9 @@ destructor TBleCentralManager.Destroy;
 var
   Index: Integer;
 begin
-  if Assigned(FEventSinkObject) then
-    FEventSinkObject.Detach;
+  DetachBackendEvents;
   if Assigned(FBackend) then
   begin
-    FBackend.SetEventSink(nil);
     if FState <> lbcsShutdown then
       FBackend.BeginShutdown;
   end;
@@ -181,6 +201,14 @@ begin
   FEventSink := nil;
   FEventSinkObject := nil;
   inherited Destroy;
+end;
+
+procedure TBleCentralManager.DetachBackendEvents;
+begin
+  if Assigned(FBackend) then
+    FBackend.SetEventSink(nil);
+  if Assigned(FEventSinkObject) then
+    FEventSinkObject.Detach;
 end;
 
 function TBleCentralManager.SubmitCommand(

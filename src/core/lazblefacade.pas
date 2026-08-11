@@ -89,6 +89,11 @@ type
       const AReconnectTimer: ILazBleReconnectTimer);
   end;
 
+  TBleCentralManagerAccess = class(TBleCentralManager)
+  public
+    procedure DetachBackendEventsInternal;
+  end;
+
   TBleGattSessionAccess = class(TBleGattSession)
   public
     function ConnectInternal: TBleOperationId;
@@ -141,6 +146,11 @@ constructor TBleClientAccess.CreateInternal(const ASession: TBleGattSession;
 begin
   inherited Create(ASession, AConnectSession, ADisconnectSession,
     AReconnectTimer);
+end;
+
+procedure TBleCentralManagerAccess.DetachBackendEventsInternal;
+begin
+  DetachBackendEvents;
 end;
 
 function TBleGattSessionAccess.ConnectInternal: TBleOperationId;
@@ -250,6 +260,7 @@ var
 begin
   if Assigned(FManager) then
   begin
+    TBleCentralManagerAccess(FManager).DetachBackendEventsInternal;
     FManager.OnScanResult := nil;
     FManager.OnScanCompleted := nil;
     FManager.OnAvailabilityResult := nil;

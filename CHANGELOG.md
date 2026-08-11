@@ -12,3 +12,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - GATT operations, byte channels, NUS, and Battery profiles.
 - Optional reconnect policy and synchronous facade.
 - LCL components, device selection, localization, and examples.
+- Safe shutdown while backend callbacks are in flight.

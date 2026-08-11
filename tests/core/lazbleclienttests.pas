@@ -129,7 +129,7 @@ type
     procedure ProfileCannotBeAddedToTwoClients;
     procedure ProfileCannotBeAddedAfterConnectStarts;
     procedure ClientExposesGattOperations;
-    procedure FacadeOwnsClientsProfilesAndDetachesBackend;
+    procedure FacadeDetachesBackendBeforeDestroyingClientsAndProfiles;
     procedure ShutdownCancelsActiveClientConnection;
     procedure ShutdownCancelsClientWhileProfileIsAttaching;
     procedure AutoReconnectIsDisabledByDefault;
@@ -974,7 +974,7 @@ begin
   AssertEquals(Ord(lbckSubscribe), Ord(FBackendObject.Commands[4].Kind));
 end;
 
-procedure TLazBleClientTest.FacadeOwnsClientsProfilesAndDetachesBackend;
+procedure TLazBleClientTest.FacadeDetachesBackendBeforeDestroyingClientsAndProfiles;
 var
   BackendHadSinkWhenProfileDestroyed: Boolean;
   Client: TBleClient;
@@ -992,7 +992,7 @@ begin
   FBle := nil;
 
   AssertEquals(1, DestroyCount);
-  AssertTrue(BackendHadSinkWhenProfileDestroyed);
+  AssertFalse(BackendHadSinkWhenProfileDestroyed);
   AssertFalse(FBackendObject.HasEventSink);
 end;
 
