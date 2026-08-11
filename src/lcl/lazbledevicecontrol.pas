@@ -13,7 +13,11 @@ uses
   LazBleTypes,
   LazBleClient,
   LazBleComponent,
+  LazBleLclScan,
   LazBleDeviceSelectForm;
+
+function LazBleDeviceText(const AClient: TLazBleLclClient): string;
+function LazBleStatusText(const AClient: TLazBleLclClient): string;
 
 type
   TLazBleDeviceControl = class(TCustomControl)
@@ -104,6 +108,9 @@ implementation
 resourcestring
   SBleNoClient = 'No BLE client assigned';
   SBleNoDevice = 'No device selected';
+  SBleCheckingAvailability = 'Checking Bluetooth availability...';
+  SBleUnavailable = 'Bluetooth unavailable';
+  SBleScanning = 'Scanning for Bluetooth devices...';
   SBleDisconnected = 'Disconnected';
   SBleConnecting = 'Connecting...';
   SBleAttachingProfiles = 'Preparing services...';
@@ -115,6 +122,46 @@ resourcestring
   SBleSelect = 'Select...';
   SBleConnect = 'Connect';
   SBleDisconnect = 'Disconnect';
+
+function LazBleDeviceText(const AClient: TLazBleLclClient): string;
+begin
+  if not Assigned(AClient) then
+    Exit(SBleNoClient);
+  if AClient.DeviceName <> '' then
+    Exit(AClient.DeviceName);
+  if AClient.DeviceId <> '' then
+    Exit(AClient.DeviceId);
+  Result := SBleNoDevice;
+end;
+
+function LazBleStatusText(const AClient: TLazBleLclClient): string;
+begin
+  if not Assigned(AClient) then
+    Exit('');
+  if Assigned(AClient.LazBle) then
+  begin
+    case AClient.LazBle.Availability of
+      lbaChecking: Exit(SBleCheckingAvailability);
+      lbaUnavailable: Exit(SBleUnavailable);
+    end;
+    if AClient.LazBle.ScanState = lblssScanning then
+      Exit(SBleScanning);
+  end;
+  case AClient.State of
+    lbcstDisconnected: Result := SBleDisconnected;
+    lbcstConnecting: Result := SBleConnecting;
+    lbcstAttachingProfiles: Result := SBleAttachingProfiles;
+    lbcstReady: Result := SBleConnected;
+    lbcstWaitingToReconnect: Result := SBleWaitingToReconnect;
+    lbcstDisconnecting: Result := SBleDisconnecting;
+    lbcstError:
+      if AClient.LastErrorMessage <> '' then
+        Result := Format(SBleConnectionErrorDetail,
+          [AClient.LastErrorMessage])
+      else
+        Result := SBleConnectionError;
+  end;
+end;
 
 constructor TLazBleDeviceControl.Create(AOwner: TComponent);
 begin
@@ -272,33 +319,12 @@ end;
 
 function TLazBleDeviceControl.GetDeviceText: string;
 begin
-  if not Assigned(FClient) then
-    Exit(SBleNoClient);
-  if FClient.DeviceName <> '' then
-    Exit(FClient.DeviceName);
-  if FClient.DeviceId <> '' then
-    Exit(FClient.DeviceId);
-  Result := SBleNoDevice;
+  Result := LazBleDeviceText(FClient);
 end;
 
 function TLazBleDeviceControl.GetStatusText: string;
 begin
-  if not Assigned(FClient) then
-    Exit('');
-  case FClient.State of
-    lbcstDisconnected: Result := SBleDisconnected;
-    lbcstConnecting: Result := SBleConnecting;
-    lbcstAttachingProfiles: Result := SBleAttachingProfiles;
-    lbcstReady: Result := SBleConnected;
-    lbcstWaitingToReconnect: Result := SBleWaitingToReconnect;
-    lbcstDisconnecting: Result := SBleDisconnecting;
-    lbcstError:
-      if FClient.LastErrorMessage <> '' then
-        Result := Format(SBleConnectionErrorDetail,
-          [FClient.LastErrorMessage])
-      else
-        Result := SBleConnectionError;
-  end;
+  Result := LazBleStatusText(FClient);
 end;
 
 procedure TLazBleDeviceControl.RefreshDisplay;

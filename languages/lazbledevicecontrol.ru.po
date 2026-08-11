@@ -13,6 +13,10 @@ msgstr ""
 msgid "Preparing services..."
 msgstr "Подготовка сервисов..."
 
+#: lazbledevicecontrol.sblecheckingavailability
+msgid "Checking Bluetooth availability..."
+msgstr "Проверка доступности Bluetooth..."
+
 #: lazbledevicecontrol.sbleconnect
 msgid "Connect"
 msgstr "Подключить"
@@ -54,9 +58,17 @@ msgstr "BLE-клиент не назначен"
 msgid "No device selected"
 msgstr "Устройство не выбрано"
 
+#: lazbledevicecontrol.sblescanning
+msgid "Scanning for Bluetooth devices..."
+msgstr "Поиск устройств Bluetooth..."
+
 #: lazbledevicecontrol.sbleselect
 msgid "Select..."
 msgstr "Выбрать..."
+
+#: lazbledevicecontrol.sbleunavailable
+msgid "Bluetooth unavailable"
+msgstr "Bluetooth недоступен"
 
 #: lazbledevicecontrol.sblewaitingtoreconnect
 msgid "Waiting to reconnect..."

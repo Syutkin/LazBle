@@ -5,6 +5,10 @@ msgstr "Content-Type: text/plain; charset=UTF-8"
 msgid "Preparing services..."
 msgstr ""
 
+#: lazbledevicecontrol.sblecheckingavailability
+msgid "Checking Bluetooth availability..."
+msgstr ""
+
 #: lazbledevicecontrol.sbleconnect
 msgid "Connect"
 msgstr ""
@@ -46,10 +50,19 @@ msgstr ""
 msgid "No device selected"
 msgstr ""
 
+#: lazbledevicecontrol.sblescanning
+msgid "Scanning for Bluetooth devices..."
+msgstr ""
+
 #: lazbledevicecontrol.sbleselect
 msgid "Select..."
+msgstr ""
+
+#: lazbledevicecontrol.sbleunavailable
+msgid "Bluetooth unavailable"
 msgstr ""
 
 #: lazbledevicecontrol.sblewaitingtoreconnect
 msgid "Waiting to reconnect..."
 msgstr ""
+

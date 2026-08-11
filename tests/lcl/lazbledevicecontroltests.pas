@@ -75,6 +75,7 @@ type
     procedure DirectClientSelectionRefreshesControl;
     procedure ConnectActionUsesBoundClient;
     procedure ConnectActionRetriesAfterError;
+    procedure StatusTextReflectsClientScanAndAvailabilityStates;
     procedure DestroyedClientClearsBinding;
     procedure RebindingStopsObservingPreviousClient;
   end;
@@ -385,6 +386,34 @@ begin
   AssertEquals(2, FBackendObject.CommandCount);
   AssertEquals(Ord(lbckConnect), Ord(FBackendObject.Commands[1].Kind));
   AssertEquals(Ord(lbcstConnecting), Ord(FClient.State));
+end;
+
+procedure TLazBleDeviceControlTest.
+  StatusTextReflectsClientScanAndAvailabilityStates;
+var
+  DisconnectedText, ConnectingText, ScanningText, AvailabilityText: string;
+begin
+  FClient.SelectDevice(Device('device-a', 'Timing unit', -45));
+  FControl.Client := FClient;
+
+  AssertEquals(LazBleDeviceText(FClient), FControl.DeviceText);
+  DisconnectedText := LazBleStatusText(FClient);
+  AssertEquals(DisconnectedText, FControl.StatusText);
+
+  FControl.ToggleConnection;
+  ConnectingText := LazBleStatusText(FClient);
+  AssertTrue(ConnectingText <> DisconnectedText);
+  AssertEquals(ConnectingText, FControl.StatusText);
+
+  FLazBle.StartScan;
+  ScanningText := LazBleStatusText(FClient);
+  AssertTrue(ScanningText <> ConnectingText);
+  AssertEquals(ScanningText, FControl.StatusText);
+
+  FLazBle.RefreshAvailability;
+  AvailabilityText := LazBleStatusText(FClient);
+  AssertTrue(AvailabilityText <> ScanningText);
+  AssertEquals(AvailabilityText, FControl.StatusText);
 end;
 
 procedure TLazBleDeviceControlTest.DestroyedClientClearsBinding;

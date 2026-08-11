@@ -65,3 +65,4 @@ msgstr ""
 #: lazbledeviceselectform.sbledeviceselecttitle
 msgid "Bluetooth devices"
 msgstr ""
+
