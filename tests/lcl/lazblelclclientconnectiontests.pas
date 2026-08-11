@@ -10,6 +10,7 @@ uses
   SyncObjs,
   FpcUnit,
   TestRegistry,
+  Forms,
   LazBleTypes,
   LazBleBackend,
   LazBleClient,
@@ -54,6 +55,7 @@ type
   private
     FBackend: ILazBleBackend;
     FBackendObject: TFakeLazBleBackend;
+    FOwnerForm: TForm;
     FLazBle: TLazBleComponent;
     FClient: TLazBleLclClient;
     FConfigureCount: Integer;
@@ -85,7 +87,7 @@ type
     procedure DisconnectAllowsDeviceReplacementAndReconfiguration;
     procedure ErrorStateAllowsDeviceReplacementAndReconfiguration;
     procedure ActiveConnectionRejectsDeviceChange;
-    procedure DestroyDropsQueuedConnectionCallbacks;
+    procedure FormCloseDropsQueuedConnectionCallbacks;
   end;
 
 implementation
@@ -179,8 +181,9 @@ begin
   inherited SetUp;
   FBackendObject := TFakeLazBleBackend.Create;
   FBackend := FBackendObject;
-  FLazBle := TLazBleComponent.Create(nil, FBackend);
-  FClient := TLazBleLclClient.Create(nil);
+  FOwnerForm := TForm.CreateNew(nil);
+  FLazBle := TLazBleComponent.Create(FOwnerForm, FBackend);
+  FClient := TLazBleLclClient.Create(FOwnerForm);
   FClient.LazBle := FLazBle;
   FClient.DeviceId := 'device-a';
   FClient.OnConfigureClient := @ConfigureClient;
@@ -192,10 +195,10 @@ end;
 
 procedure TLazBleLclClientConnectionTest.TearDown;
 begin
-  FClient.Free;
+  FOwnerForm.Free;
+  FOwnerForm := nil;
   FClient := nil;
   CheckSynchronize;
-  FLazBle.Free;
   FLazBle := nil;
   FBackend := nil;
   FBackendObject := nil;
@@ -421,7 +424,8 @@ begin
   AssertEquals('device-b', FClient.CoreClient.DeviceId);
 end;
 
-procedure TLazBleLclClientConnectionTest.DestroyDropsQueuedConnectionCallbacks;
+procedure TLazBleLclClientConnectionTest.
+  FormCloseDropsQueuedConnectionCallbacks;
 var
   Thread: TClientBackendThread;
 begin
@@ -429,8 +433,10 @@ begin
   Thread := StartBackendAction(cbtaConnectSuccess);
   try
     WaitForAction(Thread);
-    FClient.Free;
+    FOwnerForm.Free;
+    FOwnerForm := nil;
     FClient := nil;
+    FLazBle := nil;
 
     CheckSynchronize;
 

@@ -10,6 +10,7 @@ uses
   SyncObjs,
   FpcUnit,
   TestRegistry,
+  Forms,
   LResources,
   LazBleTypes,
   LazBleBackend,
@@ -82,6 +83,7 @@ type
   private
     FBackend: ILazBleBackend;
     FBackendObject: TFakeLazBleBackend;
+    FOwnerForm: TForm;
     FComponent: TLazBleComponent;
     FResultCount: Integer;
     FStateChanges: array of TLazBleLclScanState;
@@ -121,7 +123,7 @@ type
     procedure ShutdownSuppressesPendingAvailabilityCallback;
     procedure ShutdownCancelsScanAndSuppressesCallbacks;
     procedure ShutdownIsIdempotentAndRejectsNewWork;
-    procedure DestroyIgnoresQueuedCallbacksAndReleasesFacade;
+    procedure FormCloseIgnoresQueuedScanCallbacksAndReleasesFacade;
   end;
 
 implementation
@@ -261,7 +263,8 @@ begin
   inherited SetUp;
   FBackendObject := TFakeLazBleBackend.Create;
   FBackend := FBackendObject;
-  FComponent := TLazBleComponent.Create(nil, FBackend);
+  FOwnerForm := TForm.CreateNew(nil);
+  FComponent := TLazBleComponent.Create(FOwnerForm, FBackend);
   FComponent.OnScanResult := @ScanResult;
   FComponent.OnScanStateChanged := @ScanStateChanged;
   FComponent.OnScanCompleted := @ScanCompleted;
@@ -280,7 +283,8 @@ end;
 
 procedure TLazBleComponentTest.TearDown;
 begin
-  FComponent.Free;
+  FOwnerForm.Free;
+  FOwnerForm := nil;
   FComponent := nil;
   CheckSynchronize;
   FBackend := nil;
@@ -669,7 +673,8 @@ begin
   AssertEquals(0, FComponent.ClientCount);
 end;
 
-procedure TLazBleComponentTest.DestroyIgnoresQueuedCallbacksAndReleasesFacade;
+procedure TLazBleComponentTest.
+  FormCloseIgnoresQueuedScanCallbacksAndReleasesFacade;
 var
   Thread: TComponentScanEmissionThread;
 begin
@@ -680,7 +685,8 @@ begin
   try
     Thread.Start;
     WaitForEmission(Thread);
-    FComponent.Free;
+    FOwnerForm.Free;
+    FOwnerForm := nil;
     FComponent := nil;
 
     CheckSynchronize;
