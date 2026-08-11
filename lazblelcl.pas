@@ -9,7 +9,7 @@ interface
 
 uses
   LazBleLclDispatch, LazBleLclScan, LazBleComponent,
-  LazBleDeviceSelectForm, LazBleDeviceControl;
+  LazBleDeviceSelectForm, LazBleDeviceControl, LazBleLclTranslations;
 
 implementation
 

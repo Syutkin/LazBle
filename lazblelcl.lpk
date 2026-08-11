@@ -13,7 +13,7 @@
         <UnitOutputDirectory Value="lib\$(TargetCPU)-$(TargetOS)\lcl"/>
       </SearchPaths>
     </CompilerOptions>
-    <Files Count="5">
+    <Files Count="6">
       <Item1>
         <Filename Value="src\lcl\lazblelcldispatch.pas"/>
         <UnitName Value="LazBleLclDispatch"/>
@@ -34,7 +34,16 @@
         <Filename Value="src\lcl\lazbledevicecontrol.pas"/>
         <UnitName Value="LazBleDeviceControl"/>
       </Item5>
+      <Item6>
+        <Filename Value="src\lcl\lazblelcltranslations.pas"/>
+        <UnitName Value="LazBleLclTranslations"/>
+      </Item6>
     </Files>
+    <i18n>
+      <EnableI18N Value="True"/>
+      <OutDir Value="languages"/>
+      <EnableI18NForLFM Value="True"/>
+    </i18n>
     <RequiredPkgs Count="2">
       <Item1>
         <PackageName Value="LCL"/>

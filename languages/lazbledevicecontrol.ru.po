@@ -1,0 +1,63 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: LazBleLCL 1.0\n"
+"PO-Revision-Date: 2026-08-11\n"
+"Last-Translator: LazBle contributors\n"
+"Language-Team: Russian\n"
+"Language: ru\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+#: lazbledevicecontrol.sbleattachingprofiles
+msgid "Preparing services..."
+msgstr "Подготовка сервисов..."
+
+#: lazbledevicecontrol.sbleconnect
+msgid "Connect"
+msgstr "Подключить"
+
+#: lazbledevicecontrol.sbleconnected
+msgid "Connected"
+msgstr "Подключено"
+
+#: lazbledevicecontrol.sbleconnecting
+msgid "Connecting..."
+msgstr "Подключение..."
+
+#: lazbledevicecontrol.sbleconnectionerror
+msgid "Connection error"
+msgstr "Ошибка подключения"
+
+#: lazbledevicecontrol.sbleconnectionerrordetail
+#, object-pascal-format
+msgid "Connection error: %s"
+msgstr "Ошибка подключения: %s"
+
+#: lazbledevicecontrol.sbledisconnect
+msgid "Disconnect"
+msgstr "Отключить"
+
+#: lazbledevicecontrol.sbledisconnected
+msgid "Disconnected"
+msgstr "Отключено"
+
+#: lazbledevicecontrol.sbledisconnecting
+msgid "Disconnecting..."
+msgstr "Отключение..."
+
+#: lazbledevicecontrol.sblenoclient
+msgid "No BLE client assigned"
+msgstr "BLE-клиент не назначен"
+
+#: lazbledevicecontrol.sblenodevice
+msgid "No device selected"
+msgstr "Устройство не выбрано"
+
+#: lazbledevicecontrol.sbleselect
+msgid "Select..."
+msgstr "Выбрать..."
+
+#: lazbledevicecontrol.sblewaitingtoreconnect
+msgid "Waiting to reconnect..."
+msgstr "Ожидание повторного подключения..."

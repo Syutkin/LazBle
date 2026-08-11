@@ -1,0 +1,67 @@
+msgid ""
+msgstr "Content-Type: text/plain; charset=UTF-8"
+
+#: lazbledeviceselectform.sbledeviceselectcancel
+msgid "Cancel"
+msgstr ""
+
+#: lazbledeviceselectform.sbledeviceselectcancelled
+msgid "Scan cancelled"
+msgstr ""
+
+#: lazbledeviceselectform.sbledeviceselecterror
+#, object-pascal-format
+msgid "%s: %s"
+msgstr ""
+
+#: lazbledeviceselectform.sbledeviceselectfailed
+msgid "Scan failed"
+msgstr ""
+
+#: lazbledeviceselectform.sbledeviceselectidcolumn
+msgid "Device ID"
+msgstr ""
+
+#: lazbledeviceselectform.sbledeviceselectidle
+msgid "Ready to scan"
+msgstr ""
+
+#: lazbledeviceselectform.sbledeviceselectnamecolumn
+msgid "Name"
+msgstr ""
+
+#: lazbledeviceselectform.sbledeviceselectretry
+msgid "Retry"
+msgstr ""
+
+#: lazbledeviceselectform.sbledeviceselectrssicolumn
+msgid "RSSI"
+msgstr ""
+
+#: lazbledeviceselectform.sbledeviceselectscanning
+msgid "Scanning for Bluetooth devices..."
+msgstr ""
+
+#: lazbledeviceselectform.sbledeviceselectselect
+msgid "Select"
+msgstr ""
+
+#: lazbledeviceselectform.sbledeviceselectstart
+msgid "Start"
+msgstr ""
+
+#: lazbledeviceselectform.sbledeviceselectstop
+msgid "Stop"
+msgstr ""
+
+#: lazbledeviceselectform.sbledeviceselectsucceeded
+msgid "Scan completed"
+msgstr ""
+
+#: lazbledeviceselectform.sbledeviceselecttimedout
+msgid "Scan timed out"
+msgstr ""
+
+#: lazbledeviceselectform.sbledeviceselecttitle
+msgid "Bluetooth devices"
+msgstr ""

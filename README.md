@@ -155,6 +155,18 @@ or streaming the control does not start BLE work. The control and the provided
 selection dialog are optional; applications can build their own UI over
 `TLazBleComponent`, `TLazBleLclScan`, and `TLazBleLclClient`.
 
+LazBleLCL translations are stored in `languages` as separate catalogues for
+`LazBleDeviceSelectForm` and `LazBleDeviceControl`. Load them after selecting
+the application language and before creating the controls:
+
+```pascal
+TranslateLazBleLclResourceStrings('languages', Language, FallbackLanguage);
+```
+
+The host application must deploy the LazBleLCL `.po` files alongside its own
+language files. Building `lazblelcl.lpk` updates the `.pot` templates through
+the Lazarus package i18n support; no custom string extractor is required.
+
 To add the components to the Lazarus palette, open
 `lazblelcldesign.lpk` and choose **Use > Install**. Lazarus normally rebuilds
 and restarts its IDE executable once because design-time packages are linked

@@ -17,7 +17,8 @@ uses
   LazBleComponentClientTests,
   LazBleLclClientReconnectTests,
   LazBleDeviceSelectFormTests,
-  LazBleDeviceControlTests;
+  LazBleDeviceControlTests,
+  LazBleLclTranslationsTests;
 
 var
   Runner: TTestRunner;

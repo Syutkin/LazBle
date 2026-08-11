@@ -57,6 +57,7 @@ type
       const AState: TLazBleLclScanState);
     procedure RefreshDevices;
     procedure RefreshControls;
+    procedure ApplyTranslations;
     procedure AcceptSelection;
   public
     constructor Create(AOwner: TComponent); override; overload;
@@ -85,6 +86,15 @@ implementation
 {$R *.lfm}
 
 resourcestring
+  SBleDeviceSelectTitle = 'Bluetooth devices';
+  SBleDeviceSelectNameColumn = 'Name';
+  SBleDeviceSelectIdColumn = 'Device ID';
+  SBleDeviceSelectRssiColumn = 'RSSI';
+  SBleDeviceSelectStart = 'Start';
+  SBleDeviceSelectStop = 'Stop';
+  SBleDeviceSelectRetry = 'Retry';
+  SBleDeviceSelectSelect = 'Select';
+  SBleDeviceSelectCancel = 'Cancel';
   SBleDeviceSelectIdle = 'Ready to scan';
   SBleDeviceSelectScanning = 'Scanning for Bluetooth devices...';
   SBleDeviceSelectSucceeded = 'Scan completed';
@@ -98,6 +108,7 @@ begin
   inherited Create(AOwner);
   FScanTimeoutMs := DefaultBleDeviceSelectScanTimeoutMs;
   FSelectedIndex := -1;
+  ApplyTranslations;
   RefreshDevices;
   RefreshControls;
 end;
@@ -326,6 +337,19 @@ begin
   ButtonRetry.Enabled := Assigned(FScan) and (State <> lblssScanning);
   ButtonSelect.Enabled := (FSelectedIndex >= 0) and
     (FSelectedIndex < Length(FDevices));
+end;
+
+procedure TBleDeviceSelectForm.ApplyTranslations;
+begin
+  Caption := SBleDeviceSelectTitle;
+  DeviceGrid.Columns[0].Title.Caption := SBleDeviceSelectNameColumn;
+  DeviceGrid.Columns[1].Title.Caption := SBleDeviceSelectIdColumn;
+  DeviceGrid.Columns[2].Title.Caption := SBleDeviceSelectRssiColumn;
+  ButtonStart.Caption := SBleDeviceSelectStart;
+  ButtonStop.Caption := SBleDeviceSelectStop;
+  ButtonRetry.Caption := SBleDeviceSelectRetry;
+  ButtonSelect.Caption := SBleDeviceSelectSelect;
+  ButtonCancel.Caption := SBleDeviceSelectCancel;
 end;
 
 procedure TBleDeviceSelectForm.AcceptSelection;

@@ -1,0 +1,63 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: LazBleLCL 1.0\n"
+"PO-Revision-Date: 2026-08-11\n"
+"Last-Translator: LazBle contributors\n"
+"Language-Team: English\n"
+"Language: en\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+#: lazbledevicecontrol.sbleattachingprofiles
+msgid "Preparing services..."
+msgstr "Preparing services..."
+
+#: lazbledevicecontrol.sbleconnect
+msgid "Connect"
+msgstr "Connect"
+
+#: lazbledevicecontrol.sbleconnected
+msgid "Connected"
+msgstr "Connected"
+
+#: lazbledevicecontrol.sbleconnecting
+msgid "Connecting..."
+msgstr "Connecting..."
+
+#: lazbledevicecontrol.sbleconnectionerror
+msgid "Connection error"
+msgstr "Connection error"
+
+#: lazbledevicecontrol.sbleconnectionerrordetail
+#, object-pascal-format
+msgid "Connection error: %s"
+msgstr "Connection error: %s"
+
+#: lazbledevicecontrol.sbledisconnect
+msgid "Disconnect"
+msgstr "Disconnect"
+
+#: lazbledevicecontrol.sbledisconnected
+msgid "Disconnected"
+msgstr "Disconnected"
+
+#: lazbledevicecontrol.sbledisconnecting
+msgid "Disconnecting..."
+msgstr "Disconnecting..."
+
+#: lazbledevicecontrol.sblenoclient
+msgid "No BLE client assigned"
+msgstr "No BLE client assigned"
+
+#: lazbledevicecontrol.sblenodevice
+msgid "No device selected"
+msgstr "No device selected"
+
+#: lazbledevicecontrol.sbleselect
+msgid "Select..."
+msgstr "Select..."
+
+#: lazbledevicecontrol.sblewaitingtoreconnect
+msgid "Waiting to reconnect..."
+msgstr "Waiting to reconnect..."

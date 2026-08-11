@@ -1,0 +1,75 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: LazBleLCL 1.0\n"
+"PO-Revision-Date: 2026-08-11\n"
+"Last-Translator: LazBle contributors\n"
+"Language-Team: Russian\n"
+"Language: ru\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+#: lazbledeviceselectform.sbledeviceselectcancel
+msgid "Cancel"
+msgstr "Отмена"
+
+#: lazbledeviceselectform.sbledeviceselectcancelled
+msgid "Scan cancelled"
+msgstr "Сканирование отменено"
+
+#: lazbledeviceselectform.sbledeviceselecterror
+#, object-pascal-format
+msgid "%s: %s"
+msgstr "%s: %s"
+
+#: lazbledeviceselectform.sbledeviceselectfailed
+msgid "Scan failed"
+msgstr "Ошибка сканирования"
+
+#: lazbledeviceselectform.sbledeviceselectidcolumn
+msgid "Device ID"
+msgstr "Идентификатор устройства"
+
+#: lazbledeviceselectform.sbledeviceselectidle
+msgid "Ready to scan"
+msgstr "Готово к сканированию"
+
+#: lazbledeviceselectform.sbledeviceselectnamecolumn
+msgid "Name"
+msgstr "Имя"
+
+#: lazbledeviceselectform.sbledeviceselectretry
+msgid "Retry"
+msgstr "Повторить"
+
+#: lazbledeviceselectform.sbledeviceselectrssicolumn
+msgid "RSSI"
+msgstr "RSSI"
+
+#: lazbledeviceselectform.sbledeviceselectscanning
+msgid "Scanning for Bluetooth devices..."
+msgstr "Поиск Bluetooth-устройств..."
+
+#: lazbledeviceselectform.sbledeviceselectselect
+msgid "Select"
+msgstr "Выбрать"
+
+#: lazbledeviceselectform.sbledeviceselectstart
+msgid "Start"
+msgstr "Начать"
+
+#: lazbledeviceselectform.sbledeviceselectstop
+msgid "Stop"
+msgstr "Остановить"
+
+#: lazbledeviceselectform.sbledeviceselectsucceeded
+msgid "Scan completed"
+msgstr "Сканирование завершено"
+
+#: lazbledeviceselectform.sbledeviceselecttimedout
+msgid "Scan timed out"
+msgstr "Время сканирования истекло"
+
+#: lazbledeviceselectform.sbledeviceselecttitle
+msgid "Bluetooth devices"
+msgstr "Bluetooth-устройства"
