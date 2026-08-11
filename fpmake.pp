@@ -7,6 +7,7 @@ uses
 
 var
   Package: TPackage;
+  Dependency: TDependency;
 begin
   with Installer do
   begin
@@ -17,7 +18,8 @@ begin
     Package.Description :=
       'Asynchronous BLE and GATT client library for Free Pascal';
     Package.Dependencies.Add('fcl-base');
-    Package.Dependencies.Add('simpleblepascal');
+    Dependency := Package.Dependencies.Add('simpleblepascal');
+    Dependency.Version := '1.1.0';
     Package.SourcePath.Add('.');
     Package.SourcePath.Add('src');
     Package.SourcePath.Add('src/backends');

@@ -7,6 +7,14 @@ dependencies to the core units. `lazblelcldesign.lpk` is an IDE-only package
 that places the components on the Lazarus component palette; applications do
 not depend on it.
 
+Current source release: **v1.0.0**.
+
+The default backend uses the
+[SimpleBlePascal](https://github.com/Syutkin/Pascal-Bindings-For-SimpleBLE-Library)
+1.1.0 bindings for the SimpleCBLE 1.1.0 ABI. The Pascal package is a compile-time
+dependency; the native SimpleCBLE library is loaded dynamically only when a
+BLE operation starts.
+
 ## Architecture
 
 - `TLazBle` is the facade, the entry point for creating clients, and their
@@ -251,12 +259,33 @@ units and are not a compatibility surface.
 
 ## Build and test
 
-Register or install the sibling `SimpleBlePascal` package before building
-LazBle. `fppkg build` likewise expects `simpleblepascal` to be available in the
-active FPC package repository.
+The Lazarus package requires `SimpleBlePascal` 1.1.0 or newer by package name.
+Lazarus does not discover it merely because its checkout is in a sibling
+directory. Register the bindings package in the active Lazarus configuration
+before building LazBle; register the LazBle packages as well before building a
+host project:
 
 ```sh
+lazbuild --add-package-link=/path/to/simpleblepascal.lpk
+lazbuild --add-package-link=/path/to/lazble.lpk
+lazbuild --add-package-link=/path/to/lazblelcl.lpk
+```
+
+The FPC package manager uses a separate repository. Install
+`simpleblepascal` from its checkout into the active FPC package repository
+before building LazBle with `fppkg`:
+
+```sh
+cd /path/to/Pascal-Bindings-For-SimpleBLE-Library
+fppkg install
+cd /path/to/LazBle
 fppkg build
+```
+
+Neither sequence requires the native SimpleCBLE library. The remaining build
+and test commands use the package registrations above:
+
+```sh
 lazbuild --ws=qt6 lazble.lpk
 lazbuild --ws=qt6 tests/lazbletests.lpi
 tests/bin/lazbletests --all --format=plain

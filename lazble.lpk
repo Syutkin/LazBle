@@ -97,6 +97,7 @@
       </Item>
       <Item>
         <PackageName Value="SimpleBlePascal"/>
+        <MinVersion Major="1" Minor="1" Valid="True"/>
       </Item>
     </RequiredPkgs>
     <UsageOptions>
