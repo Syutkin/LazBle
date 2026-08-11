@@ -16,8 +16,20 @@ uses
   LazBleLclScan,
   LazBleDeviceSelectForm;
 
+type
+  TLazBleConnectionAction = (
+    lbcaNone,
+    lbcaConnect,
+    lbcaDisconnect
+  );
+
 function LazBleDeviceText(const AClient: TLazBleLclClient): string;
 function LazBleStatusText(const AClient: TLazBleLclClient): string;
+function LazBleCanSelectDevice(const AClient: TLazBleLclClient): Boolean;
+function LazBleConnectionAction(
+  const AClient: TLazBleLclClient): TLazBleConnectionAction;
+function LazBleConnectionActionText(
+  const AClient: TLazBleLclClient): string;
 
 type
   TLazBleDeviceControl = class(TCustomControl)
@@ -169,6 +181,44 @@ begin
   end;
 end;
 
+function LazBleCanStartNewOperation(
+  const AClient: TLazBleLclClient): Boolean;
+begin
+  Result := Assigned(AClient) and Assigned(AClient.LazBle) and
+    (AClient.LazBle.Availability in [lbaUnknown, lbaAvailable]) and
+    (AClient.LazBle.ScanState <> lblssScanning);
+end;
+
+function LazBleCanSelectDevice(const AClient: TLazBleLclClient): Boolean;
+begin
+  Result := LazBleCanStartNewOperation(AClient) and
+    (AClient.State in [lbcstDisconnected, lbcstError]);
+end;
+
+function LazBleConnectionAction(
+  const AClient: TLazBleLclClient): TLazBleConnectionAction;
+begin
+  Result := lbcaNone;
+  if not Assigned(AClient) or not Assigned(AClient.LazBle) then
+    Exit;
+  if AClient.State in [lbcstConnecting, lbcstAttachingProfiles,
+    lbcstReady, lbcstWaitingToReconnect] then
+    Exit(lbcaDisconnect);
+  if (AClient.DeviceId <> '') and LazBleCanStartNewOperation(AClient) and
+    (AClient.State in [lbcstDisconnected, lbcstError]) then
+    Result := lbcaConnect;
+end;
+
+function LazBleConnectionActionText(
+  const AClient: TLazBleLclClient): string;
+begin
+  if (LazBleConnectionAction(AClient) = lbcaDisconnect) or
+    (Assigned(AClient) and (AClient.State = lbcstDisconnecting)) then
+    Result := SBleDisconnect
+  else
+    Result := SBleConnect;
+end;
+
 constructor TLazBleDeviceControl.Create(AOwner: TComponent);
 begin
   inherited Create(AOwner);
@@ -303,21 +353,19 @@ end;
 
 function TLazBleDeviceControl.GetCanSelectDevice: Boolean;
 begin
-  Result := Assigned(FClient) and Assigned(FClient.LazBle) and
-    (FClient.State in [lbcstDisconnected, lbcstError]);
+  Result := LazBleCanSelectDevice(FClient);
 end;
 
 function TLazBleDeviceControl.GetCanToggleConnection: Boolean;
 begin
-  Result := Assigned(FClient) and Assigned(FClient.LazBle) and
-    (FClient.DeviceId <> '') and (FClient.State <> lbcstDisconnecting);
+  Result := LazBleConnectionAction(FClient) <> lbcaNone;
 end;
 
 function TLazBleDeviceControl.GetConnectionActionText: string;
 begin
   if Assigned(FClient) and
-    (FClient.State in [lbcstConnecting, lbcstAttachingProfiles,
-      lbcstReady, lbcstWaitingToReconnect]) then
+    ((LazBleConnectionAction(FClient) = lbcaDisconnect) or
+    (FClient.State = lbcstDisconnecting)) then
     Result := FDisconnectButtonCaption
   else
     Result := FConnectButtonCaption;
@@ -422,12 +470,10 @@ end;
 
 procedure TLazBleDeviceControl.ToggleConnection;
 begin
-  if not CanToggleConnection then
-    Exit;
-  if FClient.State in [lbcstDisconnected, lbcstError] then
-    FClient.Connect
-  else
-    FClient.Disconnect;
+  case LazBleConnectionAction(FClient) of
+    lbcaConnect: FClient.Connect;
+    lbcaDisconnect: FClient.Disconnect;
+  end;
 end;
 
 procedure TLazBleDeviceControl.SelectButtonClick(Sender: TObject);

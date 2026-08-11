@@ -83,6 +83,7 @@ type
     function GetClient(const AIndex: Integer): TLazBleLclClient;
     procedure ValidateClientDeviceId(const AClient: TLazBleLclClient;
       const ADeviceId: string);
+    procedure NotifyClientsChanged;
     procedure RegisterClient(const AClient: TLazBleLclClient);
     procedure UnregisterClient(const AClient: TLazBleLclClient);
     procedure ScanStateChanged(Sender: TObject;
@@ -625,11 +626,27 @@ begin
   FClients.Remove(AClient);
 end;
 
+procedure TLazBleComponent.NotifyClientsChanged;
+var
+  Client: TLazBleLclClient;
+  ClientSnapshot: array of TLazBleLclClient;
+  Index: Integer;
+begin
+  ClientSnapshot := nil;
+  SetLength(ClientSnapshot, FClients.Count);
+  for Index := 0 to FClients.Count - 1 do
+    ClientSnapshot[Index] := TLazBleLclClient(FClients[Index]);
+  for Client in ClientSnapshot do
+    if FClients.IndexOf(Client) >= 0 then
+      Client.NotifyChanged;
+end;
+
 procedure TLazBleComponent.ScanStateChanged(Sender: TObject;
   const AState: TLazBleLclScanState);
 var
   Handler: TLazBleLclScanStateChangedEvent;
 begin
+  NotifyClientsChanged;
   Handler := FOnScanStateChanged;
   if Assigned(Handler) then
     Handler(Self, AState);
@@ -715,6 +732,7 @@ begin
   if FAvailability = AAvailability then
     Exit;
   FAvailability := AAvailability;
+  NotifyClientsChanged;
   Handler := FOnAvailabilityChanged;
   if Assigned(Handler) then
     Handler(Self, FAvailability);

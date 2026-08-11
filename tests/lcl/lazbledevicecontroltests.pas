@@ -75,6 +75,9 @@ type
     procedure DirectClientSelectionRefreshesControl;
     procedure ConnectActionUsesBoundClient;
     procedure ConnectActionRetriesAfterError;
+    procedure ActionPolicyBlocksConnectAndSelectionWhileScanning;
+    procedure ActionPolicyBlocksNewWorkWhenBleIsUnavailable;
+    procedure ActionPolicyAllowsOneDisconnectDuringConnection;
     procedure StatusTextReflectsClientScanAndAvailabilityStates;
     procedure StatusTextIncludesAvailabilityDiagnostic;
     procedure DestroyedClientClearsBinding;
@@ -387,6 +390,79 @@ begin
   AssertEquals(2, FBackendObject.CommandCount);
   AssertEquals(Ord(lbckConnect), Ord(FBackendObject.Commands[1].Kind));
   AssertEquals(Ord(lbcstConnecting), Ord(FClient.State));
+end;
+
+procedure TLazBleDeviceControlTest.
+  ActionPolicyBlocksConnectAndSelectionWhileScanning;
+begin
+  FClient.SelectDevice(Device('device-a', 'Timing unit', -45));
+  FControl.Client := FClient;
+
+  AssertEquals(Ord(lbcaConnect),
+    Ord(LazBleConnectionAction(FClient)));
+  AssertTrue(FControl.CanSelectDevice);
+  AssertTrue(FControl.CanToggleConnection);
+
+  FLazBle.StartScan;
+
+  AssertEquals(Ord(lbcaNone),
+    Ord(LazBleConnectionAction(FClient)));
+  AssertFalse(FControl.CanSelectDevice);
+  AssertFalse(FControl.CanToggleConnection);
+  AssertFalse(Button(0).Enabled);
+  AssertFalse(Button(1).Enabled);
+  FControl.ToggleConnection;
+  AssertEquals(1, FBackendObject.CommandCount);
+  AssertEquals(Ord(lbckStartScan), Ord(FBackendObject.Commands[0].Kind));
+end;
+
+procedure TLazBleDeviceControlTest.
+  ActionPolicyAllowsOneDisconnectDuringConnection;
+begin
+  FClient.SelectDevice(Device('device-a', 'Timing unit', -45));
+  FControl.Client := FClient;
+
+  FControl.ToggleConnection;
+  CheckSynchronize;
+  AssertEquals(Ord(lbcaDisconnect),
+    Ord(LazBleConnectionAction(FClient)));
+  AssertFalse(FControl.CanSelectDevice);
+  AssertFalse(Button(0).Enabled);
+  AssertTrue(Button(1).Enabled);
+
+  FControl.ToggleConnection;
+  CheckSynchronize;
+  AssertEquals(Ord(lbcaNone),
+    Ord(LazBleConnectionAction(FClient)));
+  AssertFalse(FControl.CanToggleConnection);
+  AssertFalse(Button(0).Enabled);
+  AssertFalse(Button(1).Enabled);
+  FControl.ToggleConnection;
+  AssertEquals(2, FBackendObject.CommandCount);
+  AssertEquals(Ord(lbckDisconnect), Ord(FBackendObject.Commands[1].Kind));
+end;
+
+procedure TLazBleDeviceControlTest.
+  ActionPolicyBlocksNewWorkWhenBleIsUnavailable;
+begin
+  FClient.SelectDevice(Device('device-a', 'Timing unit', -45));
+  FControl.Client := FClient;
+
+  FLazBle.RefreshAvailability;
+  AssertEquals(Ord(lbcaNone),
+    Ord(LazBleConnectionAction(FClient)));
+  AssertFalse(FControl.CanSelectDevice);
+  AssertFalse(Button(0).Enabled);
+  AssertFalse(Button(1).Enabled);
+
+  FBackendObject.CompleteOperation(FBackendObject.OperationIds[0],
+    lbekOperationFailed, 0, 'Bluetooth is disabled');
+  CheckSynchronize;
+
+  AssertEquals(Ord(lbcaNone),
+    Ord(LazBleConnectionAction(FClient)));
+  AssertFalse(FControl.CanSelectDevice);
+  AssertFalse(FControl.CanToggleConnection);
 end;
 
 procedure TLazBleDeviceControlTest.
