@@ -458,6 +458,7 @@ var
   AllRequiredReady: Boolean;
   Entry: TBleClientProfileEntry;
   Index: Integer;
+  ReconnectAfterProfileFailure: Boolean;
 begin
   if FAttachingProfiles or FEvaluatingProfiles or
     not (State in [lbcstAttachingProfiles, lbcstReady]) then
@@ -473,14 +474,20 @@ begin
       case Entry.Profile.State of
         lbgpsError:
           begin
+            ReconnectAfterProfileFailure := FReconnectCycleActive or
+              ((State = lbcstReady) and FReconnectController.Enabled and
+              not FManualDisconnect and not FShuttingDown);
             SetState(lbcstError);
             if Assigned(FConnectOperation) then
               TBleOperationAccess(FConnectOperationObject).Finish(
                 lbopFailed, Entry.Profile.ErrorCode,
                 Entry.Profile.ClassName + ': ' +
                 Entry.Profile.ErrorMessage);
-            if FReconnectCycleActive then
+            if ReconnectAfterProfileFailure then
+            begin
+              FReconnectCycleActive := True;
               DisconnectForReconnect
+            end
             else
             begin
               DetachProfiles;
