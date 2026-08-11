@@ -16,6 +16,7 @@ uses
   LazBleFacade,
   LazBleComponent,
   LazBleDeviceControl,
+  StdCtrls,
   FakeLazBleBackend;
 
 type
@@ -51,9 +52,15 @@ type
     FClient: TLazBleLclClient;
     FControl: TTestLazBleDeviceControl;
     FConnectedCount: Integer;
+    FSelectButtonClickCount: Integer;
+    FConnectionButtonClickCount: Integer;
+    FLastButtonClickSender: TObject;
     procedure ClientConnected(Sender: TObject);
+    procedure SelectButtonClicked(Sender: TObject);
+    procedure ConnectionButtonClicked(Sender: TObject);
     procedure FindComponentClass(Reader: TReader; const AClassName: string;
       var AClass: TComponentClass);
+    function Button(const AIndex: Integer): TButton;
     function Device(const ADeviceId, ADeviceName: string;
       const ARssi: SmallInt): TBleDeviceInfo;
   protected
@@ -61,6 +68,8 @@ type
     procedure TearDown; override;
   published
     procedure BindingPreservesClientEventsAndStartsNoBleWork;
+    procedure ButtonOptionsPreserveDefaultsAndUpdateControls;
+    procedure CustomButtonEventsReplaceDefaultActions;
     procedure StreamingRestoresClientBindingWithoutBleWork;
     procedure SelectingDeviceUpdatesExistingClientWithoutConnecting;
     procedure DirectClientSelectionRefreshesControl;
@@ -82,6 +91,22 @@ var
 begin
   for Index := 0 to ComponentCount - 1 do
     Proc(Components[Index]);
+end;
+
+function TLazBleDeviceControlTest.Button(const AIndex: Integer): TButton;
+var
+  ButtonIndex: Integer;
+  ControlIndex: Integer;
+begin
+  ButtonIndex := 0;
+  for ControlIndex := 0 to FControl.ControlCount - 1 do
+    if FControl.Controls[ControlIndex] is TButton then
+    begin
+      if ButtonIndex = AIndex then
+        Exit(TButton(FControl.Controls[ControlIndex]));
+      Inc(ButtonIndex);
+    end;
+  Result := nil;
 end;
 
 function TDeviceControlStreamingLazBle.CreateFacade: TLazBle;
@@ -106,6 +131,9 @@ begin
   FClient.LazBle := FLazBle;
   FControl := TTestLazBleDeviceControl.Create(nil);
   FConnectedCount := 0;
+  FSelectButtonClickCount := 0;
+  FConnectionButtonClickCount := 0;
+  FLastButtonClickSender := nil;
 end;
 
 procedure TLazBleDeviceControlTest.TearDown;
@@ -121,6 +149,18 @@ end;
 procedure TLazBleDeviceControlTest.ClientConnected(Sender: TObject);
 begin
   Inc(FConnectedCount);
+end;
+
+procedure TLazBleDeviceControlTest.SelectButtonClicked(Sender: TObject);
+begin
+  Inc(FSelectButtonClickCount);
+  FLastButtonClickSender := Sender;
+end;
+
+procedure TLazBleDeviceControlTest.ConnectionButtonClicked(Sender: TObject);
+begin
+  Inc(FConnectionButtonClickCount);
+  FLastButtonClickSender := Sender;
 end;
 
 procedure TLazBleDeviceControlTest.FindComponentClass(Reader: TReader;
@@ -155,6 +195,59 @@ begin
   AssertNull(FClient.CoreClient);
   AssertTrue(FControl.CanSelectDevice);
   AssertFalse(FControl.CanToggleConnection);
+end;
+
+procedure TLazBleDeviceControlTest.ButtonOptionsPreserveDefaultsAndUpdateControls;
+begin
+  AssertTrue(FControl.ShowSelectButton);
+  AssertTrue(FControl.ShowConnectionButton);
+  AssertEquals('Select...', FControl.SelectButtonCaption);
+  AssertEquals('Connect', FControl.ConnectButtonCaption);
+  AssertEquals('Disconnect', FControl.DisconnectButtonCaption);
+
+  FControl.SelectButtonCaption := 'Choose';
+  FControl.ConnectButtonCaption := 'Open';
+  FControl.DisconnectButtonCaption := 'Close';
+  FControl.ShowSelectButton := False;
+  FControl.ShowConnectionButton := False;
+
+  AssertEquals('Choose', Button(0).Caption);
+  AssertFalse(Button(0).Visible);
+  AssertEquals('Open', Button(1).Caption);
+  AssertFalse(Button(1).Visible);
+  AssertEquals('Open', FControl.ConnectionActionText);
+
+  FClient.SelectDevice(Device('device-a', 'Timing unit', -45));
+  FControl.Client := FClient;
+  FControl.ToggleConnection;
+  CheckSynchronize;
+
+  AssertEquals('Close', FControl.ConnectionActionText);
+  AssertEquals('Close', Button(1).Caption);
+end;
+
+procedure TLazBleDeviceControlTest.CustomButtonEventsReplaceDefaultActions;
+begin
+  FControl.Client := FClient;
+  FControl.SelectionResult := True;
+  FControl.SelectedDevice := Device('default-device', 'Default device', -45);
+  FControl.OnSelectButtonClick := @SelectButtonClicked;
+
+  Button(0).Click;
+
+  AssertEquals(1, FSelectButtonClickCount);
+  AssertSame(FControl, FLastButtonClickSender);
+  AssertEquals('', FClient.DeviceId);
+
+  FClient.SelectDevice(Device('custom-device', 'Custom device', -40));
+  FControl.OnConnectionButtonClick := @ConnectionButtonClicked;
+
+  Button(1).Click;
+
+  AssertEquals(1, FConnectionButtonClickCount);
+  AssertSame(FControl, FLastButtonClickSender);
+  AssertEquals(0, FBackendObject.CommandCount);
+  AssertNull(FClient.CoreClient);
 end;
 
 procedure TLazBleDeviceControlTest.StreamingRestoresClientBindingWithoutBleWork;
@@ -196,6 +289,11 @@ begin
     SourceControl := TLazBleDeviceControl.Create(Owner);
     SourceControl.Name := 'BleDeviceControl1';
     SourceControl.Client := SourceClient;
+    SourceControl.ShowSelectButton := False;
+    SourceControl.ShowConnectionButton := False;
+    SourceControl.SelectButtonCaption := 'Choose';
+    SourceControl.ConnectButtonCaption := 'Open';
+    SourceControl.DisconnectButtonCaption := 'Close';
     WriteComponentAsTextToStream(Stream, Owner);
     Owner.Free;
     Owner := nil;
@@ -211,6 +309,11 @@ begin
 
     AssertSame(LoadedClient, LoadedControl.Client);
     AssertEquals('streamed-device', LoadedControl.DeviceText);
+    AssertFalse(LoadedControl.ShowSelectButton);
+    AssertFalse(LoadedControl.ShowConnectionButton);
+    AssertEquals('Choose', LoadedControl.SelectButtonCaption);
+    AssertEquals('Open', LoadedControl.ConnectButtonCaption);
+    AssertEquals('Close', LoadedControl.DisconnectButtonCaption);
     AssertNull(LoadedClient.CoreClient);
     AssertEquals(0, BackendObject.CommandCount);
   finally

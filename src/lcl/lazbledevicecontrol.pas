@@ -23,12 +23,27 @@ type
     FStatusLabel: TLabel;
     FSelectButton: TButton;
     FConnectionButton: TButton;
+    FShowSelectButton: Boolean;
+    FShowConnectionButton: Boolean;
+    FSelectButtonCaption: string;
+    FConnectButtonCaption: string;
+    FDisconnectButtonCaption: string;
+    FOnSelectButtonClick: TNotifyEvent;
+    FOnConnectionButtonClick: TNotifyEvent;
     function GetCanSelectDevice: Boolean;
     function GetCanToggleConnection: Boolean;
     function GetConnectionActionText: string;
     function GetDeviceText: string;
     function GetStatusText: string;
+    function IsSelectButtonCaptionStored: Boolean;
+    function IsConnectButtonCaptionStored: Boolean;
+    function IsDisconnectButtonCaptionStored: Boolean;
     procedure SetClient(const AValue: TLazBleLclClient);
+    procedure SetShowSelectButton(const AValue: Boolean);
+    procedure SetShowConnectionButton(const AValue: Boolean);
+    procedure SetSelectButtonCaption(const AValue: string);
+    procedure SetConnectButtonCaption(const AValue: string);
+    procedure SetDisconnectButtonCaption(const AValue: string);
     procedure ClientChanged(Sender: TObject);
     procedure SelectButtonClick(Sender: TObject);
     procedure ConnectionButtonClick(Sender: TObject);
@@ -52,6 +67,20 @@ type
     property CanToggleConnection: Boolean read GetCanToggleConnection;
   published
     property Client: TLazBleLclClient read FClient write SetClient;
+    property ShowSelectButton: Boolean read FShowSelectButton
+      write SetShowSelectButton default True;
+    property ShowConnectionButton: Boolean read FShowConnectionButton
+      write SetShowConnectionButton default True;
+    property SelectButtonCaption: string read FSelectButtonCaption
+      write SetSelectButtonCaption stored IsSelectButtonCaptionStored;
+    property ConnectButtonCaption: string read FConnectButtonCaption
+      write SetConnectButtonCaption stored IsConnectButtonCaptionStored;
+    property DisconnectButtonCaption: string read FDisconnectButtonCaption
+      write SetDisconnectButtonCaption stored IsDisconnectButtonCaptionStored;
+    property OnSelectButtonClick: TNotifyEvent read FOnSelectButtonClick
+      write FOnSelectButtonClick;
+    property OnConnectionButtonClick: TNotifyEvent
+      read FOnConnectionButtonClick write FOnConnectionButtonClick;
     property Align;
     property Anchors;
     property AutoSize;
@@ -93,6 +122,11 @@ begin
   Width := 480;
   Height := 64;
   ParentColor := True;
+  FShowSelectButton := True;
+  FShowConnectionButton := True;
+  FSelectButtonCaption := SBleSelect;
+  FConnectButtonCaption := SBleConnect;
+  FDisconnectButtonCaption := SBleDisconnect;
 
   FDeviceLabel := TLabel.Create(Self);
   FDeviceLabel.Parent := Self;
@@ -106,7 +140,7 @@ begin
 
   FSelectButton := TButton.Create(Self);
   FSelectButton.Parent := Self;
-  FSelectButton.Caption := SBleSelect;
+  FSelectButton.Caption := FSelectButtonCaption;
   FSelectButton.OnClick := @SelectButtonClick;
 
   FConnectionButton := TButton.Create(Self);
@@ -115,6 +149,63 @@ begin
 
   Resize;
   RefreshDisplay;
+end;
+
+procedure TLazBleDeviceControl.SetShowSelectButton(const AValue: Boolean);
+begin
+  if AValue = FShowSelectButton then
+    Exit;
+  FShowSelectButton := AValue;
+  FSelectButton.Visible := AValue;
+  Resize;
+end;
+
+procedure TLazBleDeviceControl.SetShowConnectionButton(const AValue: Boolean);
+begin
+  if AValue = FShowConnectionButton then
+    Exit;
+  FShowConnectionButton := AValue;
+  FConnectionButton.Visible := AValue;
+  Resize;
+end;
+
+procedure TLazBleDeviceControl.SetSelectButtonCaption(const AValue: string);
+begin
+  if AValue = FSelectButtonCaption then
+    Exit;
+  FSelectButtonCaption := AValue;
+  FSelectButton.Caption := AValue;
+end;
+
+procedure TLazBleDeviceControl.SetConnectButtonCaption(const AValue: string);
+begin
+  if AValue = FConnectButtonCaption then
+    Exit;
+  FConnectButtonCaption := AValue;
+  RefreshDisplay;
+end;
+
+procedure TLazBleDeviceControl.SetDisconnectButtonCaption(const AValue: string);
+begin
+  if AValue = FDisconnectButtonCaption then
+    Exit;
+  FDisconnectButtonCaption := AValue;
+  RefreshDisplay;
+end;
+
+function TLazBleDeviceControl.IsSelectButtonCaptionStored: Boolean;
+begin
+  Result := FSelectButtonCaption <> SBleSelect;
+end;
+
+function TLazBleDeviceControl.IsConnectButtonCaptionStored: Boolean;
+begin
+  Result := FConnectButtonCaption <> SBleConnect;
+end;
+
+function TLazBleDeviceControl.IsDisconnectButtonCaptionStored: Boolean;
+begin
+  Result := FDisconnectButtonCaption <> SBleDisconnect;
 end;
 
 destructor TLazBleDeviceControl.Destroy;
@@ -174,9 +265,9 @@ begin
   if Assigned(FClient) and
     (FClient.State in [lbcstConnecting, lbcstAttachingProfiles,
       lbcstReady, lbcstWaitingToReconnect]) then
-    Result := SBleDisconnect
+    Result := FDisconnectButtonCaption
   else
-    Result := SBleConnect;
+    Result := FConnectButtonCaption;
 end;
 
 function TLazBleDeviceControl.GetDeviceText: string;
@@ -214,7 +305,10 @@ procedure TLazBleDeviceControl.RefreshDisplay;
 begin
   FDeviceLabel.Caption := DeviceText;
   FStatusLabel.Caption := StatusText;
+  FSelectButton.Caption := FSelectButtonCaption;
+  FSelectButton.Visible := FShowSelectButton;
   FSelectButton.Enabled := Enabled and CanSelectDevice;
+  FConnectionButton.Visible := FShowConnectionButton;
   FConnectionButton.Caption := ConnectionActionText;
   FConnectionButton.Enabled := Enabled and CanToggleConnection;
   Invalidate;
@@ -227,20 +321,34 @@ const
   SelectButtonWidth = 84;
   ConnectionButtonWidth = 96;
 var
+  HasVisibleButton: Boolean;
   ButtonHeight: Integer;
   LabelWidth: Integer;
+  RightEdge: Integer;
 begin
   inherited Resize;
   if not Assigned(FConnectionButton) or not Assigned(FSelectButton) or
     not Assigned(FDeviceLabel) or not Assigned(FStatusLabel) then
     Exit;
   ButtonHeight := 30;
-  FConnectionButton.SetBounds(Width - Margin - ConnectionButtonWidth,
-    (Height - ButtonHeight) div 2, ConnectionButtonWidth, ButtonHeight);
-  FSelectButton.SetBounds(FConnectionButton.Left - ButtonGap -
-    SelectButtonWidth, (Height - ButtonHeight) div 2,
-    SelectButtonWidth, ButtonHeight);
-  LabelWidth := FSelectButton.Left - (2 * Margin);
+  HasVisibleButton := FShowConnectionButton or FShowSelectButton;
+  RightEdge := Width - Margin;
+  if FShowConnectionButton then
+  begin
+    FConnectionButton.SetBounds(RightEdge - ConnectionButtonWidth,
+      (Height - ButtonHeight) div 2, ConnectionButtonWidth, ButtonHeight);
+    RightEdge := FConnectionButton.Left - ButtonGap;
+  end;
+  if FShowSelectButton then
+  begin
+    FSelectButton.SetBounds(RightEdge - SelectButtonWidth,
+      (Height - ButtonHeight) div 2, SelectButtonWidth, ButtonHeight);
+    RightEdge := FSelectButton.Left - ButtonGap;
+  end;
+  if HasVisibleButton then
+    LabelWidth := RightEdge + ButtonGap - Margin
+  else
+    LabelWidth := RightEdge - Margin;
   if LabelWidth < 0 then
     LabelWidth := 0;
   FDeviceLabel.SetBounds(Margin, 8, LabelWidth, 22);
@@ -292,12 +400,18 @@ end;
 
 procedure TLazBleDeviceControl.SelectButtonClick(Sender: TObject);
 begin
-  SelectDevice;
+  if Assigned(FOnSelectButtonClick) then
+    FOnSelectButtonClick(Self)
+  else
+    SelectDevice;
 end;
 
 procedure TLazBleDeviceControl.ConnectionButtonClick(Sender: TObject);
 begin
-  ToggleConnection;
+  if Assigned(FOnConnectionButtonClick) then
+    FOnConnectionButtonClick(Self)
+  else
+    ToggleConnection;
 end;
 
 initialization

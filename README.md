@@ -146,9 +146,14 @@ chains the scan controller events and restores existing handlers when released.
 `TLazBleDeviceControl` can be placed on a form and linked through its published
 `Client` property. It uses the same client for selection, status, connect, and
 disconnect, while leaving the client's published event handlers untouched.
-Binding or streaming the control does not start BLE work. The control and the
-provided selection dialog are optional; applications can build their own UI
-over `TLazBleComponent`, `TLazBleLclScan`, and `TLazBleLclClient`.
+`ShowSelectButton` and `ShowConnectionButton` control which built-in actions
+are visible; their captions are also published and configurable.
+`OnSelectButtonClick` and `OnConnectionButtonClick` replace the corresponding
+built-in action when assigned. A custom handler can invoke `SelectDevice` or
+`ToggleConnection` explicitly when it also needs the default action. Binding
+or streaming the control does not start BLE work. The control and the provided
+selection dialog are optional; applications can build their own UI over
+`TLazBleComponent`, `TLazBleLclScan`, and `TLazBleLclClient`.
 
 To add the components to the Lazarus palette, open
 `lazblelcldesign.lpk` and choose **Use > Install**. Lazarus normally rebuilds

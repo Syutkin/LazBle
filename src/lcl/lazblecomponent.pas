@@ -149,6 +149,7 @@ type
     FAutoReconnect: Boolean;
     FReconnectOptions: TLazBleReconnectSettings;
     FOnConfigureClient: TNotifyEvent;
+    FOnDeviceChanged: TNotifyEvent;
     FOnStateChanged: TLazBleClientStateChangedEvent;
     FOnConnected: TNotifyEvent;
     FOnDisconnected: TNotifyEvent;
@@ -206,6 +207,8 @@ type
       read FReconnectOptions write SetReconnectOptions;
     property OnConfigureClient: TNotifyEvent read FOnConfigureClient
       write FOnConfigureClient;
+    property OnDeviceChanged: TNotifyEvent read FOnDeviceChanged
+      write FOnDeviceChanged;
     property OnStateChanged: TLazBleClientStateChangedEvent
       read FOnStateChanged write FOnStateChanged;
     property OnConnected: TNotifyEvent read FOnConnected write FOnConnected;
@@ -782,7 +785,12 @@ end;
 
 procedure TLazBleLclClient.SetDeviceIdentity(const ADeviceId,
   ADeviceName: string);
+var
+  Handler: TNotifyEvent;
+  IdentityChanged: Boolean;
 begin
+  IdentityChanged := (FDeviceId <> ADeviceId) or
+    (FDeviceName <> ADeviceName);
   if Assigned(FLazBle) then
     FLazBle.ValidateClientDeviceId(Self, ADeviceId);
   if FDeviceId <> ADeviceId then
@@ -790,6 +798,12 @@ begin
   FDeviceId := ADeviceId;
   FDeviceName := ADeviceName;
   NotifyChanged;
+  if IdentityChanged then
+  begin
+    Handler := FOnDeviceChanged;
+    if Assigned(Handler) then
+      Handler(Self);
+  end;
 end;
 
 procedure TLazBleLclClient.SetAutoReconnect(const AValue: Boolean);

@@ -3,7 +3,7 @@
   <Package Version="5">
     <PathDelim Value="\"/>
     <Name Value="LazBleLCL"/>
-    <Type Value="RunTimeOnly"/>
+    <Type Value="RunTime"/>
     <Version Major="1" Minor="0" Release="0"/>
     <CompilerOptions>
       <Version Value="11"/>

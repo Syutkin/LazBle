@@ -21,6 +21,7 @@ type
     procedure GetChildren(Proc: TGetChildProc; Root: TComponent); override;
   published
     procedure ClientConnected(Sender: TObject);
+    procedure ClientDeviceChanged(Sender: TObject);
     procedure ClientError(Sender: TObject; const AErrorCode: Integer;
       const AErrorMessage: string);
   end;
@@ -50,6 +51,7 @@ type
   published
     procedure StreamingRestoresLazBleDeviceIdAndEventsWithoutOperations;
     procedure SelectDeviceKeepsComponentAndEventHandlers;
+    procedure DeviceChangedFiresOnlyWhenIdentityChanges;
     procedure DirectDeviceIdChangeClearsStaleDeviceName;
     procedure ChangedHandlersAreMulticastAndRemovable;
     procedure LazBleLinkClearsWhenComponentIsDestroyed;
@@ -70,6 +72,10 @@ begin
 end;
 
 procedure TClientStreamingOwner.ClientConnected(Sender: TObject);
+begin
+end;
+
+procedure TClientStreamingOwner.ClientDeviceChanged(Sender: TObject);
 begin
 end;
 
@@ -168,6 +174,7 @@ begin
     SourceClient.ReconnectOptions.MaximumDelayMs := 12000;
     SourceClient.ReconnectOptions.MaximumAttempts := 8;
     SourceClient.OnConnected := @Owner.ClientConnected;
+    SourceClient.OnDeviceChanged := @Owner.ClientDeviceChanged;
     SourceClient.OnError := @Owner.ClientError;
     WriteComponentAsTextToStream(Stream, Owner);
     Owner.Free;
@@ -198,6 +205,10 @@ begin
       TMethod(@LoadedOwner.ClientConnected).Code);
     AssertTrue(TMethod(LoadedClient.OnConnected).Data =
       TMethod(@LoadedOwner.ClientConnected).Data);
+    AssertTrue(TMethod(LoadedClient.OnDeviceChanged).Code =
+      TMethod(@LoadedOwner.ClientDeviceChanged).Code);
+    AssertTrue(TMethod(LoadedClient.OnDeviceChanged).Data =
+      TMethod(@LoadedOwner.ClientDeviceChanged).Data);
     AssertTrue(TMethod(LoadedClient.OnError).Code =
       TMethod(@LoadedOwner.ClientError).Code);
     AssertTrue(TMethod(LoadedClient.OnError).Data =
@@ -211,6 +222,27 @@ begin
     ClientStreamingBackend := nil;
     Backend := nil;
   end;
+end;
+
+procedure TLazBleLclClientTest.DeviceChangedFiresOnlyWhenIdentityChanges;
+begin
+  FClient.OnDeviceChanged := @ClientEvent;
+
+  FClient.SelectDevice(Device('device-a', 'First name', -50));
+  AssertEquals(1, FEventCount);
+
+  FClient.SelectDevice(Device('device-a', 'First name', -40));
+  AssertEquals(1, FEventCount);
+
+  FClient.SelectDevice(Device('device-a', 'Updated name', -40));
+  AssertEquals(2, FEventCount);
+
+  FClient.DeviceId := 'device-b';
+  AssertEquals(3, FEventCount);
+  AssertEquals('', FClient.DeviceName);
+
+  FClient.LazBle := nil;
+  AssertEquals(3, FEventCount);
 end;
 
 procedure TLazBleLclClientTest.SelectDeviceKeepsComponentAndEventHandlers;
