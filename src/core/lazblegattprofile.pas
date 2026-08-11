@@ -28,6 +28,7 @@ type
     FCallbackLock: TRTLCriticalSection;
     FSession: TBleGattSession;
     FState: TLazBleGattProfileState;
+    FErrorCode: Integer;
     FErrorMessage: string;
     FAttachedGeneration: QWord;
     FOnStateChanged: TLazBleGattProfileStateChangedEvent;
@@ -39,6 +40,7 @@ type
     function GetCurrentState: TLazBleGattProfileState;
     function GetAttachedGeneration: QWord;
     function GetErrorMessage: string;
+    function GetErrorCode: Integer;
     function GetOnStateChanged: TLazBleGattProfileStateChangedEvent;
     procedure SetOnStateChanged(
       const AHandler: TLazBleGattProfileStateChangedEvent);
@@ -50,7 +52,8 @@ type
     procedure DoDetach; virtual; abstract;
     procedure RefreshState; virtual;
     procedure MarkReady;
-    procedure MarkError(const AMessage: string);
+    procedure MarkError(const AMessage: string;
+      const AErrorCode: Integer = 0);
     procedure Attach;
     procedure Detach;
     procedure AddStateChangedHandler(
@@ -67,6 +70,7 @@ type
     property DeviceId: string read GetDeviceId;
     property State: TLazBleGattProfileState read GetState;
     property Ready: Boolean read GetReady;
+    property ErrorCode: Integer read GetErrorCode;
     property ErrorMessage: string read GetErrorMessage;
     property OnStateChanged: TLazBleGattProfileStateChangedEvent
       read GetOnStateChanged write SetOnStateChanged;
@@ -129,6 +133,16 @@ begin
   EnterCriticalSection(FLock);
   try
     Result := FErrorMessage;
+  finally
+    LeaveCriticalSection(FLock);
+  end;
+end;
+
+function TBleGattProfile.GetErrorCode: Integer;
+begin
+  EnterCriticalSection(FLock);
+  try
+    Result := FErrorCode;
   finally
     LeaveCriticalSection(FLock);
   end;
@@ -282,12 +296,14 @@ begin
     SetState(lbgpsReady);
 end;
 
-procedure TBleGattProfile.MarkError(const AMessage: string);
+procedure TBleGattProfile.MarkError(const AMessage: string;
+  const AErrorCode: Integer);
 begin
   if GetCurrentState = lbgpsDetached then
     Exit;
   EnterCriticalSection(FLock);
   try
+    FErrorCode := AErrorCode;
     FErrorMessage := AMessage;
   finally
     LeaveCriticalSection(FLock);
@@ -303,6 +319,7 @@ begin
     Exit;
   EnterCriticalSection(FLock);
   try
+    FErrorCode := 0;
     FErrorMessage := '';
     FAttachedGeneration := FSession.Generation;
   finally
@@ -321,6 +338,7 @@ begin
   EnterCriticalSection(FLock);
   try
     FAttachedGeneration := 0;
+    FErrorCode := 0;
     FErrorMessage := '';
   finally
     LeaveCriticalSection(FLock);

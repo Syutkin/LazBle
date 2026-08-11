@@ -94,6 +94,7 @@ type
       const ADeviceName: string = ''; const ARssi: SmallInt = 0;
       const AGeneration: QWord = 0);
     procedure CompleteTransportClient(const AClient: TBleClient);
+    procedure CompleteNusTransportClient(const AClient: TBleClient);
     procedure UseFakeReconnectTimer;
   protected
     procedure SetUp; override;
@@ -116,6 +117,7 @@ type
     procedure ClientWaitsForRealNusSubscription;
     procedure OptionalProfileFailureDoesNotFailClient;
     procedure RequiredProfileFailureFailsClient;
+    procedure RequiredProfileFailureDisconnectsSession;
     procedure RequiredProfileFailureAfterReadyInvalidatesClient;
     procedure SecondConnectAttachesRegisteredProfilesAgain;
     procedure SecondConnectAttachesAllProfilesToTheSameClient;
@@ -292,6 +294,36 @@ begin
     FBackendObject.CommandCount - 1];
   EmitEvent(lbekServicesDiscovered, OperationId, AClient.DeviceId,
     '', 0, ClientGeneration(AClient));
+end;
+
+procedure TLazBleClientTest.CompleteNusTransportClient(
+  const AClient: TBleClient);
+var
+  BackendEvent: TLazBleBackendEvent;
+  OperationId: TBleOperationId;
+begin
+  OperationId := FBackendObject.OperationIds[
+    FBackendObject.CommandCount - 1];
+  EmitEvent(lbekConnected, OperationId, AClient.DeviceId, '', 0,
+    ClientGeneration(AClient));
+  OperationId := FBackendObject.OperationIds[
+    FBackendObject.CommandCount - 1];
+  BackendEvent := Default(TLazBleBackendEvent);
+  BackendEvent.Kind := lbekServicesDiscovered;
+  BackendEvent.OperationId := OperationId;
+  BackendEvent.DeviceId := AClient.DeviceId;
+  BackendEvent.Generation := ClientGeneration(AClient);
+  SetLength(BackendEvent.Services, 1);
+  BackendEvent.Services[0].Uuid := NusServiceUuid;
+  SetLength(BackendEvent.Services[0].Characteristics, 2);
+  BackendEvent.Services[0].Characteristics[0].Uuid :=
+    NusRxCharacteristicUuid;
+  BackendEvent.Services[0].Characteristics[0].Properties :=
+    [lbgcpWriteCommand];
+  BackendEvent.Services[0].Characteristics[1].Uuid :=
+    NusTxCharacteristicUuid;
+  BackendEvent.Services[0].Characteristics[1].Properties := [lbgcpNotify];
+  AssertTrue(FBackendObject.EmitProgress(BackendEvent));
 end;
 
 procedure TLazBleClientTest.UseFakeReconnectTimer;
@@ -624,7 +656,7 @@ begin
   Client.AddProfile(Profile, True);
 
   Operation := Client.ConnectAsync;
-  CompleteTransportClient(Client);
+  CompleteNusTransportClient(Client);
   AssertEquals(Ord(lbopPending), Ord(Operation.State));
 
   BackendEvent := Default(TLazBleBackendEvent);
@@ -677,9 +709,39 @@ begin
   CompleteTransportClient(Client);
   Profile.FailAttach('required failure');
 
-  AssertEquals(Ord(lbcstError), Ord(Client.State));
+  AssertEquals(Ord(lbcstDisconnecting), Ord(Client.State));
   AssertEquals(Ord(lbopFailed), Ord(Operation.State));
   AssertTrue(Pos('required failure', Operation.ErrorMessage) > 0);
+end;
+
+procedure TLazBleClientTest.RequiredProfileFailureDisconnectsSession;
+var
+  Client: TBleClient;
+  DisconnectId: TBleOperationId;
+  Operation: IBleOperation;
+  Profile: TManualGattProfile;
+begin
+  Client := FBle.CreateClient('device-a');
+  Profile := TManualGattProfile.Create;
+  Client.AddProfile(Profile, True);
+  Operation := Client.ConnectAsync;
+  CompleteTransportClient(Client);
+
+  Profile.FailAttach('required failure');
+
+  AssertEquals(Ord(lbopFailed), Ord(Operation.State));
+  AssertEquals(Ord(lbckDisconnect), Ord(FBackendObject.Commands[
+    FBackendObject.CommandCount - 1].Kind));
+  DisconnectId := FBackendObject.OperationIds[
+    FBackendObject.CommandCount - 1];
+  EmitEvent(lbekDisconnected, DisconnectId, Client.DeviceId, '', 0,
+    ClientGeneration(Client));
+  AssertEquals(Ord(lbcstDisconnected), Ord(Client.State));
+
+  Operation := Client.ConnectAsync;
+  AssertEquals(Ord(lbopPending), Ord(Operation.State));
+  AssertEquals(Ord(lbckConnect), Ord(FBackendObject.Commands[
+    FBackendObject.CommandCount - 1].Kind));
 end;
 
 procedure TLazBleClientTest.RequiredProfileFailureAfterReadyInvalidatesClient;
@@ -697,7 +759,7 @@ begin
 
   Profile.FailAttach('subscription lost');
 
-  AssertEquals(Ord(lbcstError), Ord(Client.State));
+  AssertEquals(Ord(lbcstDisconnecting), Ord(Client.State));
 end;
 
 procedure TLazBleClientTest.SecondConnectAttachesRegisteredProfilesAgain;

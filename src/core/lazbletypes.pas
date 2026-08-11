@@ -50,6 +50,9 @@ type
 const
   InvalidBleOperationId: TBleOperationId = 0;
   InvalidBleSubscriptionId: TBleSubscriptionId = 0;
+  LazBleErrorInvalidState = -1000;
+  LazBleErrorGattNotFound = -1001;
+  LazBleErrorGattPropertyNotSupported = -1002;
 
 type
   TLazBleWriteMode = (

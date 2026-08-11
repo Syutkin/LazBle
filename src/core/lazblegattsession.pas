@@ -86,6 +86,10 @@ type
       IBleGattOperation;
     function SubscribeAsync(const AServiceUuid, ACharacteristicUuid: string):
       IBleSubscription;
+    function HasService(const AServiceUuid: string): Boolean;
+    function TryGetCharacteristic(const AServiceUuid,
+      ACharacteristicUuid: string;
+      out ACharacteristic: TLazBleGattCharacteristic): Boolean;
     property DeviceId: string read FDeviceId;
     property Generation: QWord read GetGeneration;
     property State: TLazBleSessionState read GetState;
@@ -226,6 +230,47 @@ begin
   EnterCriticalSection(FStateLock);
   try
     Result := LazBleCopyGattServices(FServices);
+  finally
+    LeaveCriticalSection(FStateLock);
+  end;
+end;
+
+function TBleGattSession.HasService(const AServiceUuid: string): Boolean;
+var
+  Service: TLazBleGattService;
+begin
+  EnterCriticalSection(FStateLock);
+  try
+    for Service in FServices do
+      if SameText(Service.Uuid, AServiceUuid) then
+        Exit(True);
+    Result := False;
+  finally
+    LeaveCriticalSection(FStateLock);
+  end;
+end;
+
+function TBleGattSession.TryGetCharacteristic(const AServiceUuid,
+  ACharacteristicUuid: string;
+  out ACharacteristic: TLazBleGattCharacteristic): Boolean;
+var
+  Characteristic: TLazBleGattCharacteristic;
+  Service: TLazBleGattService;
+begin
+  ACharacteristic := Default(TLazBleGattCharacteristic);
+  EnterCriticalSection(FStateLock);
+  try
+    for Service in FServices do
+      if SameText(Service.Uuid, AServiceUuid) then
+        for Characteristic in Service.Characteristics do
+          if SameText(Characteristic.Uuid, ACharacteristicUuid) then
+          begin
+            ACharacteristic.Uuid := Characteristic.Uuid;
+            ACharacteristic.Properties := Characteristic.Properties;
+            ACharacteristic.Descriptors := Copy(Characteristic.Descriptors);
+            Exit(True);
+          end;
+    Result := False;
   finally
     LeaveCriticalSection(FStateLock);
   end;

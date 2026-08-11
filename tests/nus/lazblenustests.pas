@@ -53,6 +53,8 @@ type
       const AOperationId: TBleOperationId;
       const ASubscriptionId: TBleSubscriptionId;
       const AValue: array of Byte);
+    procedure EmitServicesDiscovered(const AOperationId: TBleOperationId;
+      const AIncludeNus: Boolean);
     procedure ActivateProfile;
   protected
     procedure SetUp; override;
@@ -62,6 +64,8 @@ type
     procedure SendWritesToNusRxWithoutResponse;
     procedure DataIncludesDeviceIdentityAndOpaqueBytes;
     procedure DisconnectInvalidatesProfileReadiness;
+    procedure MissingServiceFailsWithoutSubscription;
+    procedure SubscriptionFailurePreservesBackendDiagnostic;
     procedure SendBeforeBindingReturnsFailedOperation;
   end;
 
@@ -70,6 +74,32 @@ implementation
 procedure TTestNusProfile.BindToSession(const ASession: TBleGattSession);
 begin
   BindSession(ASession);
+end;
+
+procedure TLazBleNusTest.EmitServicesDiscovered(
+  const AOperationId: TBleOperationId; const AIncludeNus: Boolean);
+var
+  BackendEvent: TLazBleBackendEvent;
+begin
+  BackendEvent := Default(TLazBleBackendEvent);
+  BackendEvent.Kind := lbekServicesDiscovered;
+  BackendEvent.OperationId := AOperationId;
+  BackendEvent.DeviceId := FSession.DeviceId;
+  BackendEvent.Generation := FSession.Generation;
+  if AIncludeNus then
+  begin
+    SetLength(BackendEvent.Services, 1);
+    BackendEvent.Services[0].Uuid := NusServiceUuid;
+    SetLength(BackendEvent.Services[0].Characteristics, 2);
+    BackendEvent.Services[0].Characteristics[0].Uuid :=
+      NusRxCharacteristicUuid;
+    BackendEvent.Services[0].Characteristics[0].Properties :=
+      [lbgcpWriteCommand];
+    BackendEvent.Services[0].Characteristics[1].Uuid :=
+      NusTxCharacteristicUuid;
+    BackendEvent.Services[0].Characteristics[1].Properties := [lbgcpNotify];
+  end;
+  AssertTrue(FBackendObject.EmitProgress(BackendEvent));
 end;
 
 procedure TTestNusProfile.AttachProfile;
@@ -135,10 +165,47 @@ begin
   FSession := FManager.CreateSession('entime-1');
   ConnectId := LazBleTestConnect(FSession);
   EmitEvent(lbekConnected, ConnectId, InvalidBleSubscriptionId, []);
-  EmitEvent(lbekServicesDiscovered, FBackendObject.OperationIds[1],
-    InvalidBleSubscriptionId, []);
+  EmitServicesDiscovered(FBackendObject.OperationIds[1], True);
   FProfile := TTestNusProfile.Create;
   FProfile.BindToSession(FSession);
+end;
+
+procedure TLazBleNusTest.MissingServiceFailsWithoutSubscription;
+var
+  CommandCount: Integer;
+  ConnectId: TBleOperationId;
+  DisconnectId: TBleOperationId;
+begin
+  DisconnectId := LazBleTestDisconnect(FSession);
+  EmitEvent(lbekDisconnected, DisconnectId, InvalidBleSubscriptionId, []);
+  ConnectId := LazBleTestConnect(FSession);
+  EmitEvent(lbekConnected, ConnectId, InvalidBleSubscriptionId, []);
+  EmitServicesDiscovered(FBackendObject.OperationIds[
+    FBackendObject.CommandCount - 1], False);
+  CommandCount := FBackendObject.CommandCount;
+
+  FProfile.AttachProfile;
+
+  AssertEquals(Ord(lbgpsError), Ord(FProfile.State));
+  AssertEquals(LazBleErrorGattNotFound, FProfile.ErrorCode);
+  AssertTrue(Pos('NUS service', FProfile.ErrorMessage) > 0);
+  AssertEquals(CommandCount, FBackendObject.CommandCount);
+end;
+
+procedure TLazBleNusTest.SubscriptionFailurePreservesBackendDiagnostic;
+var
+  OperationId: TBleOperationId;
+begin
+  FProfile.AttachProfile;
+  OperationId := FBackendObject.OperationIds[
+    FBackendObject.CommandCount - 1];
+
+  AssertTrue(FBackendObject.CompleteOperation(OperationId,
+    lbekOperationFailed, 17, 'Notifications are not supported'));
+
+  AssertEquals(Ord(lbgpsError), Ord(FProfile.State));
+  AssertEquals(17, FProfile.ErrorCode);
+  AssertEquals('Notifications are not supported', FProfile.ErrorMessage);
 end;
 
 procedure TLazBleNusTest.TearDown;

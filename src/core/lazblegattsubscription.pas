@@ -24,8 +24,10 @@ type
     const AState: TLazBleSubscriptionState) of object;
 
   IBleSubscription = interface
-    ['{BCA47713-79BD-43C4-BADC-84A6AEB20CB4}']
+    ['{E0A9178B-250E-490D-9CD3-514A13367F44}']
     function GetState: TLazBleSubscriptionState;
+    function GetErrorCode: Integer;
+    function GetErrorMessage: string;
     function GetOnData: TLazBleDataEvent;
     procedure SetOnData(const AHandler: TLazBleDataEvent);
     function GetOnStateChanged: TLazBleSubscriptionStateChangedEvent;
@@ -33,6 +35,8 @@ type
       const AHandler: TLazBleSubscriptionStateChangedEvent);
     function Unsubscribe: IBleGattOperation;
     property State: TLazBleSubscriptionState read GetState;
+    property ErrorCode: Integer read GetErrorCode;
+    property ErrorMessage: string read GetErrorMessage;
     property OnData: TLazBleDataEvent read GetOnData write SetOnData;
     property OnStateChanged: TLazBleSubscriptionStateChangedEvent
       read GetOnStateChanged write SetOnStateChanged;
@@ -50,11 +54,15 @@ type
     FSubscriptionId: TBleSubscriptionId;
     FGeneration: QWord;
     FState: TLazBleSubscriptionState;
+    FErrorCode: Integer;
+    FErrorMessage: string;
     FUnsubscribe: TLazBleUnsubscribe;
     FUnsubscribeOperation: IBleGattOperation;
     FOnData: TLazBleDataEvent;
     FOnStateChanged: TLazBleSubscriptionStateChangedEvent;
     function GetState: TLazBleSubscriptionState;
+    function GetErrorCode: Integer;
+    function GetErrorMessage: string;
     function GetOnData: TLazBleDataEvent;
     procedure SetOnData(const AHandler: TLazBleDataEvent);
     function GetOnStateChanged: TLazBleSubscriptionStateChangedEvent;
@@ -76,6 +84,8 @@ type
     destructor Destroy; override;
     function Unsubscribe: IBleGattOperation;
     property State: TLazBleSubscriptionState read GetState;
+    property ErrorCode: Integer read GetErrorCode;
+    property ErrorMessage: string read GetErrorMessage;
     property OnData: TLazBleDataEvent read GetOnData write SetOnData;
     property OnStateChanged: TLazBleSubscriptionStateChangedEvent
       read GetOnStateChanged write SetOnStateChanged;
@@ -106,7 +116,11 @@ begin
   FGeneration := AGeneration;
   FUnsubscribe := AUnsubscribe;
   if AOperationId = InvalidBleOperationId then
-    FState := lbsubFailed
+  begin
+    FState := lbsubFailed;
+    FErrorCode := LazBleErrorInvalidState;
+    FErrorMessage := 'BLE subscription could not be started';
+  end
   else
     FState := lbsubPending;
 end;
@@ -139,6 +153,26 @@ begin
   EnterCriticalSection(FLock);
   try
     Result := FState;
+  finally
+    LeaveCriticalSection(FLock);
+  end;
+end;
+
+function TBleSubscription.GetErrorCode: Integer;
+begin
+  EnterCriticalSection(FLock);
+  try
+    Result := FErrorCode;
+  finally
+    LeaveCriticalSection(FLock);
+  end;
+end;
+
+function TBleSubscription.GetErrorMessage: string;
+begin
+  EnterCriticalSection(FLock);
+  try
+    Result := FErrorMessage;
   finally
     LeaveCriticalSection(FLock);
   end;
@@ -303,7 +337,21 @@ begin
         end;
       lbekOperationFailed,
       lbekOperationCancelled:
-        SetState(lbsubFailed);
+        begin
+          EnterCriticalSection(FLock);
+          try
+            FErrorCode := AEvent.ErrorCode;
+            FErrorMessage := AEvent.ErrorMessage;
+            if FErrorMessage = '' then
+              if AEvent.Kind = lbekOperationCancelled then
+                FErrorMessage := 'BLE subscription was cancelled'
+              else
+                FErrorMessage := 'BLE subscription failed';
+          finally
+            LeaveCriticalSection(FLock);
+          end;
+          SetState(lbsubFailed);
+        end;
     end;
 
   if (State = lbsubActive) and (AEvent.Kind = lbekNotification) and

@@ -198,6 +198,7 @@ end;
 
 procedure TLazBleBatteryTest.SetUp;
 var
+  BackendEvent: TLazBleBackendEvent;
   ConnectId: TBleOperationId;
 begin
   FBackendObject := TFakeLazBleBackend.Create;
@@ -206,8 +207,28 @@ begin
   FSession := FManager.CreateSession('entime-1');
   ConnectId := LazBleTestConnect(FSession);
   EmitEvent(lbekConnected, ConnectId, InvalidBleSubscriptionId, []);
-  EmitEvent(lbekServicesDiscovered, FBackendObject.OperationIds[1],
-    InvalidBleSubscriptionId, []);
+  BackendEvent := Default(TLazBleBackendEvent);
+  BackendEvent.Kind := lbekServicesDiscovered;
+  BackendEvent.OperationId := FBackendObject.OperationIds[1];
+  BackendEvent.DeviceId := FSession.DeviceId;
+  BackendEvent.Generation := FSession.Generation;
+  SetLength(BackendEvent.Services, 2);
+  BackendEvent.Services[0].Uuid := BatteryServiceUuid;
+  SetLength(BackendEvent.Services[0].Characteristics, 1);
+  BackendEvent.Services[0].Characteristics[0].Uuid :=
+    BatteryLevelCharacteristicUuid;
+  BackendEvent.Services[0].Characteristics[0].Properties :=
+    [lbgcpRead, lbgcpNotify];
+  BackendEvent.Services[1].Uuid := NusServiceUuid;
+  SetLength(BackendEvent.Services[1].Characteristics, 2);
+  BackendEvent.Services[1].Characteristics[0].Uuid :=
+    NusRxCharacteristicUuid;
+  BackendEvent.Services[1].Characteristics[0].Properties :=
+    [lbgcpWriteCommand];
+  BackendEvent.Services[1].Characteristics[1].Uuid :=
+    NusTxCharacteristicUuid;
+  BackendEvent.Services[1].Characteristics[1].Properties := [lbgcpNotify];
+  AssertTrue(FBackendObject.EmitProgress(BackendEvent));
   FProfile := TTestBatteryProfile.Create;
   FProfile.BindToSession(FSession);
 end;

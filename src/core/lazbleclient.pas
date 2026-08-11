@@ -476,11 +476,19 @@ begin
             SetState(lbcstError);
             if Assigned(FConnectOperation) then
               TBleOperationAccess(FConnectOperationObject).Finish(
-                lbopFailed, 0,
+                lbopFailed, Entry.Profile.ErrorCode,
                 Entry.Profile.ClassName + ': ' +
                 Entry.Profile.ErrorMessage);
             if FReconnectCycleActive then
-              DisconnectForReconnect;
+              DisconnectForReconnect
+            else
+            begin
+              DetachProfiles;
+              FSessionDisconnectOperation := FDisconnectSession(FSession);
+              SetState(lbcstDisconnecting);
+              FSessionDisconnectOperation.OnCompleted :=
+                @SessionDisconnectCompleted;
+            end;
             Exit;
           end;
         lbgpsReady:

@@ -140,6 +140,7 @@ end;
 
 procedure TLazBleGattSessionTest.DiscoveryPublishesAnIndependentGattSnapshot;
 var
+  Characteristic: TLazBleGattCharacteristic;
   Services: TLazBleGattServices;
 begin
   Services := FSession.Services;
@@ -152,6 +153,13 @@ begin
   AssertTrue(lbgcpNotify in Services[0].Characteristics[0].Properties);
   AssertEquals('descriptor-1',
     Services[0].Characteristics[0].Descriptors[0].Uuid);
+  AssertTrue(FSession.HasService('SERVICE-1'));
+  AssertFalse(FSession.HasService('missing-service'));
+  AssertTrue(FSession.TryGetCharacteristic('SERVICE-1',
+    'CHARACTERISTIC-1', Characteristic));
+  AssertTrue(lbgcpNotify in Characteristic.Properties);
+  AssertFalse(FSession.TryGetCharacteristic('service-1',
+    'missing-characteristic', Characteristic));
 
   Services[0].Uuid := 'changed';
   Services[0].Data[0] := $FF;
@@ -294,9 +302,11 @@ begin
 
   AssertTrue(FBackendObject.CompleteOperation(
     FBackendObject.OperationIds[FBackendObject.CommandCount - 1],
-    lbekOperationFailed));
+    lbekOperationFailed, 23, 'Subscription rejected'));
 
   AssertEquals(Ord(lbsubFailed), Ord(Subscription.State));
+  AssertEquals(23, Subscription.ErrorCode);
+  AssertEquals('Subscription rejected', Subscription.ErrorMessage);
 end;
 
 procedure TLazBleGattSessionTest.DisconnectInvalidatesSubscriptionAndIgnoresOldNotification;
