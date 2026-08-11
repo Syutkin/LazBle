@@ -7,6 +7,7 @@ interface
 uses
   Classes,
   SysUtils,
+  SyncObjs,
   LazBleTypes,
   LazBleBackend,
   LazBleSimpleBleDriverIntf;
@@ -36,14 +37,25 @@ type
     public
       constructor Create(const ABackend: TLazBleSimpleBleBackend);
     end;
+
+    TEventWorker = class(TThread)
+    private
+      FBackend: TLazBleSimpleBleBackend;
+    protected
+      procedure Execute; override;
+    public
+      constructor Create(const ABackend: TLazBleSimpleBleBackend);
+    end;
   private
     FLock: TRTLCriticalSection;
     FWorkEvent: PRTLEvent;
+    FEventWorkEvent: PRTLEvent;
     FBackendEventSink: ILazBleBackendEventSink;
     FDriver: ILazBleSimpleBleDriver;
     FDriverEventSink: ILazBleSimpleBleDriverEventSink;
     FDriverEventSinkControl: ILazBleSimpleBleDriverSinkControl;
     FWorker: TBackendWorker;
+    FEventWorker: TEventWorker;
     FOperations: TList;
     FPendingOperations: TList;
     FPendingEvents: TList;
@@ -52,12 +64,14 @@ type
     FShutdownOperationId: TBleOperationId;
     FShutdownRequested: Boolean;
     FShutdownCompleted: Boolean;
+    FEventShutdownRequested: Boolean;
     function AllocateOperationIdLocked: TBleOperationId;
     function FindOperationLocked(const AOperationId: TBleOperationId):
       TBackendOperation;
     function PopOperation: TBackendOperation;
     function PopEvent: TQueuedEvent;
     function AllOperationsTerminalLocked: Boolean;
+    procedure QueueEvent(const AEvent: TLazBleBackendEvent);
     procedure QueueDriverEvent(const AEvent: TLazBleBackendEvent);
     procedure Deliver(const AEvent: TLazBleBackendEvent);
     procedure DrainEvents;
@@ -66,6 +80,7 @@ type
       const AErrorMessage: string);
     procedure ProcessOperation(const AOperation: TBackendOperation);
     procedure WorkerExecute;
+    procedure EventWorkerExecute;
   protected
     constructor Create(const ADriver: ILazBleSimpleBleDriver); overload;
   public
@@ -125,6 +140,7 @@ type
     FSubscriptions: TObjectList;
     FNextSubscriptionId: TBleSubscriptionId;
     FCurrentCommandKind: TLazBleBackendCommandKind;
+    FScanWaitEvent: TEvent;
     function LoadLibrary(out AErrorMessage: string): Boolean;
     function SelectAdapter(const ARequestedId: string;
       out AErrorMessage: string): Boolean;
@@ -306,6 +322,7 @@ end;
 constructor TLazBleNativeSimpleBleDriver.Create;
 begin
   inherited Create;
+  FScanWaitEvent := TEvent.Create(nil, True, False, '');
   FPeripherals := TObjectList.Create(True);
   FSubscriptions := TObjectList.Create(True);
 end;
@@ -315,6 +332,7 @@ begin
   Close;
   FSubscriptions.Free;
   FPeripherals.Free;
+  FScanWaitEvent.Free;
   inherited Destroy;
 end;
 
@@ -623,7 +641,13 @@ begin
     TimeoutMs := High(Integer)
   else
     TimeoutMs := ACommand.TimeoutMs;
-  NativeError := SimpleBleAdapterScanFor(FAdapter, TimeoutMs);
+  FScanWaitEvent.ResetEvent;
+  NativeError := SimpleBleAdapterScanStart(FAdapter);
+  if NativeError = SIMPLEBLE_SUCCESS then
+  begin
+    FScanWaitEvent.WaitFor(TimeoutMs);
+    NativeError := SimpleBleAdapterScanStop(FAdapter);
+  end;
   AErrorCode := Ord(NativeError);
   Result := NativeError = SIMPLEBLE_SUCCESS;
   if not Result then
@@ -1015,8 +1039,8 @@ end;
 
 procedure TLazBleNativeSimpleBleDriver.CancelCurrent;
 begin
-  if (FCurrentCommandKind = lbckStartScan) and (FAdapter <> nil) then
-    SimpleBleAdapterScanStop(FAdapter);
+  if FCurrentCommandKind = lbckStartScan then
+    FScanWaitEvent.SetEvent;
 end;
 
 constructor TLazBleSimpleBleDriverSink.Create(
@@ -1051,6 +1075,19 @@ begin
   FBackend.WorkerExecute;
 end;
 
+constructor TLazBleSimpleBleBackend.TEventWorker.Create(
+  const ABackend: TLazBleSimpleBleBackend);
+begin
+  FBackend := ABackend;
+  inherited Create(False);
+  FreeOnTerminate := False;
+end;
+
+procedure TLazBleSimpleBleBackend.TEventWorker.Execute;
+begin
+  FBackend.EventWorkerExecute;
+end;
+
 constructor TLazBleSimpleBleBackend.Create;
 var
   Driver: ILazBleSimpleBleDriver;
@@ -1069,6 +1106,7 @@ begin
     raise EArgumentNilException.Create('ADriver');
   InitCriticalSection(FLock);
   FWorkEvent := RTLEventCreate;
+  FEventWorkEvent := RTLEventCreate;
   FDriver := ADriver;
   FOperations := TList.Create;
   FPendingOperations := TList.Create;
@@ -1076,6 +1114,7 @@ begin
   DriverSink := TLazBleSimpleBleDriverSink.Create(Self);
   FDriverEventSink := DriverSink;
   FDriverEventSinkControl := DriverSink;
+  FEventWorker := TEventWorker.Create(Self);
   FWorker := TBackendWorker.Create(Self);
 end;
 
@@ -1086,6 +1125,15 @@ begin
   BeginShutdown;
   FWorker.WaitFor;
   FWorker.Free;
+  EnterCriticalSection(FLock);
+  try
+    FEventShutdownRequested := True;
+  finally
+    LeaveCriticalSection(FLock);
+  end;
+  RTLEventSetEvent(FEventWorkEvent);
+  FEventWorker.WaitFor;
+  FEventWorker.Free;
   FDriverEventSinkControl.Detach;
   FDriverEventSink := nil;
   FDriverEventSinkControl := nil;
@@ -1097,6 +1145,7 @@ begin
   FPendingEvents.Free;
   FPendingOperations.Free;
   FOperations.Free;
+  RTLEventDestroy(FEventWorkEvent);
   RTLEventDestroy(FWorkEvent);
   DoneCriticalSection(FLock);
   inherited Destroy;
@@ -1184,7 +1233,23 @@ begin
     LeaveCriticalSection(FLock);
   end;
   if Assigned(QueuedEvent) then
-    RTLEventSetEvent(FWorkEvent);
+    RTLEventSetEvent(FEventWorkEvent);
+end;
+
+procedure TLazBleSimpleBleBackend.QueueEvent(
+  const AEvent: TLazBleBackendEvent);
+var
+  QueuedEvent: TQueuedEvent;
+begin
+  QueuedEvent := TQueuedEvent.Create;
+  QueuedEvent.BackendEvent := AEvent;
+  EnterCriticalSection(FLock);
+  try
+    FPendingEvents.Add(QueuedEvent);
+  finally
+    LeaveCriticalSection(FLock);
+  end;
+  RTLEventSetEvent(FEventWorkEvent);
 end;
 
 procedure TLazBleSimpleBleBackend.Deliver(
@@ -1248,7 +1313,7 @@ begin
   finally
     LeaveCriticalSection(FLock);
   end;
-  Deliver(BackendEvent);
+  QueueEvent(BackendEvent);
 end;
 
 procedure TLazBleSimpleBleBackend.ProcessOperation(
@@ -1273,7 +1338,6 @@ begin
       AOperation.OperationId, FDriverEventSink, ErrorCode, ErrorMessage)
   else
     ErrorMessage := OpenError;
-  DrainEvents;
   CompleteOperation(AOperation, Succeeded, ErrorCode, ErrorMessage);
 end;
 
@@ -1286,14 +1350,12 @@ begin
   repeat
     RTLEventWaitFor(FWorkEvent);
     RTLEventResetEvent(FWorkEvent);
-    DrainEvents;
 
     repeat
       Operation := PopOperation;
       if not Assigned(Operation) then
         Break;
       ProcessOperation(Operation);
-      DrainEvents;
     until False;
 
     EnterCriticalSection(FLock);
@@ -1315,10 +1377,28 @@ begin
       finally
         LeaveCriticalSection(FLock);
       end;
-      Deliver(BackendEvent);
+      QueueEvent(BackendEvent);
       Exit;
     end;
   until False;
+end;
+
+procedure TLazBleSimpleBleBackend.EventWorkerExecute;
+var
+  ShouldStop: Boolean;
+begin
+  repeat
+    RTLEventWaitFor(FEventWorkEvent);
+    RTLEventResetEvent(FEventWorkEvent);
+    DrainEvents;
+    EnterCriticalSection(FLock);
+    try
+      ShouldStop := FEventShutdownRequested and
+        (FPendingEvents.Count = 0);
+    finally
+      LeaveCriticalSection(FLock);
+    end;
+  until ShouldStop;
 end;
 
 procedure TLazBleSimpleBleBackend.SetEventSink(

@@ -18,14 +18,12 @@ uses
 type
   TBleDeviceSelectForm = class(TForm)
     ButtonCancel: TButton;
-    ButtonRetry: TButton;
     ButtonSelect: TButton;
     ButtonStart: TButton;
     ButtonStop: TButton;
     ButtonPanel: TPanel;
     DeviceGrid: TStringGrid;
     StatusLabel: TLabel;
-    procedure ButtonRetryClick(Sender: TObject);
     procedure ButtonSelectClick(Sender: TObject);
     procedure ButtonStartClick(Sender: TObject);
     procedure ButtonStopClick(Sender: TObject);
@@ -66,7 +64,6 @@ type
     destructor Destroy; override;
     procedure StartScan;
     procedure StopScan;
-    procedure RetryScan;
     function Execute(out ADevice: TBleDeviceInfo): Boolean;
     function TryGetSelectedDevice(out ADevice: TBleDeviceInfo): Boolean;
     property Scan: TLazBleLclScan read FScan write SetScan;
@@ -92,7 +89,6 @@ resourcestring
   SBleDeviceSelectRssiColumn = 'RSSI';
   SBleDeviceSelectStart = 'Start';
   SBleDeviceSelectStop = 'Stop';
-  SBleDeviceSelectRetry = 'Retry';
   SBleDeviceSelectSelect = 'Select';
   SBleDeviceSelectCancel = 'Cancel';
   SBleDeviceSelectIdle = 'Ready to scan';
@@ -184,11 +180,6 @@ procedure TBleDeviceSelectForm.StopScan;
 begin
   if Assigned(FScan) and (FScan.State = lblssScanning) then
     FScan.Cancel;
-end;
-
-procedure TBleDeviceSelectForm.RetryScan;
-begin
-  StartScan;
 end;
 
 function TBleDeviceSelectForm.Execute(out ADevice: TBleDeviceInfo): Boolean;
@@ -334,7 +325,6 @@ begin
       [StatusLabel.Caption, FScan.ErrorMessage]);
   ButtonStart.Enabled := Assigned(FScan) and (State <> lblssScanning);
   ButtonStop.Enabled := Assigned(FScan) and (State = lblssScanning);
-  ButtonRetry.Enabled := Assigned(FScan) and (State <> lblssScanning);
   ButtonSelect.Enabled := (FSelectedIndex >= 0) and
     (FSelectedIndex < Length(FDevices));
 end;
@@ -347,7 +337,6 @@ begin
   DeviceGrid.Columns[2].Title.Caption := SBleDeviceSelectRssiColumn;
   ButtonStart.Caption := SBleDeviceSelectStart;
   ButtonStop.Caption := SBleDeviceSelectStop;
-  ButtonRetry.Caption := SBleDeviceSelectRetry;
   ButtonSelect.Caption := SBleDeviceSelectSelect;
   ButtonCancel.Caption := SBleDeviceSelectCancel;
 end;
@@ -368,11 +357,6 @@ end;
 procedure TBleDeviceSelectForm.ButtonStopClick(Sender: TObject);
 begin
   StopScan;
-end;
-
-procedure TBleDeviceSelectForm.ButtonRetryClick(Sender: TObject);
-begin
-  RetryScan;
 end;
 
 procedure TBleDeviceSelectForm.ButtonSelectClick(Sender: TObject);

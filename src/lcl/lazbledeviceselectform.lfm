@@ -76,15 +76,6 @@ object BleDeviceSelectForm: TBleDeviceSelectForm
       TabOrder = 1
       OnClick = ButtonStopClick
     end
-    object ButtonRetry: TButton
-      Left = 168
-      Height = 30
-      Top = 8
-      Width = 72
-      Caption = 'Retry'
-      TabOrder = 2
-      OnClick = ButtonRetryClick
-    end
     object ButtonSelect: TButton
       Left = 532
       Height = 30
@@ -93,7 +84,7 @@ object BleDeviceSelectForm: TBleDeviceSelectForm
       Anchors = [akTop, akRight]
       Caption = 'Select'
       Default = True
-      TabOrder = 3
+      TabOrder = 2
       OnClick = ButtonSelectClick
     end
     object ButtonCancel: TButton
@@ -105,7 +96,7 @@ object BleDeviceSelectForm: TBleDeviceSelectForm
       Cancel = True
       Caption = 'Cancel'
       ModalResult = 2
-      TabOrder = 4
+      TabOrder = 3
     end
   end
 end

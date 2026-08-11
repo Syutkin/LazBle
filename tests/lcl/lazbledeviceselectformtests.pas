@@ -38,7 +38,7 @@ type
     procedure ResultsKeepDiscoveryOrderAndUpdateExistingDevice;
     procedure SelectedDeviceUsesStableSnapshotIndex;
     procedure StopScanCancelsActiveOperation;
-    procedure RetryStartsFreshScanAfterCompletion;
+    procedure StartScanStartsFreshScanAfterCompletion;
     procedure ExistingScanHandlerIsForwardedAndRestored;
   end;
 
@@ -155,7 +155,7 @@ begin
   AssertTrue(FBackendObject.CancellationWasRequested(OperationId));
 end;
 
-procedure TBleDeviceSelectFormTest.RetryStartsFreshScanAfterCompletion;
+procedure TBleDeviceSelectFormTest.StartScanStartsFreshScanAfterCompletion;
 var
   FirstOperationId: TBleOperationId;
 begin
@@ -167,7 +167,7 @@ begin
   CheckSynchronize;
   AssertEquals(1, FForm.DeviceCount);
 
-  FForm.RetryScan;
+  FForm.StartScan;
 
   AssertEquals(2, FBackendObject.CommandCount);
   AssertEquals(0, FForm.DeviceCount);

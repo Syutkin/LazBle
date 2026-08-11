@@ -169,18 +169,30 @@ begin
     Exit(False);
   end;
 
-  if FBlockCommand and (ACommand.Kind = FBlockedCommandKind) then
-  begin
-    FStartedEvent.SetEvent;
-    FReleaseEvent.WaitFor(INFINITE);
-  end;
-
   BackendEvent := Default(TLazBleBackendEvent);
   BackendEvent.OperationId := AOperationId;
   BackendEvent.Generation := ACommand.Generation;
   BackendEvent.DeviceId := ACommand.DeviceId;
   BackendEvent.ServiceUuid := ACommand.ServiceUuid;
   BackendEvent.CharacteristicUuid := ACommand.CharacteristicUuid;
+
+  if FBlockCommand and (ACommand.Kind = FBlockedCommandKind) then
+  begin
+    if ACommand.Kind = lbckStartScan then
+    begin
+      BackendEvent.Kind := lbekScanStarted;
+      BackendEvent.AdapterId := ACommand.AdapterId;
+      AEventSink.Emit(BackendEvent);
+      BackendEvent.Kind := lbekScanResult;
+      BackendEvent.DeviceId := 'AA:BB:CC:DD:EE:FF';
+      BackendEvent.DeviceName := 'ENTime';
+      BackendEvent.Rssi := -42;
+      AEventSink.Emit(BackendEvent);
+    end;
+    FStartedEvent.SetEvent;
+    FReleaseEvent.WaitFor(INFINITE);
+  end;
+
   case ACommand.Kind of
     lbckCheckAvailability:
       begin
@@ -196,14 +208,18 @@ begin
       end;
     lbckStartScan:
       begin
-        BackendEvent.Kind := lbekScanStarted;
-        BackendEvent.AdapterId := ACommand.AdapterId;
-        AEventSink.Emit(BackendEvent);
-        BackendEvent.Kind := lbekScanResult;
-        BackendEvent.DeviceId := 'AA:BB:CC:DD:EE:FF';
-        BackendEvent.DeviceName := 'ENTime';
-        BackendEvent.Rssi := -42;
-        AEventSink.Emit(BackendEvent);
+        if not (FBlockCommand and
+          (ACommand.Kind = FBlockedCommandKind)) then
+        begin
+          BackendEvent.Kind := lbekScanStarted;
+          BackendEvent.AdapterId := ACommand.AdapterId;
+          AEventSink.Emit(BackendEvent);
+          BackendEvent.Kind := lbekScanResult;
+          BackendEvent.DeviceId := 'AA:BB:CC:DD:EE:FF';
+          BackendEvent.DeviceName := 'ENTime';
+          BackendEvent.Rssi := -42;
+          AEventSink.Emit(BackendEvent);
+        end;
         BackendEvent.Kind := lbekScanStopped;
         AEventSink.Emit(BackendEvent);
       end;
@@ -467,7 +483,9 @@ var
 begin
   OperationId := SubmitScan;
   AssertTrue(FDriverObject.WaitUntilStarted);
-  AssertEquals(0, FEventSinkObject.EventCount);
+  AssertTrue(FEventSinkObject.WaitForEventCount(2));
+  AssertEquals(Ord(lbekScanStarted), Ord(FEventSinkObject.Events[0].Kind));
+  AssertEquals(Ord(lbekScanResult), Ord(FEventSinkObject.Events[1].Kind));
 
   FDriverObject.AllowCompletion;
   AssertTrue(FEventSinkObject.WaitForEventCount(4));

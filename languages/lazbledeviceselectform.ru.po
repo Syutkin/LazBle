@@ -38,10 +38,6 @@ msgstr "Готово к сканированию"
 msgid "Name"
 msgstr "Имя"
 
-#: lazbledeviceselectform.sbledeviceselectretry
-msgid "Retry"
-msgstr "Повторить"
-
 #: lazbledeviceselectform.sbledeviceselectrssicolumn
 msgid "RSSI"
 msgstr "RSSI"

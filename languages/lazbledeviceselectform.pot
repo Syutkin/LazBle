@@ -30,10 +30,6 @@ msgstr ""
 msgid "Name"
 msgstr ""
 
-#: lazbledeviceselectform.sbledeviceselectretry
-msgid "Retry"
-msgstr ""
-
 #: lazbledeviceselectform.sbledeviceselectrssicolumn
 msgid "RSSI"
 msgstr ""
