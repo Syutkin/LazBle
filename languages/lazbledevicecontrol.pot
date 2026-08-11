@@ -62,6 +62,11 @@ msgstr ""
 msgid "Bluetooth unavailable"
 msgstr ""
 
+#: lazbledevicecontrol.sbleunavailabledetail
+#, object-pascal-format
+msgid "Bluetooth unavailable: %s"
+msgstr ""
+
 #: lazbledevicecontrol.sblewaitingtoreconnect
 msgid "Waiting to reconnect..."
 msgstr ""

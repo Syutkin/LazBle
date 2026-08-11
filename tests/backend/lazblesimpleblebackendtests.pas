@@ -29,6 +29,10 @@ type
     FCloseCount: Integer;
     FCancelCount: Integer;
     FExecuteCount: Integer;
+    FOpenSucceeded: Boolean;
+    FOpenErrorMessage: string;
+    FAvailability: Boolean;
+    FAvailabilityErrorMessage: string;
     FBlockCommand: Boolean;
     FBlockedCommandKind: TLazBleBackendCommandKind;
     FLastEventSink: ILazBleSimpleBleDriverEventSink;
@@ -43,6 +47,8 @@ type
       out AErrorCode: Integer; out AErrorMessage: string): Boolean;
     procedure CancelCurrent;
     procedure BlockCommand(const ACommandKind: TLazBleBackendCommandKind);
+    procedure FailOpen(const AErrorMessage: string);
+    procedure ReportUnavailable(const AErrorMessage: string);
     function WaitUntilStarted: Boolean;
     procedure AllowCompletion;
     procedure EmitLateEvent;
@@ -91,6 +97,8 @@ type
     procedure DriverFailureIsDeliveredAsynchronously;
     procedure GattCommandsPreserveTypedProgressEvents;
     procedure AvailabilityCheckRunsAsynchronously;
+    procedure DriverOpenFailureCompletesAvailabilityWithDiagnostic;
+    procedure UnavailableAdapterAndDisabledBluetoothKeepDistinctDiagnostics;
     procedure EmitsNothingAfterTerminalShutdown;
     procedure DefaultBackendDoesNotLoadLibraryInConstructor;
   end;
@@ -110,6 +118,8 @@ begin
   FReleaseEvent := TEvent.Create(nil, True, False, '');
   FBlockCommand := True;
   FBlockedCommandKind := lbckStartScan;
+  FOpenSucceeded := True;
+  FAvailability := True;
 end;
 
 destructor TFakeSimpleBleDriver.Destroy;
@@ -122,8 +132,20 @@ end;
 function TFakeSimpleBleDriver.Open(out AErrorMessage: string): Boolean;
 begin
   Inc(FOpenCount);
-  AErrorMessage := '';
-  Result := True;
+  AErrorMessage := FOpenErrorMessage;
+  Result := FOpenSucceeded;
+end;
+
+procedure TFakeSimpleBleDriver.FailOpen(const AErrorMessage: string);
+begin
+  FOpenSucceeded := False;
+  FOpenErrorMessage := AErrorMessage;
+end;
+
+procedure TFakeSimpleBleDriver.ReportUnavailable(const AErrorMessage: string);
+begin
+  FAvailability := False;
+  FAvailabilityErrorMessage := AErrorMessage;
 end;
 
 procedure TFakeSimpleBleDriver.Close;
@@ -163,8 +185,14 @@ begin
     lbckCheckAvailability:
       begin
         BackendEvent.Kind := lbekAvailabilityResult;
-        BackendEvent.Available := True;
+        BackendEvent.Available := FAvailability;
         AEventSink.Emit(BackendEvent);
+        if not FAvailability then
+        begin
+          AErrorCode := 0;
+          AErrorMessage := FAvailabilityErrorMessage;
+          Exit(False);
+        end;
       end;
     lbckStartScan:
       begin
@@ -658,6 +686,59 @@ begin
   AssertEquals(Ord(lbekOperationSucceeded),
     Ord(FEventSinkObject.Events[1].Kind));
   AssertEquals(1, FDriverObject.OpenCount);
+end;
+
+procedure TLazBleSimpleBleBackendTest.
+  DriverOpenFailureCompletesAvailabilityWithDiagnostic;
+var
+  Command: TLazBleBackendCommand;
+  OperationId: TBleOperationId;
+begin
+  FDriverObject.FailOpen('native SimpleBLE library is missing');
+  Command := Default(TLazBleBackendCommand);
+  Command.Kind := lbckCheckAvailability;
+
+  OperationId := FBackend.Submit(Command);
+
+  AssertTrue(FEventSinkObject.WaitForEventCount(1));
+  AssertEquals(Ord(lbekOperationFailed),
+    Ord(FEventSinkObject.Events[0].Kind));
+  AssertTrue(OperationId = FEventSinkObject.Events[0].OperationId);
+  AssertEquals('native SimpleBLE library is missing',
+    FEventSinkObject.Events[0].ErrorMessage);
+  AssertEquals(1, FDriverObject.OpenCount);
+  AssertEquals(0, FDriverObject.ExecuteCount);
+end;
+
+procedure TLazBleSimpleBleBackendTest.
+  UnavailableAdapterAndDisabledBluetoothKeepDistinctDiagnostics;
+var
+  Command: TLazBleBackendCommand;
+begin
+  Command := Default(TLazBleBackendCommand);
+  Command.Kind := lbckCheckAvailability;
+
+  FDriverObject.ReportUnavailable('No BLE adapter was found');
+  FBackend.Submit(Command);
+  AssertTrue(FEventSinkObject.WaitForEventCount(2));
+  AssertEquals(Ord(lbekAvailabilityResult),
+    Ord(FEventSinkObject.Events[0].Kind));
+  AssertFalse(FEventSinkObject.Events[0].Available);
+  AssertEquals(Ord(lbekOperationFailed),
+    Ord(FEventSinkObject.Events[1].Kind));
+  AssertEquals('No BLE adapter was found',
+    FEventSinkObject.Events[1].ErrorMessage);
+
+  FDriverObject.ReportUnavailable('Bluetooth is disabled');
+  FBackend.Submit(Command);
+  AssertTrue(FEventSinkObject.WaitForEventCount(4));
+  AssertEquals(Ord(lbekAvailabilityResult),
+    Ord(FEventSinkObject.Events[2].Kind));
+  AssertFalse(FEventSinkObject.Events[2].Available);
+  AssertEquals(Ord(lbekOperationFailed),
+    Ord(FEventSinkObject.Events[3].Kind));
+  AssertEquals('Bluetooth is disabled',
+    FEventSinkObject.Events[3].ErrorMessage);
 end;
 
 procedure TLazBleSimpleBleBackendTest.EmitsNothingAfterTerminalShutdown;

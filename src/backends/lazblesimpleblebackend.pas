@@ -640,17 +640,20 @@ begin
   BackendEvent := Default(TLazBleBackendEvent);
   BackendEvent.Kind := lbekAvailabilityResult;
   BackendEvent.OperationId := FOperationId;
-  BackendEvent.Available := SimpleBleAdapterIsBluetoothEnabled();
-  if BackendEvent.Available then
-    BackendEvent.Available := SelectAdapter(ACommand.AdapterId, AdapterError);
+  BackendEvent.Available := SelectAdapter(ACommand.AdapterId, AdapterError);
+  if BackendEvent.Available and not SimpleBleAdapterIsBluetoothEnabled() then
+  begin
+    BackendEvent.Available := False;
+    AdapterError := 'Bluetooth is disabled';
+  end;
   if BackendEvent.Available then
     BackendEvent.AdapterId := FAdapterId
   else
     BackendEvent.AdapterId := ACommand.AdapterId;
   FEventSink.Emit(BackendEvent);
   AErrorCode := Ord(SIMPLEBLE_SUCCESS);
-  AErrorMessage := '';
-  Result := True;
+  AErrorMessage := AdapterError;
+  Result := BackendEvent.Available;
 end;
 
 function TLazBleNativeSimpleBleDriver.ExecuteConnect(

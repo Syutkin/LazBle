@@ -76,6 +76,7 @@ type
     procedure ConnectActionUsesBoundClient;
     procedure ConnectActionRetriesAfterError;
     procedure StatusTextReflectsClientScanAndAvailabilityStates;
+    procedure StatusTextIncludesAvailabilityDiagnostic;
     procedure DestroyedClientClearsBinding;
     procedure RebindingStopsObservingPreviousClient;
   end;
@@ -414,6 +415,19 @@ begin
   AvailabilityText := LazBleStatusText(FClient);
   AssertTrue(AvailabilityText <> ScanningText);
   AssertEquals(AvailabilityText, FControl.StatusText);
+end;
+
+procedure TLazBleDeviceControlTest.StatusTextIncludesAvailabilityDiagnostic;
+const
+  Diagnostic = 'native SimpleBLE library is missing';
+begin
+  FClient.LazBle := FLazBle;
+  FLazBle.RefreshAvailability;
+  FBackendObject.CompleteOperation(FBackendObject.OperationIds[0],
+    lbekOperationFailed, 0, Diagnostic);
+  CheckSynchronize;
+
+  AssertTrue(Pos(Diagnostic, LazBleStatusText(FClient)) > 0);
 end;
 
 procedure TLazBleDeviceControlTest.DestroyedClientClearsBinding;

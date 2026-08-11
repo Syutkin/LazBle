@@ -70,6 +70,11 @@ msgstr "Выбрать..."
 msgid "Bluetooth unavailable"
 msgstr "Bluetooth недоступен"
 
+#: lazbledevicecontrol.sbleunavailabledetail
+#, object-pascal-format
+msgid "Bluetooth unavailable: %s"
+msgstr "Bluetooth недоступен: %s"
+
 #: lazbledevicecontrol.sblewaitingtoreconnect
 msgid "Waiting to reconnect..."
 msgstr "Ожидание повторного подключения..."

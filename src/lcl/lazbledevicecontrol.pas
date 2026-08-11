@@ -110,6 +110,7 @@ resourcestring
   SBleNoDevice = 'No device selected';
   SBleCheckingAvailability = 'Checking Bluetooth availability...';
   SBleUnavailable = 'Bluetooth unavailable';
+  SBleUnavailableDetail = 'Bluetooth unavailable: %s';
   SBleScanning = 'Scanning for Bluetooth devices...';
   SBleDisconnected = 'Disconnected';
   SBleConnecting = 'Connecting...';
@@ -142,7 +143,12 @@ begin
   begin
     case AClient.LazBle.Availability of
       lbaChecking: Exit(SBleCheckingAvailability);
-      lbaUnavailable: Exit(SBleUnavailable);
+      lbaUnavailable:
+        if AClient.LazBle.LastErrorMessage <> '' then
+          Exit(Format(SBleUnavailableDetail,
+            [AClient.LazBle.LastErrorMessage]))
+        else
+          Exit(SBleUnavailable);
     end;
     if AClient.LazBle.ScanState = lblssScanning then
       Exit(SBleScanning);
