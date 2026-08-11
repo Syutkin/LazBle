@@ -141,6 +141,7 @@ type
     FNextSubscriptionId: TBleSubscriptionId;
     FCurrentCommandKind: TLazBleBackendCommandKind;
     FScanWaitEvent: TEvent;
+    FTargetScanDeviceId: string;
     function LoadLibrary(out AErrorMessage: string): Boolean;
     function SelectAdapter(const ARequestedId: string;
       out AErrorMessage: string): Boolean;
@@ -153,6 +154,19 @@ type
       const ADataLength: NativeUInt);
     function FindPeripheral(const ADeviceId: string):
       TSimpleBlePeripheralEntry;
+    function StorePeripheral(const APeripheral: TSimpleBlePeripheral;
+      out AEntry: TSimpleBlePeripheralEntry;
+      const AExpectedDeviceId: string = ''): Boolean;
+    function FindConnectedPeripheral(const ADeviceId: string;
+      out AEntry: TSimpleBlePeripheralEntry): Boolean;
+    function FindPairedPeripheral(const ADeviceId: string;
+      out AEntry: TSimpleBlePeripheralEntry): Boolean;
+    function ScanForPeripheral(const ADeviceId: string;
+      out AEntry: TSimpleBlePeripheralEntry; out AErrorCode: Integer;
+      out AErrorMessage: string): Boolean;
+    function ResolvePeripheral(const ADeviceId: string;
+      out AEntry: TSimpleBlePeripheralEntry; out AErrorCode: Integer;
+      out AErrorMessage: string): Boolean;
     function FindSubscription(const ASubscriptionId: TBleSubscriptionId):
       TSimpleBleSubscriptionEntry;
     function ExecuteScan(const ACommand: TLazBleBackendCommand;
@@ -184,6 +198,9 @@ type
       out AErrorCode: Integer; out AErrorMessage: string): Boolean;
     procedure CancelCurrent;
   end;
+
+const
+  DefaultSimpleBlePeripheralDiscoveryTimeoutMs = 5000;
 
 function CopyAndFreeNativeString(const AValue: PChar): string;
 begin
@@ -416,7 +433,8 @@ procedure TLazBleNativeSimpleBleDriver.ScanStarted;
 var
   BackendEvent: TLazBleBackendEvent;
 begin
-  if not Assigned(FEventSink) then
+  if (FCurrentCommandKind <> lbckStartScan) or
+    not Assigned(FEventSink) then
     Exit;
   BackendEvent := Default(TLazBleBackendEvent);
   BackendEvent.Kind := lbekScanStarted;
@@ -429,7 +447,8 @@ procedure TLazBleNativeSimpleBleDriver.ScanStopped;
 var
   BackendEvent: TLazBleBackendEvent;
 begin
-  if not Assigned(FEventSink) then
+  if (FCurrentCommandKind <> lbckStartScan) or
+    not Assigned(FEventSink) then
     Exit;
   BackendEvent := Default(TLazBleBackendEvent);
   BackendEvent.Kind := lbekScanStopped;
@@ -443,40 +462,28 @@ procedure TLazBleNativeSimpleBleDriver.ScanResult(
 var
   BackendEvent: TLazBleBackendEvent;
   Entry: TSimpleBlePeripheralEntry;
-  KeepHandle: Boolean;
+  Rssi: SmallInt;
 begin
   if APeripheral = nil then
     Exit;
-  KeepHandle := False;
-  try
-    if not Assigned(FEventSink) then
-      Exit;
+  Rssi := SimpleBlePeripheralRssi(APeripheral);
+  if not StorePeripheral(APeripheral, Entry, FTargetScanDeviceId) then
+    Exit;
+
+  if (FTargetScanDeviceId <> '') and
+    SameText(Entry.DeviceId, FTargetScanDeviceId) then
+    FScanWaitEvent.SetEvent;
+
+  if (FCurrentCommandKind = lbckStartScan) and Assigned(FEventSink) then
+  begin
     BackendEvent := Default(TLazBleBackendEvent);
     BackendEvent.Kind := lbekScanResult;
     BackendEvent.OperationId := FOperationId;
     BackendEvent.AdapterId := FAdapterId;
-    BackendEvent.DeviceId := CopyAndFreeNativeString(
-      SimpleBlePeripheralAddress(APeripheral));
-    BackendEvent.DeviceName := CopyAndFreeNativeString(
-      SimpleBlePeripheralIdentifier(APeripheral));
-    BackendEvent.Rssi := SimpleBlePeripheralRssi(APeripheral);
-    Entry := FindPeripheral(BackendEvent.DeviceId);
-    if not Assigned(Entry) then
-    begin
-      Entry := TSimpleBlePeripheralEntry.Create;
-      Entry.Owner := Self;
-      Entry.Handle := APeripheral;
-      Entry.DeviceId := BackendEvent.DeviceId;
-      Entry.DeviceName := BackendEvent.DeviceName;
-      FPeripherals.Add(Entry);
-      KeepHandle := True;
-    end
-    else
-      Entry.DeviceName := BackendEvent.DeviceName;
+    BackendEvent.DeviceId := Entry.DeviceId;
+    BackendEvent.DeviceName := Entry.DeviceName;
+    BackendEvent.Rssi := Rssi;
     FEventSink.Emit(BackendEvent);
-  finally
-    if not KeepHandle then
-      SimpleBlePeripheralReleaseHandle(APeripheral);
   end;
 end;
 
@@ -534,6 +541,158 @@ begin
       Exit;
   end;
   Result := nil;
+end;
+
+function TLazBleNativeSimpleBleDriver.StorePeripheral(
+  const APeripheral: TSimpleBlePeripheral;
+  out AEntry: TSimpleBlePeripheralEntry;
+  const AExpectedDeviceId: string): Boolean;
+var
+  DeviceId: string;
+  DeviceName: string;
+  KeepHandle: Boolean;
+begin
+  AEntry := nil;
+  Result := False;
+  if APeripheral = nil then
+    Exit;
+
+  KeepHandle := False;
+  try
+    DeviceId := CopyAndFreeNativeString(
+      SimpleBlePeripheralAddress(APeripheral));
+    if (DeviceId = '') or ((AExpectedDeviceId <> '') and
+      not SameText(DeviceId, AExpectedDeviceId)) then
+      Exit;
+    DeviceName := CopyAndFreeNativeString(
+      SimpleBlePeripheralIdentifier(APeripheral));
+    AEntry := FindPeripheral(DeviceId);
+    if not Assigned(AEntry) then
+    begin
+      AEntry := TSimpleBlePeripheralEntry.Create;
+      AEntry.Owner := Self;
+      AEntry.Handle := APeripheral;
+      AEntry.DeviceId := DeviceId;
+      AEntry.DeviceName := DeviceName;
+      FPeripherals.Add(AEntry);
+      KeepHandle := True;
+    end
+    else if DeviceName <> '' then
+      AEntry.DeviceName := DeviceName;
+    Result := True;
+  finally
+    if not KeepHandle then
+      SimpleBlePeripheralReleaseHandle(APeripheral);
+  end;
+end;
+
+function TLazBleNativeSimpleBleDriver.FindConnectedPeripheral(
+  const ADeviceId: string; out AEntry: TSimpleBlePeripheralEntry): Boolean;
+var
+  Count: NativeUInt;
+  Index: NativeUInt;
+  Peripheral: TSimpleBlePeripheral;
+  StoredEntry: TSimpleBlePeripheralEntry;
+begin
+  AEntry := nil;
+  Count := SimpleBleAdapterGetConnectedPeripheralsCount(FAdapter);
+  if Count > 0 then
+    for Index := 0 to Count - 1 do
+    begin
+      Peripheral := SimpleBleAdapterGetConnectedPeripheralsHandle(FAdapter,
+        Index);
+      if not StorePeripheral(Peripheral, StoredEntry, ADeviceId) then
+        Continue;
+      if SameText(StoredEntry.DeviceId, ADeviceId) then
+      begin
+        AEntry := StoredEntry;
+        Exit(True);
+      end;
+    end;
+  Result := False;
+end;
+
+function TLazBleNativeSimpleBleDriver.FindPairedPeripheral(
+  const ADeviceId: string; out AEntry: TSimpleBlePeripheralEntry): Boolean;
+var
+  Count: NativeUInt;
+  Index: NativeUInt;
+  Peripheral: TSimpleBlePeripheral;
+  StoredEntry: TSimpleBlePeripheralEntry;
+begin
+  AEntry := nil;
+  Count := SimpleBleAdapterGetPairedPeripheralsCount(FAdapter);
+  if Count > 0 then
+    for Index := 0 to Count - 1 do
+    begin
+      Peripheral := SimpleBleAdapterGetPairedPeripheralsHandle(FAdapter,
+        Index);
+      if not StorePeripheral(Peripheral, StoredEntry, ADeviceId) then
+        Continue;
+      if SameText(StoredEntry.DeviceId, ADeviceId) then
+      begin
+        AEntry := StoredEntry;
+        Exit(True);
+      end;
+    end;
+  Result := False;
+end;
+
+function TLazBleNativeSimpleBleDriver.ScanForPeripheral(
+  const ADeviceId: string; out AEntry: TSimpleBlePeripheralEntry;
+  out AErrorCode: Integer; out AErrorMessage: string): Boolean;
+var
+  NativeError: TSimpleBleErr;
+begin
+  AEntry := nil;
+  FScanWaitEvent.ResetEvent;
+  FTargetScanDeviceId := ADeviceId;
+  try
+    NativeError := SimpleBleAdapterSetCallbackOnScanFound(FAdapter,
+      @NativeScanResult, Self);
+    if NativeError = SIMPLEBLE_SUCCESS then
+      NativeError := SimpleBleAdapterSetCallbackOnScanUpdated(FAdapter,
+        @NativeScanResult, Self);
+    if NativeError = SIMPLEBLE_SUCCESS then
+      NativeError := SimpleBleAdapterScanStart(FAdapter);
+    if NativeError <> SIMPLEBLE_SUCCESS then
+    begin
+      AErrorCode := Ord(NativeError);
+      AErrorMessage := 'Could not start SimpleBLE device discovery';
+      Exit(False);
+    end;
+
+    FScanWaitEvent.WaitFor(DefaultSimpleBlePeripheralDiscoveryTimeoutMs);
+    NativeError := SimpleBleAdapterScanStop(FAdapter);
+    if NativeError <> SIMPLEBLE_SUCCESS then
+    begin
+      AErrorCode := Ord(NativeError);
+      AErrorMessage := 'Could not stop SimpleBLE device discovery';
+      Exit(False);
+    end;
+    AEntry := FindPeripheral(ADeviceId);
+    Result := Assigned(AEntry);
+    if not Result then
+      AErrorMessage := 'BLE device was not found: ' + ADeviceId;
+  finally
+    FTargetScanDeviceId := '';
+  end;
+end;
+
+function TLazBleNativeSimpleBleDriver.ResolvePeripheral(
+  const ADeviceId: string; out AEntry: TSimpleBlePeripheralEntry;
+  out AErrorCode: Integer; out AErrorMessage: string): Boolean;
+begin
+  AEntry := FindPeripheral(ADeviceId);
+  if Assigned(AEntry) then
+    Exit(True);
+  if not SelectAdapter('', AErrorMessage) then
+    Exit(False);
+  if FindConnectedPeripheral(ADeviceId, AEntry) then
+    Exit(True);
+  if FindPairedPeripheral(ADeviceId, AEntry) then
+    Exit(True);
+  Result := ScanForPeripheral(ADeviceId, AEntry, AErrorCode, AErrorMessage);
 end;
 
 function TLazBleNativeSimpleBleDriver.FindSubscription(
@@ -693,19 +852,22 @@ function TLazBleNativeSimpleBleDriver.ExecuteConnect(
   out AErrorMessage: string): Boolean;
 var
   BackendEvent: TLazBleBackendEvent;
+  Connected: Boolean;
   Entry: TSimpleBlePeripheralEntry;
   NativeError: TSimpleBleErr;
 begin
-  Entry := FindPeripheral(ACommand.DeviceId);
-  if not Assigned(Entry) then
-  begin
-    AErrorMessage := 'BLE device was not found by scan: ' + ACommand.DeviceId;
+  if not ResolvePeripheral(ACommand.DeviceId, Entry, AErrorCode,
+    AErrorMessage) then
     Exit(False);
-  end;
   NativeError := SimpleBlePeripheralSetCallbackOnDisconnected(Entry.Handle,
     @NativePeripheralDisconnected, Entry);
   if NativeError = SIMPLEBLE_SUCCESS then
-    NativeError := SimpleBlePeripheralConnect(Entry.Handle);
+  begin
+    Connected := False;
+    NativeError := SimpleBlePeripheralIsConnected(Entry.Handle, Connected);
+    if (NativeError = SIMPLEBLE_SUCCESS) and not Connected then
+      NativeError := SimpleBlePeripheralConnect(Entry.Handle);
+  end;
   AErrorCode := Ord(NativeError);
   Result := NativeError = SIMPLEBLE_SUCCESS;
   if not Result then
@@ -1039,7 +1201,7 @@ end;
 
 procedure TLazBleNativeSimpleBleDriver.CancelCurrent;
 begin
-  if FCurrentCommandKind = lbckStartScan then
+  if FCurrentCommandKind in [lbckStartScan, lbckConnect] then
     FScanWaitEvent.SetEvent;
 end;
 
