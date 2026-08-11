@@ -22,6 +22,7 @@ type
   private
     FBleSync: TLazBleSync;
     FClient: TBleClient;
+    FLineEnding: string;
     FProfile: TNusProfile;
     FOutputLock: TRTLCriticalSection;
     procedure NusDataReceived(Sender: TObject; const ADeviceId: string;
@@ -70,6 +71,23 @@ begin
   SetLength(Result, Length(AValue));
   if Length(AValue) > 0 then
     Move(AValue[1], Result[0], Length(AValue));
+end;
+
+function TryParseLineEnding(const AValue: string;
+  out ALineEnding: string): Boolean;
+begin
+  Result := True;
+  if (AValue = '') or SameText(AValue, 'none') then
+    ALineEnding := ''
+  else if SameText(AValue, 'lf') then
+    ALineEnding := #10
+  else if SameText(AValue, 'crlf') then
+    ALineEnding := #13#10
+  else
+  begin
+    ALineEnding := '';
+    Result := False;
+  end;
 end;
 
 constructor TNusTerminalApplication.Create(AOwner: TComponent);
@@ -146,7 +164,7 @@ begin
       Break;
     if InputLine = '' then
       Continue;
-    SendText(InputLine, 5000);
+    SendText(InputLine + FLineEnding, 5000);
   until False;
 end;
 
@@ -181,8 +199,8 @@ var
   RequestedDeviceId: string;
   ScanTimeoutMs: Cardinal;
 begin
-  ErrorMessage := CheckOptions('ha:d:t:', [
-    'help', 'adapter:', 'device:', 'timeout:']);
+  ErrorMessage := CheckOptions('ha:d:t:e:', [
+    'help', 'adapter:', 'device:', 'timeout:', 'line-ending:']);
   if ErrorMessage <> '' then
   begin
     Fail(ErrorMessage);
@@ -198,6 +216,12 @@ begin
     ScanTimeoutMs) then
   begin
     Fail('Invalid scan timeout.');
+    Exit;
+  end;
+  if not TryParseLineEnding(GetOptionValue('e', 'line-ending'),
+    FLineEnding) then
+  begin
+    Fail('Invalid line ending. Expected none, lf, or crlf.');
     Exit;
   end;
 
@@ -242,11 +266,13 @@ end;
 procedure TNusTerminalApplication.WriteHelp;
 begin
   WriteLn('Usage: ', ExeName,
-    ' [--adapter ID] [--device ADDRESS] [--timeout MILLISECONDS]');
+    ' [--adapter=ID] [--device=ADDRESS] [--timeout=MILLISECONDS]',
+    ' [--line-ending=none|lf|crlf]');
   WriteLn;
   WriteLn('Scans for a BLE device and opens a Nordic UART Service terminal.');
   WriteLn('Received notifications are printed as HEX and ASCII.');
-  WriteLn('Input lines are sent as UTF-8 bytes without an added line ending.');
+  WriteLn('Input lines are sent as UTF-8 bytes with the selected line ending.');
+  WriteLn('Line endings: none (default), lf (\n), or crlf (\r\n).');
   WriteLn('Set SIMPLECBLE_LIBRARY_DIR if native libraries are elsewhere.');
 end;
 
