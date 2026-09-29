@@ -10,6 +10,11 @@
 - Copy native GATT services and read buffers into Pascal-owned data, release
   native allocations, and drain callbacks before shutdown frees their userdata.
 
+### Fixed
+
+- Cancel pending session operations safely during shutdown when cancellation
+  removes entries from the operation list.
+
 ## [1.0.0] - 2026-08-12
 
 ### Added

@@ -481,8 +481,9 @@ procedure TLazBle.CancelPendingOperations;
 var
   Entry: TBleSessionOperationEntry;
   Index: Integer;
-  OperationCount: Integer;
+  Operations: array of IBleOperation;
 begin
+  Operations := nil;
   if Assigned(FActiveScan) and (FActiveScan.State = lbopPending) then
     FActiveScan.Cancel;
   if Assigned(FActiveAvailability) and
@@ -490,13 +491,15 @@ begin
     FActiveAvailability.Cancel;
   for Index := 0 to FClients.Count - 1 do
     TBleClientAccess(FClients[Index]).CancelForShutdown;
-  OperationCount := FOperations.Count;
-  for Index := 0 to OperationCount - 1 do
+  SetLength(Operations, FOperations.Count);
+  for Index := 0 to High(Operations) do
   begin
     Entry := TBleSessionOperationEntry(FOperations[Index]);
-    if Entry.Operation.State = lbopPending then
-      Entry.Operation.Cancel;
+    Operations[Index] := Entry.Operation;
   end;
+  for Index := 0 to High(Operations) do
+    if Operations[Index].State = lbopPending then
+      Operations[Index].Cancel;
 end;
 
 function TLazBle.CheckAvailabilityAsync(const AAdapterId: string):

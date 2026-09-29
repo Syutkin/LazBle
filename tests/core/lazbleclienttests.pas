@@ -132,6 +132,7 @@ type
     procedure FacadeDetachesBackendBeforeDestroyingClientsAndProfiles;
     procedure ShutdownCancelsActiveClientConnection;
     procedure ShutdownCancelsClientWhileProfileIsAttaching;
+    procedure ShutdownCancelsMultiplePendingDisconnects;
     procedure AutoReconnectIsDisabledByDefault;
     procedure InitialConnectFailureDoesNotStartReconnect;
     procedure InitialRequiredProfileFailureDoesNotStartReconnect;
@@ -1059,6 +1060,34 @@ begin
     lbekOperationCancelled));
   AssertTrue(FBackendObject.CompleteShutdown);
   AssertEquals(Ord(lbopSucceeded), Ord(ShutdownOperation.State));
+end;
+
+procedure TLazBleClientTest.ShutdownCancelsMultiplePendingDisconnects;
+var
+  FirstClient, SecondClient: TBleClient;
+  FirstDisconnect, SecondDisconnect, ShutdownOperation: IBleOperation;
+begin
+  FirstClient := FBle.CreateClient('device-a');
+  SecondClient := FBle.CreateClient('device-b');
+  FirstClient.ConnectAsync;
+  CompleteTransportClient(FirstClient);
+  SecondClient.ConnectAsync;
+  CompleteTransportClient(SecondClient);
+  AssertEquals(Ord(lbcstReady), Ord(FirstClient.State));
+  AssertEquals(Ord(lbcstReady), Ord(SecondClient.State));
+
+  FirstDisconnect := FirstClient.DisconnectAsync;
+  SecondDisconnect := SecondClient.DisconnectAsync;
+  AssertEquals(Ord(lbopPending), Ord(FirstDisconnect.State));
+  AssertEquals(Ord(lbopPending), Ord(SecondDisconnect.State));
+
+  ShutdownOperation := FBle.ShutdownAsync;
+  AssertEquals('first disconnect', Ord(lbopCancelled),
+    Ord(FirstDisconnect.State));
+  AssertEquals('second disconnect', Ord(lbopCancelled),
+    Ord(SecondDisconnect.State));
+  AssertTrue(Assigned(ShutdownOperation));
+  AssertEquals(Ord(lbopPending), Ord(ShutdownOperation.State));
 end;
 
 procedure TLazBleClientTest.DefaultFacadeDoesNotLoadNativeLibraryWhenCreated;
