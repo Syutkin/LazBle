@@ -12,7 +12,7 @@ begin
   with Installer do
   begin
     Package := AddPackage('lazble');
-    Package.Version := '2.0.0';
+    Package.Version := '1.2.0';
     Package.Author := 'Andrey Syutkin';
     Package.License := 'MIT';
     Package.Description :=

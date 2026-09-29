@@ -7,7 +7,7 @@ dependencies to the core units. `lazblelcldesign.lpk` is an IDE-only package
 that places the components on the Lazarus component palette; applications do
 not depend on it.
 
-Current source version: **2.0.0**.
+Current source version: **1.2.0**.
 
 LazBle requires the
 [SimpleBlePascal](https://github.com/Syutkin/Pascal-Bindings-For-SimpleBLE-Library)
