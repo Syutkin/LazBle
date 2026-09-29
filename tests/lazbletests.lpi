@@ -14,7 +14,7 @@
       <UseAppBundle Value="False"/>
       <ResourceType Value="res"/>
     </General>
-    <Units Count="16">
+    <Units Count="17">
       <Unit0>
         <Filename Value="lazbletests.lpr"/>
         <IsPartOfProject Value="True"/>
@@ -94,11 +94,19 @@
         <IsPartOfProject Value="True"/>
         <UnitName Value="TestLazBleAccess"/>
       </Unit15>
+      <Unit16>
+        <Filename Value="backend\lazblenativedrivertests.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="LazBleNativeDriverTests"/>
+      </Unit16>
     </Units>
   </ProjectOptions>
   <CompilerOptions>
     <Version Value="11"/>
     <PathDelim Value="\"/>
+    <Other>
+      <CustomOptions Value="-dLAZBLE_NATIVE_TESTS"/>
+    </Other>
     <Target>
       <Filename Value="bin\lazbletests"/>
     </Target>

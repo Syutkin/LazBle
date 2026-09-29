@@ -92,6 +92,10 @@ type
     function BeginShutdown: TBleOperationId;
   end;
 
+{$IFDEF LAZBLE_NATIVE_TESTS}
+function CreateNativeSimpleBleDriverForTests: ILazBleSimpleBleDriver;
+{$ENDIF}
+
 implementation
 
 uses
@@ -134,6 +138,9 @@ type
     ILazBleSimpleBleDriver)
   private
     FLoaded: Boolean;
+    {$IFDEF LAZBLE_NATIVE_TESTS}
+    FInjectedForTests: Boolean;
+    {$ENDIF}
     FAdapter: TSimpleBleAdapter;
     FAdapterId: string;
     FOperationId: TBleOperationId;
@@ -1136,10 +1143,25 @@ begin
   FEventSink := nil;
   if FLoaded then
   begin
+    {$IFDEF LAZBLE_NATIVE_TESTS}
+    if not FInjectedForTests then
+    {$ENDIF}
     SimpleBleUnloadLibrary;
     FLoaded := False;
   end;
 end;
+
+{$IFDEF LAZBLE_NATIVE_TESTS}
+function CreateNativeSimpleBleDriverForTests: ILazBleSimpleBleDriver;
+var
+  Driver: TLazBleNativeSimpleBleDriver;
+begin
+  Driver := TLazBleNativeSimpleBleDriver.Create;
+  Driver.FLoaded := True;
+  Driver.FInjectedForTests := True;
+  Result := Driver;
+end;
+{$ENDIF}
 
 function TLazBleNativeSimpleBleDriver.ExecuteScan(
   const ACommand: TLazBleBackendCommand; out AErrorCode: Integer;
