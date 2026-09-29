@@ -7,6 +7,8 @@
 - Require SimpleBlePascal 1.2.0 for the SimpleCBLE 1.2.0 ABI.
 - Read native error codes and messages from SimpleCBLE 1.2.0 `out_error`
   objects across adapter, scan, connection, and GATT operations.
+- Copy native GATT services and read buffers into Pascal-owned data, release
+  native allocations, and drain callbacks before shutdown frees their userdata.
 
 ## [1.0.0] - 2026-08-12
 
