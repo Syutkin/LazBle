@@ -7,11 +7,11 @@ dependencies to the core units. `lazblelcldesign.lpk` is an IDE-only package
 that places the components on the Lazarus component palette; applications do
 not depend on it.
 
-Current source release: **v1.0.0**.
+Current source version: **2.0.0**.
 
-The default backend uses the
+LazBle requires the
 [SimpleBlePascal](https://github.com/Syutkin/Pascal-Bindings-For-SimpleBLE-Library)
-1.1.0 bindings for the SimpleCBLE 1.1.0 ABI. The Pascal package is a compile-time
+1.2.0 bindings for the SimpleCBLE 1.2.0 ABI. The Pascal package is a compile-time
 dependency; the native SimpleCBLE library is loaded dynamically only when a
 BLE operation starts.
 
@@ -259,7 +259,7 @@ units and are not a compatibility surface.
 
 ## Build and test
 
-The Lazarus package requires `SimpleBlePascal` 1.1.0 or newer by package name.
+The Lazarus package requires `SimpleBlePascal` 1.2.0 or newer by package name.
 Lazarus does not discover it merely because its checkout is in a sibling
 directory. Register the bindings package in the active Lazarus configuration
 before building LazBle; register the LazBle packages as well before building a

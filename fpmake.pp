@@ -12,14 +12,14 @@ begin
   with Installer do
   begin
     Package := AddPackage('lazble');
-    Package.Version := '1.0.0';
+    Package.Version := '2.0.0';
     Package.Author := 'Andrey Syutkin';
     Package.License := 'MIT';
     Package.Description :=
       'Asynchronous BLE and GATT client library for Free Pascal';
     Package.Dependencies.Add('fcl-base');
     Dependency := Package.Dependencies.Add('simpleblepascal');
-    Dependency.Version := '1.1.0';
+    Dependency.Version := '1.2.0';
     Package.SourcePath.Add('.');
     Package.SourcePath.Add('src');
     Package.SourcePath.Add('src/backends');

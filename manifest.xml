@@ -1,8 +1,8 @@
 <?xml version="1.0"?>
 <packages>
 <package name="lazble">
- <version major="1" minor="0" micro="0"/>
- <filename>lazble-1.0.0.source.zip</filename>
+ <version major="2" minor="0" micro="0"/>
+ <filename>lazble-2.0.0.source.zip</filename>
  <author>Andrey Syutkin</author>
  <license>MIT</license>
  <email></email>
@@ -16,7 +16,7 @@
   </dependency>
   <dependency>
    <package packagename="simpleblepascal"/>
-   <version major="1" minor="1" micro="0"/>
+   <version major="1" minor="2" micro="0"/>
   </dependency>
  </dependencies>
 </package>
