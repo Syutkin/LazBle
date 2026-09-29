@@ -50,9 +50,25 @@ type
 const
   InvalidBleOperationId: TBleOperationId = 0;
   InvalidBleSubscriptionId: TBleSubscriptionId = 0;
+  // Negative codes are reserved for lazble; SimpleBLE error ordinals are nonnegative.
   LazBleErrorInvalidState = -1000;
   LazBleErrorGattNotFound = -1001;
   LazBleErrorGattPropertyNotSupported = -1002;
+  LazBleErrorNoAdapter = -1003;
+  LazBleErrorAdapterNotFound = -1004;
+  LazBleErrorAdapterAlreadyActive = -1005;
+  LazBleErrorBluetoothDisabled = -1006;
+  LazBleErrorDeviceNotFound = -1007;
+  LazBleErrorDeviceNotKnown = -1008;
+  LazBleErrorDeviceDisconnected = -1009;
+  LazBleErrorInvalidGattUuid = -1010;
+  LazBleErrorSubscriptionNotKnown = -1011;
+  LazBleErrorInvalidNativeData = -1012;
+  LazBleErrorNativeDataTooLarge = -1013;
+  LazBleErrorCommandNotImplemented = -1014;
+  LazBleErrorBackendUnavailable = -1015;
+  LazBleErrorOperationTimedOut = -1016;
+  LazBleErrorInvalidProfileData = -1017;
 
 type
   TLazBleWriteMode = (

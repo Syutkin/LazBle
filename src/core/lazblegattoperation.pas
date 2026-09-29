@@ -52,7 +52,8 @@ begin
   FOperationId := AOperationId;
   FKind := AKind;
   if AOperationId = InvalidBleOperationId then
-    Complete(lbopFailed, 0, 'Could not submit GATT operation');
+    Complete(lbopFailed, LazBleErrorInvalidState,
+      'Could not submit GATT operation');
 end;
 
 constructor TBleGattOperation.CreateCompleted(
@@ -63,7 +64,10 @@ begin
   InitCriticalSection(FValueLock);
   FOperationId := InvalidBleOperationId;
   FKind := AKind;
-  Complete(AState, 0, AErrorMessage);
+  if AState = lbopFailed then
+    Complete(AState, LazBleErrorInvalidState, AErrorMessage)
+  else
+    Complete(AState, 0, AErrorMessage);
 end;
 
 destructor TBleGattOperation.Destroy;

@@ -21,6 +21,9 @@ type
     procedure TearDown; override;
   published
     procedure NativeErrorCodeZeroAndMessage;
+    procedure MissingAdapterGetsLazBleErrorCode;
+    procedure UnknownAdapterGetsLazBleErrorCode;
+    procedure DisabledBluetoothGetsLazBleErrorCode;
     procedure EmptyReadReleasesBuffer;
     procedure DiscoveryCopiesNestedGattData;
     procedure FailedDiscoveryReleasesPartialService;
@@ -69,6 +72,8 @@ var
   NotifyCallback: TSimpleBleCallbackNotify;
   NotifyData: Pointer;
   FailScan, FailSecondService, EmitScanResult: Boolean;
+  AdapterCountValue: NativeUInt;
+  BluetoothEnabled: Boolean;
   ScanActive, Connected: Boolean;
   ErrorReleases, ServiceReleases, BufferReleases: Integer;
   PeripheralReleases, AdapterReleases, Unsubscribes, Disconnects: Integer;
@@ -122,7 +127,12 @@ end;
 
 function AdapterCount(var AError: TSimpleBleError): NativeUInt; cdecl;
 begin
-  Result := 1;
+  Result := AdapterCountValue;
+end;
+
+function IsBluetoothEnabled(var AError: TSimpleBleError): Boolean; cdecl;
+begin
+  Result := BluetoothEnabled;
 end;
 
 function AdapterHandle(AIndex: NativeUInt;
@@ -398,6 +408,7 @@ begin
   SimpleBleErrorRelease := @FakeErrorRelease;
   SimpleBleFree := @FakeFree;
   SimpleBleAdapterGetCount := @AdapterCount;
+  SimpleBleAdapterIsBluetoothEnabled := @IsBluetoothEnabled;
   SimpleBleAdapterGetHandle := @AdapterHandle;
   SimpleBleAdapterReleaseHandle := @ReleaseAdapter;
   SimpleBleAdapterIdentifier := @AdapterIdentifier;
@@ -439,6 +450,8 @@ begin
   FailScan := False;
   FailSecondService := False;
   EmitScanResult := True;
+  AdapterCountValue := 1;
+  BluetoothEnabled := True;
   ScanActive := False;
   Connected := False;
   ErrorReleases := 0;
@@ -506,6 +519,42 @@ begin
   AssertEquals('scan rejected', MessageText);
   AssertEquals(1, ErrorReleases);
   AssertEquals(0, SinkObject.Count(lbekScanStarted));
+end;
+
+procedure TNativeDriverTest.MissingAdapterGetsLazBleErrorCode;
+var
+  Code: Integer;
+  MessageText: string;
+begin
+  AdapterCountValue := 0;
+  AssertFalse(RunCommand(lbckCheckAvailability, Code, MessageText));
+  AssertEquals(LazBleErrorNoAdapter, Code);
+  AssertEquals('No BLE adapter was found', MessageText);
+end;
+
+procedure TNativeDriverTest.UnknownAdapterGetsLazBleErrorCode;
+var
+  Code: Integer;
+  Command: TLazBleBackendCommand;
+  MessageText: string;
+begin
+  Command := Default(TLazBleBackendCommand);
+  Command.Kind := lbckCheckAvailability;
+  Command.AdapterId := 'another-adapter';
+  AssertFalse(FDriver.Execute(Command, 10, FSink, Code, MessageText));
+  AssertEquals(LazBleErrorAdapterNotFound, Code);
+  AssertEquals('BLE adapter was not found: another-adapter', MessageText);
+end;
+
+procedure TNativeDriverTest.DisabledBluetoothGetsLazBleErrorCode;
+var
+  Code: Integer;
+  MessageText: string;
+begin
+  BluetoothEnabled := False;
+  AssertFalse(RunCommand(lbckCheckAvailability, Code, MessageText));
+  AssertEquals(LazBleErrorBluetoothDisabled, Code);
+  AssertEquals('Bluetooth is disabled', MessageText);
 end;
 
 procedure TNativeDriverTest.EmptyReadReleasesBuffer;

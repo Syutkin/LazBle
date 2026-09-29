@@ -211,6 +211,7 @@ begin
 
   AssertTrue(Assigned(Operation));
   AssertEquals(Ord(lbopFailed), Ord(Operation.State));
+  AssertEquals(LazBleErrorInvalidState, Operation.ErrorCode);
   AssertEquals('BLE byte channel is not ready', Operation.ErrorMessage);
   AssertEquals(2, FBackendObject.CommandCount);
 end;

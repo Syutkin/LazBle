@@ -7,6 +7,7 @@ interface
 uses
   Classes,
   SysUtils,
+  LazBleTypes,
   LazBleGattSession;
 
 type
@@ -53,7 +54,7 @@ type
     procedure RefreshState; virtual;
     procedure MarkReady;
     procedure MarkError(const AMessage: string;
-      const AErrorCode: Integer = 0);
+      const AErrorCode: Integer = LazBleErrorInvalidState);
     procedure Attach;
     procedure Detach;
     procedure AddStateChangedHandler(

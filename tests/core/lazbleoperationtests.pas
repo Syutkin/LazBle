@@ -7,6 +7,7 @@ interface
 uses
   fpcunit,
   testregistry,
+  LazBleTypes,
   LazBleOperation;
 
 type
@@ -32,6 +33,7 @@ type
     procedure LateCompletionHandlerRunsExactlyOnce;
     procedure InterfaceOwnsCompletedOperationLifetime;
     procedure CancelWithoutBackendCompletesOperation;
+    procedure TimeoutHasLazBleErrorCode;
   end;
 
 implementation
@@ -108,6 +110,16 @@ begin
 
   AssertEquals(Ord(lbopCancelled), Ord(Operation.State));
   AssertTrue(Operation.CancelRequested);
+end;
+
+procedure TLazBleOperationTest.TimeoutHasLazBleErrorCode;
+var
+  Operation: IBleOperation;
+begin
+  Operation := TTrackedOperation.CreateTracked(nil);
+  Operation.Timeout;
+  AssertEquals(Ord(lbopTimedOut), Ord(Operation.State));
+  AssertEquals(LazBleErrorOperationTimedOut, Operation.ErrorCode);
 end;
 
 initialization

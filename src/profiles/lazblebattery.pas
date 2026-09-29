@@ -6,6 +6,7 @@ interface
 
 uses
   SysUtils,
+  LazBleTypes,
   LazBleOperation,
   LazBleGattOperation,
   LazBleGattSubscription,
@@ -42,7 +43,8 @@ type
     procedure SubscriptionStateChanged(Sender: TObject;
       const AState: TLazBleSubscriptionState);
     function AcceptLevel(const AValue: TBytes): Boolean;
-    procedure SetProfileError(const AMessage: string);
+    procedure SetProfileError(const AMessage: string;
+      const AErrorCode: Integer = LazBleErrorInvalidState);
     function GetLevelPercent: Integer;
     function GetOnLevelChanged: TLazBleBatteryLevelEvent;
     procedure SetOnLevelChanged(const AHandler: TLazBleBatteryLevelEvent);
@@ -112,9 +114,10 @@ begin
   end;
 end;
 
-procedure TBleBatteryProfile.SetProfileError(const AMessage: string);
+procedure TBleBatteryProfile.SetProfileError(const AMessage: string;
+  const AErrorCode: Integer);
 begin
-  MarkError(AMessage);
+  MarkError(AMessage, AErrorCode);
 end;
 
 function TBleBatteryProfile.AcceptLevel(const AValue: TBytes): Boolean;
@@ -125,7 +128,8 @@ begin
   Result := (Length(AValue) = 1) and (AValue[0] <= 100);
   if not Result then
   begin
-    SetProfileError('Battery Level must be one byte in the range 0..100');
+    SetProfileError('Battery Level must be one byte in the range 0..100',
+      LazBleErrorInvalidProfileData);
     Exit;
   end;
 
@@ -157,7 +161,7 @@ begin
 
   if FReadOperation.State <> lbopSucceeded then
   begin
-    SetProfileError('Could not read Battery Level');
+    SetProfileError('Could not read Battery Level', FReadOperation.ErrorCode);
     Exit;
   end;
   if not AcceptLevel(FReadOperation.Value) then
@@ -168,7 +172,8 @@ begin
   FSubscription.OnData := @NotificationReceived;
   FSubscription.OnStateChanged := @SubscriptionStateChanged;
   if FSubscription.State = lbsubFailed then
-    SetProfileError('Could not subscribe to Battery Level')
+    SetProfileError('Could not subscribe to Battery Level',
+      FSubscription.ErrorCode)
   else
     FPhase := lbbpSubscribing;
 end;
@@ -193,7 +198,8 @@ begin
       lbsubActive:
         MarkReady;
       lbsubFailed:
-        SetProfileError('Could not subscribe to Battery Level');
+        SetProfileError('Could not subscribe to Battery Level',
+          FSubscription.ErrorCode);
       lbsubInactive:
         SetProfileError('Battery Level subscription is no longer active');
     end;

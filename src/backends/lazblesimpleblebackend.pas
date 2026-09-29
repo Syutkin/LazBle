@@ -577,8 +577,11 @@ begin
   begin
     Result := (ARequestedId = '') or SameText(ARequestedId, FAdapterId);
     if not Result then
+    begin
+      AErrorCode := LazBleErrorAdapterAlreadyActive;
       AErrorMessage := 'A different BLE adapter is already active: ' +
         FAdapterId;
+    end;
     Exit;
   end;
 
@@ -589,6 +592,7 @@ begin
     Exit(False);
   if AdapterCount = 0 then
   begin
+    AErrorCode := LazBleErrorNoAdapter;
     AErrorMessage := 'No BLE adapter was found';
     Exit(False);
   end;
@@ -637,6 +641,7 @@ begin
     end;
   end;
 
+  AErrorCode := LazBleErrorAdapterNotFound;
   AErrorMessage := 'BLE adapter was not found: ' + ARequestedId;
   Result := False;
 end;
@@ -999,7 +1004,10 @@ begin
     AEntry := FindPeripheral(ADeviceId);
     Result := Assigned(AEntry);
     if not Result then
+    begin
+      AErrorCode := LazBleErrorDeviceNotFound;
       AErrorMessage := 'BLE device was not found: ' + ADeviceId;
+    end;
   finally
     ClearScanCallbacks;
     FCallbacksIdle.WaitFor(High(Cardinal));
@@ -1239,6 +1247,7 @@ begin
     else if not Enabled then
     begin
       BackendEvent.Available := False;
+      AErrorCode := LazBleErrorBluetoothDisabled;
       AdapterError := 'Bluetooth is disabled';
     end;
   end;
@@ -1285,6 +1294,7 @@ begin
     Exit(False);
   if not Connected then
   begin
+    AErrorCode := LazBleErrorDeviceDisconnected;
     AErrorMessage := 'BLE device disconnected during connect';
     Exit(False);
   end;
@@ -1321,6 +1331,7 @@ begin
   Entry := FindPeripheral(ACommand.DeviceId);
   if not Assigned(Entry) then
   begin
+    AErrorCode := LazBleErrorDeviceNotKnown;
     AErrorMessage := 'BLE device is not known: ' + ACommand.DeviceId;
     Exit(False);
   end;
@@ -1394,6 +1405,7 @@ begin
   Entry := FindPeripheral(ACommand.DeviceId);
   if not Assigned(Entry) then
   begin
+    AErrorCode := LazBleErrorDeviceNotKnown;
     AErrorMessage := 'BLE device is not known: ' + ACommand.DeviceId;
     Exit(False);
   end;
@@ -1405,6 +1417,7 @@ begin
     Exit(False);
   if ServiceCount > NativeUInt(High(SizeInt)) then
   begin
+    AErrorCode := LazBleErrorNativeDataTooLarge;
     AErrorMessage := 'SimpleBLE returned too many services';
     Exit(False);
   end;
@@ -1430,6 +1443,7 @@ begin
         except
           on E: ESimpleBleInvalidNativeData do
           begin
+            AErrorCode := LazBleErrorInvalidNativeData;
             AErrorMessage := 'Invalid SimpleBLE service data: ' + E.Message;
             Exit(False);
           end;
@@ -1459,6 +1473,7 @@ begin
   Entry := FindPeripheral(ACommand.DeviceId);
   if not Assigned(Entry) then
   begin
+    AErrorCode := LazBleErrorDeviceNotKnown;
     AErrorMessage := 'BLE device is not known: ' + ACommand.DeviceId;
     Exit(False);
   end;
@@ -1466,6 +1481,7 @@ begin
     not TryCreateNativeUuid(ACommand.CharacteristicUuid,
       CharacteristicUuid) then
   begin
+    AErrorCode := LazBleErrorInvalidGattUuid;
     AErrorMessage := 'Invalid GATT UUID';
     Exit(False);
   end;
@@ -1491,6 +1507,7 @@ begin
     except
       on E: ESimpleBleInvalidNativeData do
       begin
+        AErrorCode := LazBleErrorInvalidNativeData;
         AErrorMessage := 'Invalid SimpleBLE read data: ' + E.Message;
         Exit(False);
       end;
@@ -1518,6 +1535,7 @@ begin
   Entry := FindPeripheral(ACommand.DeviceId);
   if not Assigned(Entry) then
   begin
+    AErrorCode := LazBleErrorDeviceNotKnown;
     AErrorMessage := 'BLE device is not known: ' + ACommand.DeviceId;
     Exit(False);
   end;
@@ -1525,6 +1543,7 @@ begin
     not TryCreateNativeUuid(ACommand.CharacteristicUuid,
       CharacteristicUuid) then
   begin
+    AErrorCode := LazBleErrorInvalidGattUuid;
     AErrorMessage := 'Invalid GATT UUID';
     Exit(False);
   end;
@@ -1569,6 +1588,7 @@ begin
   Entry := FindPeripheral(ACommand.DeviceId);
   if not Assigned(Entry) then
   begin
+    AErrorCode := LazBleErrorDeviceNotKnown;
     AErrorMessage := 'BLE device is not known: ' + ACommand.DeviceId;
     Exit(False);
   end;
@@ -1576,6 +1596,7 @@ begin
     not TryCreateNativeUuid(ACommand.CharacteristicUuid,
       CharacteristicUuid) then
   begin
+    AErrorCode := LazBleErrorInvalidGattUuid;
     AErrorMessage := 'Invalid GATT UUID';
     Exit(False);
   end;
@@ -1633,6 +1654,7 @@ begin
   Subscription := FindSubscription(ACommand.SubscriptionId);
   if not Assigned(Subscription) then
   begin
+    AErrorCode := LazBleErrorSubscriptionNotKnown;
     AErrorMessage := 'BLE subscription is not known';
     Exit(False);
   end;
@@ -1640,6 +1662,7 @@ begin
     not TryCreateNativeUuid(Subscription.CharacteristicUuid,
       CharacteristicUuid) then
   begin
+    AErrorCode := LazBleErrorInvalidGattUuid;
     AErrorMessage := 'Invalid GATT UUID';
     Exit(False);
   end;
@@ -1701,6 +1724,7 @@ begin
         Result := ExecuteUnsubscribe(ACommand, AErrorCode, AErrorMessage);
     else
       begin
+        AErrorCode := LazBleErrorCommandNotImplemented;
         AErrorMessage := 'SimpleBLE backend command is not implemented';
         Result := False;
       end;
@@ -2010,7 +2034,10 @@ begin
     Succeeded := FDriver.Execute(AOperation.Command,
       AOperation.OperationId, FDriverEventSink, ErrorCode, ErrorMessage)
   else
+  begin
+    ErrorCode := LazBleErrorBackendUnavailable;
     ErrorMessage := OpenError;
+  end;
   CompleteOperation(AOperation, Succeeded, ErrorCode, ErrorMessage);
 end;
 

@@ -292,6 +292,7 @@ begin
 
     AssertTrue(Assigned(Operation));
     AssertEquals(Ord(lbopFailed), Ord(Operation.State));
+    AssertEquals(LazBleErrorInvalidState, Operation.ErrorCode);
     AssertEquals('NUS profile is not bound to a client',
       Operation.ErrorMessage);
   finally

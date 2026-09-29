@@ -359,7 +359,7 @@ begin
     begin
       FCancelRequested := True;
       FState := lbopTimedOut;
-      FErrorCode := 0;
+      FErrorCode := LazBleErrorOperationTimedOut;
       FErrorMessage := 'BLE operation timed out';
       CancelHandler := FOnCancel;
       FOnCancel := nil;

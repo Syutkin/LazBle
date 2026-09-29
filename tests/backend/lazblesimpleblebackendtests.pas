@@ -722,6 +722,8 @@ begin
   AssertEquals(Ord(lbekOperationFailed),
     Ord(FEventSinkObject.Events[0].Kind));
   AssertTrue(OperationId = FEventSinkObject.Events[0].OperationId);
+  AssertEquals(LazBleErrorBackendUnavailable,
+    FEventSinkObject.Events[0].ErrorCode);
   AssertEquals('native SimpleBLE library is missing',
     FEventSinkObject.Events[0].ErrorMessage);
   AssertEquals(1, FDriverObject.OpenCount);

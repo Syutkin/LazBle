@@ -288,6 +288,7 @@ begin
   CompleteRead([101]);
 
   AssertEquals(Ord(lbgpsError), Ord(FProfile.State));
+  AssertEquals(LazBleErrorInvalidProfileData, FProfile.ErrorCode);
   AssertEquals(UnknownBatteryLevel, FProfile.LevelPercent);
   AssertEquals(3, FBackendObject.CommandCount);
   AssertEquals(Ord(lbssConnected), Ord(FSession.State));
@@ -300,6 +301,7 @@ begin
     41, [70, 71]);
 
   AssertEquals(Ord(lbgpsError), Ord(FProfile.State));
+  AssertEquals(LazBleErrorInvalidProfileData, FProfile.ErrorCode);
   AssertEquals(75, FProfile.LevelPercent);
   AssertEquals(Ord(lbssConnected), Ord(FSession.State));
 end;
