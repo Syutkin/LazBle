@@ -5,6 +5,8 @@
 ### Changed
 
 - Require SimpleBlePascal 1.2.0 for the SimpleCBLE 1.2.0 ABI.
+- Read native error codes and messages from SimpleCBLE 1.2.0 `out_error`
+  objects across adapter, scan, connection, and GATT operations.
 
 ## [1.0.0] - 2026-08-12
 

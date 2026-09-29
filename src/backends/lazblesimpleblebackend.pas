@@ -144,7 +144,7 @@ type
     FTargetScanDeviceId: string;
     function LoadLibrary(out AErrorMessage: string): Boolean;
     function SelectAdapter(const ARequestedId: string;
-      out AErrorMessage: string): Boolean;
+      out AErrorCode: Integer; out AErrorMessage: string): Boolean;
     procedure ScanStarted;
     procedure ScanStopped;
     procedure ScanResult(const APeripheral: TSimpleBlePeripheral);
@@ -156,11 +156,14 @@ type
       TSimpleBlePeripheralEntry;
     function StorePeripheral(const APeripheral: TSimpleBlePeripheral;
       out AEntry: TSimpleBlePeripheralEntry;
+      out AErrorCode: Integer; out AErrorMessage: string;
       const AExpectedDeviceId: string = ''): Boolean;
     function FindConnectedPeripheral(const ADeviceId: string;
-      out AEntry: TSimpleBlePeripheralEntry): Boolean;
+      out AEntry: TSimpleBlePeripheralEntry; out AErrorCode: Integer;
+      out AErrorMessage: string): Boolean;
     function FindPairedPeripheral(const ADeviceId: string;
-      out AEntry: TSimpleBlePeripheralEntry): Boolean;
+      out AEntry: TSimpleBlePeripheralEntry; out AErrorCode: Integer;
+      out AErrorMessage: string): Boolean;
     function ScanForPeripheral(const ADeviceId: string;
       out AEntry: TSimpleBlePeripheralEntry; out AErrorCode: Integer;
       out AErrorMessage: string): Boolean;
@@ -201,6 +204,29 @@ type
 
 const
   DefaultSimpleBlePeripheralDiscoveryTimeoutMs = 5000;
+
+function ConsumeNativeError(var ANativeError: TSimpleBleError;
+  out AErrorCode: Integer; out AErrorMessage: string;
+  const AContext: string): Boolean;
+var
+  MessageValue: PChar;
+begin
+  AErrorCode := 0;
+  AErrorMessage := '';
+  Result := ANativeError = nil;
+  if Result then
+    Exit;
+  try
+    AErrorCode := Ord(SimpleBleErrorCode(ANativeError));
+    MessageValue := SimpleBleErrorMessage(ANativeError);
+    if MessageValue <> nil then
+      AErrorMessage := StrPas(MessageValue);
+    if AErrorMessage = '' then
+      AErrorMessage := AContext;
+  finally
+    SimpleBleErrorRelease(ANativeError);
+  end;
+end;
 
 function CopyAndFreeNativeString(const AValue: PChar): string;
 begin
@@ -251,15 +277,15 @@ begin
   ADestination.Uuid := CopyNativeUuid(ASource.Uuid);
 
   DataLength := ASource.DataLength;
-  if DataLength > Length(ASource.Data) then
-    DataLength := Length(ASource.Data);
+  if ASource.Data = nil then
+    DataLength := 0;
   SetLength(ADestination.Data, DataLength);
   if DataLength > 0 then
-    Move(ASource.Data[0], ADestination.Data[0], DataLength);
+    Move(ASource.Data^, ADestination.Data[0], DataLength);
 
   CharacteristicCount := ASource.CharacteristicCount;
-  if CharacteristicCount > Length(ASource.Characteristics) then
-    CharacteristicCount := Length(ASource.Characteristics);
+  if ASource.Characteristics = nil then
+    CharacteristicCount := 0;
   SetLength(ADestination.Characteristics, CharacteristicCount);
   if CharacteristicCount > 0 then
     for CharacteristicIndex := 0 to CharacteristicCount - 1 do
@@ -284,8 +310,8 @@ begin
           CharacteristicIndex].Properties, lbgcpIndicate);
 
       DescriptorCount := NativeCharacteristic.DescriptorCount;
-      if DescriptorCount > Length(NativeCharacteristic.Descriptors) then
-        DescriptorCount := Length(NativeCharacteristic.Descriptors);
+      if NativeCharacteristic.Descriptors = nil then
+        DescriptorCount := 0;
       SetLength(ADestination.Characteristics[
         CharacteristicIndex].Descriptors, DescriptorCount);
       if DescriptorCount > 0 then
@@ -379,14 +405,18 @@ begin
 end;
 
 function TLazBleNativeSimpleBleDriver.SelectAdapter(
-  const ARequestedId: string; out AErrorMessage: string): Boolean;
+  const ARequestedId: string; out AErrorCode: Integer;
+  out AErrorMessage: string): Boolean;
 var
   Adapter: TSimpleBleAdapter;
   AdapterAddress: string;
   AdapterCount: NativeUInt;
   AdapterIdentifier: string;
   AdapterIndex: NativeUInt;
+  NativeError: TSimpleBleError;
 begin
+  AErrorCode := 0;
+  AErrorMessage := '';
   if FAdapter <> nil then
   begin
     Result := (ARequestedId = '') or SameText(ARequestedId, FAdapterId);
@@ -396,7 +426,11 @@ begin
     Exit;
   end;
 
-  AdapterCount := SimpleBleAdapterGetCount();
+  NativeError := nil;
+  AdapterCount := SimpleBleAdapterGetCount(NativeError);
+  if not ConsumeNativeError(NativeError, AErrorCode, AErrorMessage,
+    'Could not enumerate BLE adapters') then
+    Exit(False);
   if AdapterCount = 0 then
   begin
     AErrorMessage := 'No BLE adapter was found';
@@ -405,24 +439,46 @@ begin
 
   for AdapterIndex := 0 to AdapterCount - 1 do
   begin
-    Adapter := SimpleBleAdapterGetHandle(AdapterIndex);
+    NativeError := nil;
+    Adapter := SimpleBleAdapterGetHandle(AdapterIndex, NativeError);
+    if not ConsumeNativeError(NativeError, AErrorCode, AErrorMessage,
+      'Could not open BLE adapter') then
+    begin
+      if Adapter <> nil then
+        SimpleBleAdapterReleaseHandle(Adapter);
+      Exit(False);
+    end;
     if Adapter = nil then
       Continue;
-    AdapterIdentifier := CopyAndFreeNativeString(
-      SimpleBleAdapterIdentifier(Adapter));
-    AdapterAddress := CopyAndFreeNativeString(SimpleBleAdapterAddress(Adapter));
-    if (ARequestedId = '') or SameText(ARequestedId, AdapterIdentifier) or
-      SameText(ARequestedId, AdapterAddress) then
-    begin
-      FAdapter := Adapter;
-      if AdapterIdentifier <> '' then
-        FAdapterId := AdapterIdentifier
-      else
-        FAdapterId := AdapterAddress;
-      AErrorMessage := '';
-      Exit(True);
+    try
+      NativeError := nil;
+      AdapterIdentifier := CopyAndFreeNativeString(
+        SimpleBleAdapterIdentifier(Adapter, NativeError));
+      if not ConsumeNativeError(NativeError, AErrorCode, AErrorMessage,
+        'Could not read BLE adapter identifier') then
+        Exit(False);
+      NativeError := nil;
+      AdapterAddress := CopyAndFreeNativeString(
+        SimpleBleAdapterAddress(Adapter, NativeError));
+      if not ConsumeNativeError(NativeError, AErrorCode, AErrorMessage,
+        'Could not read BLE adapter address') then
+        Exit(False);
+      if (ARequestedId = '') or SameText(ARequestedId, AdapterIdentifier) or
+        SameText(ARequestedId, AdapterAddress) then
+      begin
+        FAdapter := Adapter;
+        Adapter := nil;
+        if AdapterIdentifier <> '' then
+          FAdapterId := AdapterIdentifier
+        else
+          FAdapterId := AdapterAddress;
+        AErrorMessage := '';
+        Exit(True);
+      end;
+    finally
+      if Adapter <> nil then
+        SimpleBleAdapterReleaseHandle(Adapter);
     end;
-    SimpleBleAdapterReleaseHandle(Adapter);
   end;
 
   AErrorMessage := 'BLE adapter was not found: ' + ARequestedId;
@@ -463,11 +519,22 @@ var
   BackendEvent: TLazBleBackendEvent;
   Entry: TSimpleBlePeripheralEntry;
   Rssi: SmallInt;
+  NativeError: TSimpleBleError;
+  ErrorCode: Integer;
+  ErrorMessage: string;
 begin
   if APeripheral = nil then
     Exit;
-  Rssi := SimpleBlePeripheralRssi(APeripheral);
-  if not StorePeripheral(APeripheral, Entry, FTargetScanDeviceId) then
+  NativeError := nil;
+  Rssi := SimpleBlePeripheralRssi(APeripheral, NativeError);
+  if not ConsumeNativeError(NativeError, ErrorCode, ErrorMessage,
+    'Could not read BLE signal strength') then
+  begin
+    SimpleBlePeripheralReleaseHandle(APeripheral);
+    Exit;
+  end;
+  if not StorePeripheral(APeripheral, Entry, ErrorCode, ErrorMessage,
+    FTargetScanDeviceId) then
     Exit;
 
   if (FTargetScanDeviceId <> '') and
@@ -546,26 +613,38 @@ end;
 function TLazBleNativeSimpleBleDriver.StorePeripheral(
   const APeripheral: TSimpleBlePeripheral;
   out AEntry: TSimpleBlePeripheralEntry;
+  out AErrorCode: Integer; out AErrorMessage: string;
   const AExpectedDeviceId: string): Boolean;
 var
   DeviceId: string;
   DeviceName: string;
   KeepHandle: Boolean;
+  NativeError: TSimpleBleError;
 begin
   AEntry := nil;
+  AErrorCode := 0;
+  AErrorMessage := '';
   Result := False;
   if APeripheral = nil then
     Exit;
 
   KeepHandle := False;
   try
+    NativeError := nil;
     DeviceId := CopyAndFreeNativeString(
-      SimpleBlePeripheralAddress(APeripheral));
+      SimpleBlePeripheralAddress(APeripheral, NativeError));
+    if not ConsumeNativeError(NativeError, AErrorCode, AErrorMessage,
+      'Could not read BLE device address') then
+      Exit;
     if (DeviceId = '') or ((AExpectedDeviceId <> '') and
       not SameText(DeviceId, AExpectedDeviceId)) then
       Exit;
+    NativeError := nil;
     DeviceName := CopyAndFreeNativeString(
-      SimpleBlePeripheralIdentifier(APeripheral));
+      SimpleBlePeripheralIdentifier(APeripheral, NativeError));
+    if not ConsumeNativeError(NativeError, AErrorCode, AErrorMessage,
+      'Could not read BLE device identifier') then
+      Exit;
     AEntry := FindPeripheral(DeviceId);
     if not Assigned(AEntry) then
     begin
@@ -587,22 +666,43 @@ begin
 end;
 
 function TLazBleNativeSimpleBleDriver.FindConnectedPeripheral(
-  const ADeviceId: string; out AEntry: TSimpleBlePeripheralEntry): Boolean;
+  const ADeviceId: string; out AEntry: TSimpleBlePeripheralEntry;
+  out AErrorCode: Integer; out AErrorMessage: string): Boolean;
 var
   Count: NativeUInt;
   Index: NativeUInt;
   Peripheral: TSimpleBlePeripheral;
   StoredEntry: TSimpleBlePeripheralEntry;
+  NativeError: TSimpleBleError;
 begin
   AEntry := nil;
-  Count := SimpleBleAdapterGetConnectedPeripheralsCount(FAdapter);
+  AErrorCode := 0;
+  AErrorMessage := '';
+  NativeError := nil;
+  Count := SimpleBleAdapterGetConnectedPeripheralsCount(FAdapter, NativeError);
+  if not ConsumeNativeError(NativeError, AErrorCode, AErrorMessage,
+    'Could not enumerate connected BLE devices') then
+    Exit(False);
   if Count > 0 then
     for Index := 0 to Count - 1 do
     begin
+      NativeError := nil;
       Peripheral := SimpleBleAdapterGetConnectedPeripheralsHandle(FAdapter,
-        Index);
-      if not StorePeripheral(Peripheral, StoredEntry, ADeviceId) then
+        Index, NativeError);
+      if not ConsumeNativeError(NativeError, AErrorCode, AErrorMessage,
+        'Could not open connected BLE device') then
+      begin
+        if Peripheral <> nil then
+          SimpleBlePeripheralReleaseHandle(Peripheral);
+        Exit(False);
+      end;
+      if not StorePeripheral(Peripheral, StoredEntry, AErrorCode,
+        AErrorMessage, ADeviceId) then
+      begin
+        if AErrorMessage <> '' then
+          Exit(False);
         Continue;
+      end;
       if SameText(StoredEntry.DeviceId, ADeviceId) then
       begin
         AEntry := StoredEntry;
@@ -613,22 +713,43 @@ begin
 end;
 
 function TLazBleNativeSimpleBleDriver.FindPairedPeripheral(
-  const ADeviceId: string; out AEntry: TSimpleBlePeripheralEntry): Boolean;
+  const ADeviceId: string; out AEntry: TSimpleBlePeripheralEntry;
+  out AErrorCode: Integer; out AErrorMessage: string): Boolean;
 var
   Count: NativeUInt;
   Index: NativeUInt;
   Peripheral: TSimpleBlePeripheral;
   StoredEntry: TSimpleBlePeripheralEntry;
+  NativeError: TSimpleBleError;
 begin
   AEntry := nil;
-  Count := SimpleBleAdapterGetPairedPeripheralsCount(FAdapter);
+  AErrorCode := 0;
+  AErrorMessage := '';
+  NativeError := nil;
+  Count := SimpleBleAdapterGetPairedPeripheralsCount(FAdapter, NativeError);
+  if not ConsumeNativeError(NativeError, AErrorCode, AErrorMessage,
+    'Could not enumerate paired BLE devices') then
+    Exit(False);
   if Count > 0 then
     for Index := 0 to Count - 1 do
     begin
+      NativeError := nil;
       Peripheral := SimpleBleAdapterGetPairedPeripheralsHandle(FAdapter,
-        Index);
-      if not StorePeripheral(Peripheral, StoredEntry, ADeviceId) then
+        Index, NativeError);
+      if not ConsumeNativeError(NativeError, AErrorCode, AErrorMessage,
+        'Could not open paired BLE device') then
+      begin
+        if Peripheral <> nil then
+          SimpleBlePeripheralReleaseHandle(Peripheral);
+        Exit(False);
+      end;
+      if not StorePeripheral(Peripheral, StoredEntry, AErrorCode,
+        AErrorMessage, ADeviceId) then
+      begin
+        if AErrorMessage <> '' then
+          Exit(False);
         Continue;
+      end;
       if SameText(StoredEntry.DeviceId, ADeviceId) then
       begin
         AEntry := StoredEntry;
@@ -642,34 +763,28 @@ function TLazBleNativeSimpleBleDriver.ScanForPeripheral(
   const ADeviceId: string; out AEntry: TSimpleBlePeripheralEntry;
   out AErrorCode: Integer; out AErrorMessage: string): Boolean;
 var
-  NativeError: TSimpleBleErr;
+  NativeError: TSimpleBleError;
 begin
   AEntry := nil;
+  AErrorCode := 0;
+  AErrorMessage := '';
   FScanWaitEvent.ResetEvent;
   FTargetScanDeviceId := ADeviceId;
   try
-    NativeError := SimpleBleAdapterSetCallbackOnScanFound(FAdapter,
-      @NativeScanResult, Self);
-    if NativeError = SIMPLEBLE_SUCCESS then
-      NativeError := SimpleBleAdapterSetCallbackOnScanUpdated(FAdapter,
-        @NativeScanResult, Self);
-    if NativeError = SIMPLEBLE_SUCCESS then
-      NativeError := SimpleBleAdapterScanStart(FAdapter);
-    if NativeError <> SIMPLEBLE_SUCCESS then
-    begin
-      AErrorCode := Ord(NativeError);
-      AErrorMessage := 'Could not start SimpleBLE device discovery';
+    SimpleBleAdapterSetCallbackOnScanFound(FAdapter, @NativeScanResult, Self);
+    SimpleBleAdapterSetCallbackOnScanUpdated(FAdapter, @NativeScanResult, Self);
+    NativeError := nil;
+    SimpleBleAdapterScanStart(FAdapter, NativeError);
+    if not ConsumeNativeError(NativeError, AErrorCode, AErrorMessage,
+      'Could not start SimpleBLE device discovery') then
       Exit(False);
-    end;
 
     FScanWaitEvent.WaitFor(DefaultSimpleBlePeripheralDiscoveryTimeoutMs);
-    NativeError := SimpleBleAdapterScanStop(FAdapter);
-    if NativeError <> SIMPLEBLE_SUCCESS then
-    begin
-      AErrorCode := Ord(NativeError);
-      AErrorMessage := 'Could not stop SimpleBLE device discovery';
+    NativeError := nil;
+    SimpleBleAdapterScanStop(FAdapter, NativeError);
+    if not ConsumeNativeError(NativeError, AErrorCode, AErrorMessage,
+      'Could not stop SimpleBLE device discovery') then
       Exit(False);
-    end;
     AEntry := FindPeripheral(ADeviceId);
     Result := Assigned(AEntry);
     if not Result then
@@ -686,12 +801,18 @@ begin
   AEntry := FindPeripheral(ADeviceId);
   if Assigned(AEntry) then
     Exit(True);
-  if not SelectAdapter('', AErrorMessage) then
+  if not SelectAdapter('', AErrorCode, AErrorMessage) then
     Exit(False);
-  if FindConnectedPeripheral(ADeviceId, AEntry) then
+  if FindConnectedPeripheral(ADeviceId, AEntry, AErrorCode,
+    AErrorMessage) then
     Exit(True);
-  if FindPairedPeripheral(ADeviceId, AEntry) then
+  if AErrorMessage <> '' then
+    Exit(False);
+  if FindPairedPeripheral(ADeviceId, AEntry, AErrorCode,
+    AErrorMessage) then
     Exit(True);
+  if AErrorMessage <> '' then
+    Exit(False);
   Result := ScanForPeripheral(ADeviceId, AEntry, AErrorCode, AErrorMessage);
 end;
 
@@ -720,6 +841,9 @@ var
   CharacteristicUuid: TSimpleBleUuid;
   Connected: Boolean;
   Entry: TSimpleBlePeripheralEntry;
+  ErrorCode: Integer;
+  ErrorMessage: string;
+  NativeError: TSimpleBleError;
   ServiceUuid: TSimpleBleUuid;
   Subscription: TSimpleBleSubscriptionEntry;
 begin
@@ -731,8 +855,13 @@ begin
     if FLoaded and TryCreateNativeUuid(Subscription.ServiceUuid,
       ServiceUuid) and TryCreateNativeUuid(Subscription.CharacteristicUuid,
       CharacteristicUuid) then
+    begin
+      NativeError := nil;
       SimpleBlePeripheralUnsubscribe(Subscription.Peripheral.Handle,
-        ServiceUuid, CharacteristicUuid);
+        ServiceUuid, CharacteristicUuid, NativeError);
+      ConsumeNativeError(NativeError, ErrorCode, ErrorMessage,
+        'Could not unsubscribe during shutdown');
+    end;
     FSubscriptions.Delete(FSubscriptions.Count - 1);
   end;
   while FPeripherals.Count > 0 do
@@ -741,10 +870,16 @@ begin
     if FLoaded and (Entry.Handle <> nil) then
     begin
       SimpleBlePeripheralSetCallbackOnDisconnected(Entry.Handle, nil, nil);
-      Connected := False;
-      if (SimpleBlePeripheralIsConnected(Entry.Handle, Connected) =
-        SIMPLEBLE_SUCCESS) and Connected then
-        SimpleBlePeripheralDisconnect(Entry.Handle);
+      NativeError := nil;
+      Connected := SimpleBlePeripheralIsConnected(Entry.Handle, NativeError);
+      if ConsumeNativeError(NativeError, ErrorCode, ErrorMessage,
+        'Could not check connection during shutdown') and Connected then
+      begin
+        NativeError := nil;
+        SimpleBlePeripheralDisconnect(Entry.Handle, NativeError);
+        ConsumeNativeError(NativeError, ErrorCode, ErrorMessage,
+          'Could not disconnect during shutdown');
+      end;
       SimpleBlePeripheralReleaseHandle(Entry.Handle);
       Entry.Handle := nil;
     end;
@@ -772,45 +907,33 @@ function TLazBleNativeSimpleBleDriver.ExecuteScan(
   const ACommand: TLazBleBackendCommand; out AErrorCode: Integer;
   out AErrorMessage: string): Boolean;
 var
-  NativeError: TSimpleBleErr;
+  NativeError: TSimpleBleError;
   TimeoutMs: Integer;
 begin
   Result := False;
-  if not SelectAdapter(ACommand.AdapterId, AErrorMessage) then
+  if not SelectAdapter(ACommand.AdapterId, AErrorCode,
+    AErrorMessage) then
     Exit;
-  NativeError := SimpleBleAdapterSetCallbackOnScanStart(FAdapter,
-    @NativeScanStarted, Self);
-  if NativeError = SIMPLEBLE_SUCCESS then
-    NativeError := SimpleBleAdapterSetCallbackOnScanStop(FAdapter,
-      @NativeScanStopped, Self);
-  if NativeError = SIMPLEBLE_SUCCESS then
-    NativeError := SimpleBleAdapterSetCallbackOnScanFound(FAdapter,
-      @NativeScanResult, Self);
-  if NativeError = SIMPLEBLE_SUCCESS then
-    NativeError := SimpleBleAdapterSetCallbackOnScanUpdated(FAdapter,
-      @NativeScanResult, Self);
-  if NativeError <> SIMPLEBLE_SUCCESS then
-  begin
-    AErrorCode := Ord(NativeError);
-    AErrorMessage := 'Could not register SimpleBLE scan callbacks';
-    Exit;
-  end;
+  SimpleBleAdapterSetCallbackOnScanStart(FAdapter, @NativeScanStarted, Self);
+  SimpleBleAdapterSetCallbackOnScanStop(FAdapter, @NativeScanStopped, Self);
+  SimpleBleAdapterSetCallbackOnScanFound(FAdapter, @NativeScanResult, Self);
+  SimpleBleAdapterSetCallbackOnScanUpdated(FAdapter, @NativeScanResult, Self);
 
   if ACommand.TimeoutMs > Cardinal(High(Integer)) then
     TimeoutMs := High(Integer)
   else
     TimeoutMs := ACommand.TimeoutMs;
   FScanWaitEvent.ResetEvent;
-  NativeError := SimpleBleAdapterScanStart(FAdapter);
-  if NativeError = SIMPLEBLE_SUCCESS then
-  begin
-    FScanWaitEvent.WaitFor(TimeoutMs);
-    NativeError := SimpleBleAdapterScanStop(FAdapter);
-  end;
-  AErrorCode := Ord(NativeError);
-  Result := NativeError = SIMPLEBLE_SUCCESS;
-  if not Result then
-    AErrorMessage := 'SimpleBLE scan failed';
+  NativeError := nil;
+  SimpleBleAdapterScanStart(FAdapter, NativeError);
+  if not ConsumeNativeError(NativeError, AErrorCode, AErrorMessage,
+    'SimpleBLE scan start failed') then
+    Exit(False);
+  FScanWaitEvent.WaitFor(TimeoutMs);
+  NativeError := nil;
+  SimpleBleAdapterScanStop(FAdapter, NativeError);
+  Result := ConsumeNativeError(NativeError, AErrorCode, AErrorMessage,
+    'SimpleBLE scan stop failed');
 end;
 
 function TLazBleNativeSimpleBleDriver.ExecuteAvailability(
@@ -819,6 +942,8 @@ function TLazBleNativeSimpleBleDriver.ExecuteAvailability(
 var
   AdapterError: string;
   BackendEvent: TLazBleBackendEvent;
+  Enabled: Boolean;
+  NativeError: TSimpleBleError;
   VersionValue: PChar;
 begin
   BackendEvent := Default(TLazBleBackendEvent);
@@ -831,18 +956,26 @@ begin
     if VersionValue <> nil then
       BackendEvent.BackendVersion := StrPas(VersionValue);
   end;
-  BackendEvent.Available := SelectAdapter(ACommand.AdapterId, AdapterError);
-  if BackendEvent.Available and not SimpleBleAdapterIsBluetoothEnabled() then
+  BackendEvent.Available := SelectAdapter(ACommand.AdapterId,
+    AErrorCode, AdapterError);
+  if BackendEvent.Available then
   begin
-    BackendEvent.Available := False;
-    AdapterError := 'Bluetooth is disabled';
+    NativeError := nil;
+    Enabled := SimpleBleAdapterIsBluetoothEnabled(NativeError);
+    if not ConsumeNativeError(NativeError, AErrorCode, AdapterError,
+      'Could not check Bluetooth availability') then
+      BackendEvent.Available := False
+    else if not Enabled then
+    begin
+      BackendEvent.Available := False;
+      AdapterError := 'Bluetooth is disabled';
+    end;
   end;
   if BackendEvent.Available then
     BackendEvent.AdapterId := FAdapterId
   else
     BackendEvent.AdapterId := ACommand.AdapterId;
   FEventSink.Emit(BackendEvent);
-  AErrorCode := Ord(SIMPLEBLE_SUCCESS);
   AErrorMessage := AdapterError;
   Result := BackendEvent.Available;
 end;
@@ -854,27 +987,27 @@ var
   BackendEvent: TLazBleBackendEvent;
   Connected: Boolean;
   Entry: TSimpleBlePeripheralEntry;
-  NativeError: TSimpleBleErr;
+  NativeError: TSimpleBleError;
 begin
   if not ResolvePeripheral(ACommand.DeviceId, Entry, AErrorCode,
     AErrorMessage) then
     Exit(False);
-  NativeError := SimpleBlePeripheralSetCallbackOnDisconnected(Entry.Handle,
+  SimpleBlePeripheralSetCallbackOnDisconnected(Entry.Handle,
     @NativePeripheralDisconnected, Entry);
-  if NativeError = SIMPLEBLE_SUCCESS then
+  NativeError := nil;
+  Connected := SimpleBlePeripheralIsConnected(Entry.Handle, NativeError);
+  if not ConsumeNativeError(NativeError, AErrorCode, AErrorMessage,
+    'Could not check BLE connection') then
+    Exit(False);
+  if not Connected then
   begin
-    Connected := False;
-    NativeError := SimpleBlePeripheralIsConnected(Entry.Handle, Connected);
-    if (NativeError = SIMPLEBLE_SUCCESS) and not Connected then
-      NativeError := SimpleBlePeripheralConnect(Entry.Handle);
+    NativeError := nil;
+    SimpleBlePeripheralConnect(Entry.Handle, NativeError);
+    if not ConsumeNativeError(NativeError, AErrorCode, AErrorMessage,
+      'SimpleBLE connect failed') then
+      Exit(False);
   end;
-  AErrorCode := Ord(NativeError);
-  Result := NativeError = SIMPLEBLE_SUCCESS;
-  if not Result then
-  begin
-    AErrorMessage := 'SimpleBLE connect failed';
-    Exit;
-  end;
+  Result := True;
   Entry.Generation := ACommand.Generation;
   BackendEvent := Default(TLazBleBackendEvent);
   BackendEvent.Kind := lbekConnected;
@@ -890,7 +1023,7 @@ function TLazBleNativeSimpleBleDriver.ExecuteDisconnect(
 var
   BackendEvent: TLazBleBackendEvent;
   Entry: TSimpleBlePeripheralEntry;
-  NativeError: TSimpleBleErr;
+  NativeError: TSimpleBleError;
 begin
   Entry := FindPeripheral(ACommand.DeviceId);
   if not Assigned(Entry) then
@@ -899,13 +1032,13 @@ begin
     Exit(False);
   end;
   Entry.DisconnectRequested := True;
-  NativeError := SimpleBlePeripheralDisconnect(Entry.Handle);
-  AErrorCode := Ord(NativeError);
-  Result := NativeError = SIMPLEBLE_SUCCESS;
+  NativeError := nil;
+  SimpleBlePeripheralDisconnect(Entry.Handle, NativeError);
+  Result := ConsumeNativeError(NativeError, AErrorCode, AErrorMessage,
+    'SimpleBLE disconnect failed');
   if not Result then
   begin
     Entry.DisconnectRequested := False;
-    AErrorMessage := 'SimpleBLE disconnect failed';
     Exit;
   end;
   if Entry.DisconnectRequested then
@@ -927,7 +1060,7 @@ var
   BackendEvent: TLazBleBackendEvent;
   Entry: TSimpleBlePeripheralEntry;
   Index: NativeUInt;
-  NativeError: TSimpleBleErr;
+  NativeError: TSimpleBleError;
   Service: TSimpleBleService;
   ServiceCount: NativeUInt;
 begin
@@ -937,7 +1070,12 @@ begin
     AErrorMessage := 'BLE device is not known: ' + ACommand.DeviceId;
     Exit(False);
   end;
-  ServiceCount := SimpleBlePeripheralServicesCount(Entry.Handle);
+  NativeError := nil;
+  ServiceCount := SimpleBlePeripheralServicesCount(Entry.Handle,
+    NativeError);
+  if not ConsumeNativeError(NativeError, AErrorCode, AErrorMessage,
+    'Could not count BLE services') then
+    Exit(False);
   BackendEvent := Default(TLazBleBackendEvent);
   BackendEvent.Kind := lbekServicesDiscovered;
   BackendEvent.OperationId := FOperationId;
@@ -948,17 +1086,18 @@ begin
     for Index := 0 to ServiceCount - 1 do
     begin
       Service := Default(TSimpleBleService);
-      NativeError := SimpleBlePeripheralServicesGet(Entry.Handle, Index,
-        Service);
-      if NativeError <> SIMPLEBLE_SUCCESS then
-      begin
-        AErrorCode := Ord(NativeError);
-        AErrorMessage := 'SimpleBLE service discovery failed';
-        Exit(False);
+      NativeError := nil;
+      SimpleBlePeripheralServicesGet(Entry.Handle, Index, Service,
+        NativeError);
+      try
+        if not ConsumeNativeError(NativeError, AErrorCode, AErrorMessage,
+          'SimpleBLE service discovery failed') then
+          Exit(False);
+        CopyNativeService(Service, BackendEvent.Services[Index]);
+      finally
+        SimpleBleServiceRelease(Service);
       end;
-      CopyNativeService(Service, BackendEvent.Services[Index]);
     end;
-  AErrorCode := Ord(SIMPLEBLE_SUCCESS);
   Result := True;
   FEventSink.Emit(BackendEvent);
 end;
@@ -972,7 +1111,7 @@ var
   Data: PByte;
   DataLength: NativeUInt;
   Entry: TSimpleBlePeripheralEntry;
-  NativeError: TSimpleBleErr;
+  NativeError: TSimpleBleError;
   ServiceUuid: TSimpleBleUuid;
 begin
   Entry := FindPeripheral(ACommand.DeviceId);
@@ -991,14 +1130,17 @@ begin
   Data := nil;
   DataLength := 0;
   try
-    NativeError := SimpleBlePeripheralRead(Entry.Handle, ServiceUuid,
-      CharacteristicUuid, Data, DataLength);
-    AErrorCode := Ord(NativeError);
-    Result := NativeError = SIMPLEBLE_SUCCESS;
+    NativeError := nil;
+    Data := SimpleBlePeripheralRead(Entry.Handle, ServiceUuid,
+      CharacteristicUuid, DataLength, NativeError);
+    Result := ConsumeNativeError(NativeError, AErrorCode, AErrorMessage,
+      'SimpleBLE read failed');
     if not Result then
-    begin
-      AErrorMessage := 'SimpleBLE read failed';
       Exit;
+    if (DataLength > 0) and (Data = nil) then
+    begin
+      AErrorMessage := 'SimpleBLE read returned no data';
+      Exit(False);
     end;
     BackendEvent := Default(TLazBleBackendEvent);
     BackendEvent.Kind := lbekReadResult;
@@ -1025,7 +1167,7 @@ var
   CharacteristicUuid: TSimpleBleUuid;
   Data: PByte;
   Entry: TSimpleBlePeripheralEntry;
-  NativeError: TSimpleBleErr;
+  NativeError: TSimpleBleError;
   ServiceUuid: TSimpleBleUuid;
 begin
   Entry := FindPeripheral(ACommand.DeviceId);
@@ -1045,19 +1187,19 @@ begin
     Data := nil
   else
     Data := @ACommand.Value[0];
+  NativeError := nil;
   if ACommand.WriteMode = lbwmCommand then
-    NativeError := SimpleBlePeripheralWriteCommand(Entry.Handle,
-      ServiceUuid, CharacteristicUuid, Data, Length(ACommand.Value))
+    SimpleBlePeripheralWriteCommand(Entry.Handle,
+      ServiceUuid, CharacteristicUuid, Data, Length(ACommand.Value),
+      NativeError)
   else
-    NativeError := SimpleBlePeripheralWriteRequest(Entry.Handle,
-      ServiceUuid, CharacteristicUuid, Data, Length(ACommand.Value));
-  AErrorCode := Ord(NativeError);
-  Result := NativeError = SIMPLEBLE_SUCCESS;
+    SimpleBlePeripheralWriteRequest(Entry.Handle,
+      ServiceUuid, CharacteristicUuid, Data, Length(ACommand.Value),
+      NativeError);
+  Result := ConsumeNativeError(NativeError, AErrorCode, AErrorMessage,
+    'SimpleBLE write failed');
   if not Result then
-  begin
-    AErrorMessage := 'SimpleBLE write failed';
     Exit;
-  end;
   BackendEvent := Default(TLazBleBackendEvent);
   BackendEvent.Kind := lbekWriteCompleted;
   BackendEvent.OperationId := FOperationId;
@@ -1075,7 +1217,7 @@ var
   BackendEvent: TLazBleBackendEvent;
   CharacteristicUuid: TSimpleBleUuid;
   Entry: TSimpleBlePeripheralEntry;
-  NativeError: TSimpleBleErr;
+  NativeError: TSimpleBleError;
   ServiceUuid: TSimpleBleUuid;
   Subscription: TSimpleBleSubscriptionEntry;
 begin
@@ -1100,14 +1242,14 @@ begin
   Subscription.ServiceUuid := ACommand.ServiceUuid;
   Subscription.CharacteristicUuid := ACommand.CharacteristicUuid;
   FSubscriptions.Add(Subscription);
-  NativeError := SimpleBlePeripheralNotify(Entry.Handle, ServiceUuid,
-    CharacteristicUuid, @NativeNotification, Subscription);
-  AErrorCode := Ord(NativeError);
-  Result := NativeError = SIMPLEBLE_SUCCESS;
+  NativeError := nil;
+  SimpleBlePeripheralNotify(Entry.Handle, ServiceUuid,
+    CharacteristicUuid, @NativeNotification, Subscription, NativeError);
+  Result := ConsumeNativeError(NativeError, AErrorCode, AErrorMessage,
+    'SimpleBLE subscribe failed');
   if not Result then
   begin
     FSubscriptions.Remove(Subscription);
-    AErrorMessage := 'SimpleBLE subscribe failed';
     Exit;
   end;
   BackendEvent := Default(TLazBleBackendEvent);
@@ -1127,7 +1269,7 @@ function TLazBleNativeSimpleBleDriver.ExecuteUnsubscribe(
 var
   BackendEvent: TLazBleBackendEvent;
   CharacteristicUuid: TSimpleBleUuid;
-  NativeError: TSimpleBleErr;
+  NativeError: TSimpleBleError;
   ServiceUuid: TSimpleBleUuid;
   Subscription: TSimpleBleSubscriptionEntry;
 begin
@@ -1139,15 +1281,14 @@ begin
   end;
   TryCreateNativeUuid(Subscription.ServiceUuid, ServiceUuid);
   TryCreateNativeUuid(Subscription.CharacteristicUuid, CharacteristicUuid);
-  NativeError := SimpleBlePeripheralUnsubscribe(
-    Subscription.Peripheral.Handle, ServiceUuid, CharacteristicUuid);
-  AErrorCode := Ord(NativeError);
-  Result := NativeError = SIMPLEBLE_SUCCESS;
+  NativeError := nil;
+  SimpleBlePeripheralUnsubscribe(
+    Subscription.Peripheral.Handle, ServiceUuid, CharacteristicUuid,
+    NativeError);
+  Result := ConsumeNativeError(NativeError, AErrorCode, AErrorMessage,
+    'SimpleBLE unsubscribe failed');
   if not Result then
-  begin
-    AErrorMessage := 'SimpleBLE unsubscribe failed';
     Exit;
-  end;
   BackendEvent := Default(TLazBleBackendEvent);
   BackendEvent.Kind := lbekUnsubscribed;
   BackendEvent.OperationId := FOperationId;
