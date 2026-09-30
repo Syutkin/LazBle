@@ -23,6 +23,7 @@ type
     lbcaDisconnect
   );
 
+{ Presentation helpers accept nil clients and return localized UI text. }
 function LazBleDeviceText(const AClient: TLazBleLclClient): string;
 function LazBleStatusText(const AClient: TLazBleLclClient): string;
 function LazBleCanSelectDevice(const AClient: TLazBleLclClient): Boolean;
@@ -32,6 +33,8 @@ function LazBleConnectionActionText(
   const AClient: TLazBleLclClient): string;
 
 type
+  { Design-time control for selecting a BLE device and toggling connection.
+    Assign Client; the control does not own it. }
   TLazBleDeviceControl = class(TCustomControl)
   private
     FClient: TLazBleLclClient;
@@ -74,7 +77,9 @@ type
   public
     constructor Create(AOwner: TComponent); override;
     destructor Destroy; override;
+    { Open the device picker and assign the selected device to Client. }
     procedure SelectDevice;
+    { Run the currently available connect or disconnect action. }
     procedure ToggleConnection;
     property DeviceText: string read GetDeviceText;
     property StatusText: string read GetStatusText;

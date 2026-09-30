@@ -42,6 +42,8 @@ type
     procedure HandleBackendEvent(const AEvent: TLazBleBackendEvent);
   end;
 
+  { Coordinates scanning, availability checks and GATT sessions for one
+    backend. Applications normally use TLazBle rather than this lower layer. }
   TBleCentralManager = class
   private
     FBackend: ILazBleBackend;
@@ -67,11 +69,14 @@ type
   public
     constructor Create(const ABackend: ILazBleBackend);
     destructor Destroy; override;
+    { Submit one scan and receive results through OnScanResult. }
     function StartScan(const AAdapterId: string;
       const ATimeoutMs: Cardinal): TBleOperationId;
     procedure CancelScan;
+    { Query adapter availability; OnAvailabilityResult carries backend info. }
     function CheckAvailability(const AAdapterId: string): TBleOperationId;
     procedure CancelAvailabilityCheck;
+    { Create a session managed by this central manager. }
     function CreateSession(const ADeviceId: string): TBleGattSession;
     function BeginShutdown: TBleOperationId;
     property State: TLazBleCentralState read FState;

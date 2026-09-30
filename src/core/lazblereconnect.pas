@@ -12,6 +12,8 @@ uses
 type
   TLazBleReconnectTimerEvent = procedure of object;
 
+  { Timer supplied to a reconnect controller. Start replaces the pending
+    callback; Cancel prevents a scheduled callback from firing. }
   ILazBleReconnectTimer = interface
     ['{CC96705B-0E67-4995-B8FB-BC617A0CC483}']
     procedure Start(const ADelayMs: Cardinal;
@@ -24,6 +26,7 @@ type
     function CreateTimer: ILazBleReconnectTimer;
   end;
 
+  { Calculates retry delays and tracks attempts for one client. }
   TLazBleReconnectController = class
   private
     FLock: TRTLCriticalSection;
@@ -50,6 +53,7 @@ type
     procedure Disable;
     procedure Reset;
     procedure Cancel;
+    { Schedule the next retry; False means retries are disabled or exhausted. }
     function Schedule: Boolean;
     procedure SetOptions(const AOptions: TLazBleReconnectOptions);
     property Enabled: Boolean read GetEnabled;

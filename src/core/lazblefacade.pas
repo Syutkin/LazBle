@@ -19,6 +19,9 @@ uses
 type
   ELazBleDuplicateClient = class(Exception);
 
+  { FPC-only facade. The default constructor selects the SimpleBLE backend;
+    passing ILazBleBackend lets applications use another implementation.
+    Creation and diagnostic reads do not start native BLE work. }
   TLazBle = class
   private
     FManager: TBleCentralManager;
@@ -67,18 +70,29 @@ type
     constructor Create; overload;
     constructor Create(const ABackend: ILazBleBackend); overload;
     destructor Destroy; override;
+    { Returns an asynchronous scan operation; results and completion arrive
+      through that operation. }
     function ScanAsync(const AAdapterId: string;
       const ATimeoutMs: Cardinal): IBleScanOperation;
+    { Starts an explicit availability check. The diagnostic snapshot reflects
+      its state and result; reading the snapshot does not start a check. }
     function CheckAvailabilityAsync(const AAdapterId: string):
       IBleAvailabilityOperation;
+    { Creates a client owned by this facade for the given device ID. }
     function CreateClient(const ADeviceId: string): TBleClient;
     function FindClient(const ADeviceId: string): TBleClient;
+    { Free a client owned by this facade. It must be disconnected or in error. }
     procedure RemoveClient(const AClient: TBleClient);
+    { Stops backend work and completes after pending operations are drained. }
     function ShutdownAsync: IBleOperation;
     { Reading DiagnosticInfo never opens the native library or starts BLE.
       BackendName comes from ILazBleBackend.GetBackendName before a check,
-      then from the backend's availability result when provided. }
+      then from the backend's availability result when provided.
+      Example: Info := Ble.DiagnosticInfo; after CheckAvailabilityAsync
+      completes, Info.NativeVersion is the reported native version or ''. }
     property DiagnosticInfo: TLazBleDiagnosticInfo read GetDiagnosticInfo;
+    { Availability-result metadata retained for compatibility. Version is
+      native backend version, not the LazBle or Pascal binding version. }
     property BackendInfo: TLazBleBackendInfo read GetBackendInfo;
   end;
 

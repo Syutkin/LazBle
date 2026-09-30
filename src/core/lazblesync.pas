@@ -13,6 +13,8 @@ uses
   LazBleFacade;
 
 type
+  { Blocking facade for non-UI callers. Each instance owns a TLazBle facade;
+    ATimeoutMs bounds the wait and the methods return False on failure. }
   TLazBleSync = class
   private
     FBle: TLazBle;
@@ -22,8 +24,10 @@ type
     constructor Create; overload;
     constructor Create(const ABackend: ILazBleBackend); overload;
     destructor Destroy; override;
+    { Returns discovered devices even if the scan ends unsuccessfully. }
     function Scan(const AAdapterId: string; const ATimeoutMs: Cardinal;
       out ADevices: TBleDeviceInfos; out AErrorMessage: string): Boolean;
+    { The returned client is owned by this facade. }
     function CreateClient(const ADeviceId: string): TBleClient;
     function Connect(const AClient: TBleClient;
       const ATimeoutMs: Cardinal; out AErrorMessage: string): Boolean;

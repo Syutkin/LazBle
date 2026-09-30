@@ -23,6 +23,8 @@ type
   TLazBleSubscriptionStateChangedEvent = procedure(Sender: TObject;
     const AState: TLazBleSubscriptionState) of object;
 
+  { A notification subscription. It becomes Active after the backend accepts
+    it and becomes inactive when the session is lost or it is removed. }
   IBleSubscription = interface
     ['{E0A9178B-250E-490D-9CD3-514A13367F44}']
     function GetState: TLazBleSubscriptionState;
@@ -33,10 +35,12 @@ type
     function GetOnStateChanged: TLazBleSubscriptionStateChangedEvent;
     procedure SetOnStateChanged(
       const AHandler: TLazBleSubscriptionStateChangedEvent);
+    { Stop notifications; the returned operation reports completion. }
     function Unsubscribe: IBleGattOperation;
     property State: TLazBleSubscriptionState read GetState;
     property ErrorCode: Integer read GetErrorCode;
     property ErrorMessage: string read GetErrorMessage;
+    { Called for notification payloads while the subscription is active. }
     property OnData: TLazBleDataEvent read GetOnData write SetOnData;
     property OnStateChanged: TLazBleSubscriptionStateChangedEvent
       read GetOnStateChanged write SetOnStateChanged;

@@ -16,6 +16,8 @@ uses
   LazBleLclScan;
 
 type
+  { Modal device picker backed by TLazBleLclScan. Assign Scan before Execute;
+    the form does not own the scan controller. }
   TBleDeviceSelectForm = class(TForm)
     ButtonCancel: TButton;
     ButtonSelect: TButton;
@@ -64,6 +66,7 @@ type
     destructor Destroy; override;
     procedure StartScan;
     procedure StopScan;
+    { True when the user selected a device; ADevice is then the selection. }
     function Execute(out ADevice: TBleDeviceInfo): Boolean;
     function TryGetSelectedDevice(out ADevice: TBleDeviceInfo): Boolean;
     property Scan: TLazBleLclScan read FScan write SetScan;

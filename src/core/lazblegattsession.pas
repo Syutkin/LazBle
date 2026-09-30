@@ -32,6 +32,8 @@ type
   TLazBleCancelOperation = procedure(
     const AOperationId: TBleOperationId) of object;
 
+  { Device GATT session used by TBleClient and profiles. Services reflect the
+    current connection and are invalidated when it ends. }
   TBleGattSession = class
   private
     FStateLock: TRTLCriticalSection;
@@ -79,6 +81,8 @@ type
       const AHandler: TLazBleSessionStateChangedEvent);
   public
     destructor Destroy; override;
+    { UUID-based requests return failed operations when the session or
+      characteristic cannot serve the request. }
     function ReadAsync(const AServiceUuid, ACharacteristicUuid: string):
       IBleGattOperation;
     function WriteAsync(const AServiceUuid, ACharacteristicUuid: string;
@@ -86,6 +90,7 @@ type
       IBleGattOperation;
     function SubscribeAsync(const AServiceUuid, ACharacteristicUuid: string):
       IBleSubscription;
+    { Query the currently discovered service tree. }
     function HasService(const AServiceUuid: string): Boolean;
     function TryGetCharacteristic(const AServiceUuid,
       ACharacteristicUuid: string;

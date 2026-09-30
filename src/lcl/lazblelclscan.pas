@@ -29,6 +29,8 @@ type
   TLazBleLclScanCompletedEvent = procedure(Sender: TObject;
     const AState: TLazBleLclScanState) of object;
 
+  { LCL scan controller. Results and completion events are delivered on the
+    main thread; keep ABle alive until this controller is destroyed. }
   TLazBleLclScan = class
   private
     FBle: TLazBle;
@@ -59,9 +61,14 @@ type
   public
     constructor Create(const ABle: TLazBle);
     destructor Destroy; override;
+    { Start one scan; raises ELazBleLclScanActive if already scanning. An empty
+      adapter ID lets the backend select its default adapter. }
     procedure Start(const AAdapterId: string; const ATimeoutMs: Cardinal);
+    { Request cancellation of the current scan. }
     procedure Cancel;
+    { Clear saved results without starting a new scan. }
     procedure ClearResults;
+    { Cancel activity and stop dispatching callbacks before destruction. }
     procedure Shutdown;
     property State: TLazBleLclScanState read GetState;
     property Results: TBleDeviceInfos read GetResults;

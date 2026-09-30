@@ -24,6 +24,8 @@ type
   TLazBleByteChannelDataEvent = procedure(Sender: TObject;
     const AValue: TBytes) of object;
 
+  { A writable characteristic paired with a notification characteristic in
+    one GATT service. The caller retains the session for this object's life. }
   TBleByteChannel = class
   private
     FLock: TRTLCriticalSection;
@@ -49,8 +51,11 @@ type
       ANotifyCharacteristicUuid: string;
       const AWriteMode: TLazBleWriteMode);
     destructor Destroy; override;
+    { Subscribe to notifications; inspect the returned subscription State. }
     function Attach: IBleSubscription;
+    { Stop notifications and report the result through an operation. }
     function Detach: IBleGattOperation;
+    { Write bytes to the configured characteristic using WriteMode. }
     function SendAsync(const AValue: TBytes): IBleGattOperation;
     property ServiceUuid: string read FServiceUuid;
     property WriteCharacteristicUuid: string read FWriteCharacteristicUuid;

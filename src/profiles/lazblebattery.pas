@@ -22,6 +22,8 @@ type
   TLazBleBatteryLevelEvent = procedure(Sender: TObject;
     const ADeviceId: string; const ALevelPercent: Integer) of object;
 
+  { Battery Service profile. It reads the initial level and then subscribes
+    to Battery Level notifications when attachment succeeds. }
   TBleBatteryProfile = class(TBleGattProfile)
   private type
     TLazBleBatteryPhase = (
@@ -58,6 +60,7 @@ type
   public
     constructor Create;
     destructor Destroy; override;
+    { Last valid level (0..100), or UnknownBatteryLevel before a reading. }
     property LevelPercent: Integer read GetLevelPercent;
     property OnLevelChanged: TLazBleBatteryLevelEvent read GetOnLevelChanged
       write SetOnLevelChanged;

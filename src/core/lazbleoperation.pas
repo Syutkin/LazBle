@@ -20,6 +20,8 @@ type
   TLazBleOperationCompletedEvent = procedure(Sender: TObject) of object;
   TLazBleOperationCancelEvent = procedure(Sender: TObject) of object;
 
+  { A pending asynchronous request. Keep the interface while observing its
+    result; OnCompleted also fires when assigned after completion. }
   IBleOperation = interface
     ['{5FCBB469-393D-4D89-AC6D-54E2B2F10292}']
     function GetState: TLazBleOperationState;
@@ -28,7 +30,9 @@ type
     function GetCancelRequested: Boolean;
     function GetOnCompleted: TLazBleOperationCompletedEvent;
     procedure SetOnCompleted(const AHandler: TLazBleOperationCompletedEvent);
+    { Request cancellation; inspect State for the eventual outcome. }
     procedure Cancel;
+    { Mark a pending request as timed out. }
     procedure Timeout;
     property State: TLazBleOperationState read GetState;
     property ErrorCode: Integer read GetErrorCode;
@@ -38,6 +42,7 @@ type
       read GetOnCompleted write SetOnCompleted;
   end;
 
+  { Scan results accumulate in Results; OnResult reports discoveries. }
   IBleScanOperation = interface(IBleOperation)
     ['{F9EA6B8B-E7D5-42B5-9F9B-58076D923CFA}']
     function GetResults: TBleDeviceInfos;
@@ -48,6 +53,7 @@ type
       write SetOnResult;
   end;
 
+  { Availability contains the adapter status after successful completion. }
   IBleAvailabilityOperation = interface(IBleOperation)
     ['{5E357BDF-4930-4D8A-A112-EAF6FBD1975F}']
     function GetAvailability: TBleAvailability;

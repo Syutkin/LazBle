@@ -10,6 +10,7 @@ uses
   LazBleOperation;
 
 type
+  { Value contains the bytes returned by a successful GATT read. }
   IBleGattOperation = interface(IBleOperation)
     ['{88355E9C-04D6-46E7-9B3E-6E3470C9E980}']
     function GetValue: TBytes;

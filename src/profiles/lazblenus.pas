@@ -22,6 +22,8 @@ type
   TNusDataEvent = procedure(Sender: TObject; const ADeviceId: string;
     const AValue: TBytes) of object;
 
+  { Nordic UART Service profile. Register with TBleClient.AddProfile before
+    connecting; RX writes use command mode and TX delivers notifications. }
   TNusProfile = class(TBleGattProfile)
   private
     FCallbackLock: TRTLCriticalSection;
@@ -42,7 +44,9 @@ type
   public
     constructor Create;
     destructor Destroy; override;
+    { Send bytes to the NUS RX characteristic; inspect the returned operation. }
     function SendAsync(const AValue: TBytes): IBleGattOperation;
+    { Receives NUS TX bytes with the device identifier. }
     property OnData: TNusDataEvent read GetOnData write SetOnData;
   end;
 

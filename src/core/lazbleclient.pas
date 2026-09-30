@@ -30,6 +30,8 @@ type
   TLazBleClientStateChangedEvent = procedure(Sender: TObject;
     const AState: TLazBleClientState) of object;
 
+  { A device client created by TLazBle.CreateClient. Register profiles before
+    ConnectAsync; the owning TLazBle manages the client's lifetime. }
   TBleClient = class
   private
     FConnectSession: TLazBleConnectSessionEvent;
@@ -94,10 +96,16 @@ type
     property ProfileCount: Integer read GetProfileCount;
   public
     destructor Destroy; override;
+    { Transfer profile ownership to this client while disconnected. A required
+      profile must become Ready before the client enters lbcstReady. }
     procedure AddProfile(const AProfile: TBleGattProfile;
       const ARequired: Boolean = True);
+    { Connect, discover GATT services, and attach registered profiles. }
     function ConnectAsync: IBleOperation;
+    { Disconnect this client and stop automatic reconnection. }
     function DisconnectAsync: IBleOperation;
+    { GATT requests require a connected session; failures are returned through
+      the operation or subscription state. }
     function ReadAsync(const AServiceUuid, ACharacteristicUuid: string):
       IBleGattOperation;
     function WriteAsync(const AServiceUuid, ACharacteristicUuid: string;
@@ -106,12 +114,15 @@ type
     function SubscribeAsync(const AServiceUuid,
       ACharacteristicUuid: string): IBleSubscription;
     property DeviceId: string read GetDeviceId;
+    { Discovered services for the current connection. }
     property Services: TLazBleGattServices read GetServices;
     property State: TLazBleClientState read GetState;
+    { Retry after an unplanned disconnect when enabled. }
     property AutoReconnect: Boolean read GetAutoReconnect
       write SetAutoReconnect;
     property ReconnectOptions: TLazBleReconnectOptions
       read GetReconnectOptions write SetReconnectOptions;
+    { Current retry number and scheduled delay; zero when no retry is pending. }
     property ReconnectAttempt: Cardinal read GetReconnectAttempt;
     property ReconnectDelayMs: Cardinal read GetReconnectDelayMs;
     property OnStateChanged: TLazBleClientStateChangedEvent

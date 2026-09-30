@@ -23,6 +23,8 @@ type
   TLazBleGattProfileStateChangedEvents = array of
     TLazBleGattProfileStateChangedEvent;
 
+  { Base class for a client-owned GATT profile. Add it to TBleClient before
+    connecting; the client binds, attaches, detaches and frees the profile. }
   TBleGattProfile = class abstract
   private
     FLock: TRTLCriticalSection;
@@ -48,8 +50,12 @@ type
     procedure SetState(const AState: TLazBleGattProfileState);
   protected
     procedure BindSession(const ASession: TBleGattSession);
+    { Override to allocate session-bound helpers. }
     procedure DoBind; virtual;
+    { Override to begin service discovery dependent work and call MarkReady or
+      MarkError when attachment reaches a terminal result. }
     procedure DoAttach; virtual; abstract;
+    { Override to release active subscriptions and pending profile work. }
     procedure DoDetach; virtual; abstract;
     procedure RefreshState; virtual;
     procedure MarkReady;
@@ -70,6 +76,7 @@ type
     destructor Destroy; override;
     property DeviceId: string read GetDeviceId;
     property State: TLazBleGattProfileState read GetState;
+    { True only while attachment has reached lbgpsReady. }
     property Ready: Boolean read GetReady;
     property ErrorCode: Integer read GetErrorCode;
     property ErrorMessage: string read GetErrorMessage;

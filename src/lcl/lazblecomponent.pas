@@ -31,6 +31,7 @@ type
     const AErrorMessage: string) of object;
   TLazBleLclClientChangedEvent = procedure(Sender: TObject) of object;
 
+  { Designer-editable reconnect delays and attempt limit for an LCL client. }
   TLazBleReconnectSettings = class(TPersistent)
   private
     FInitialDelayMs: Cardinal;
@@ -54,6 +55,8 @@ type
       write SetMaximumAttempts default DefaultLazBleReconnectMaximumAttempts;
   end;
 
+  { LCL owner of one LazBle facade. It dispatches availability and scan
+    notifications to the main thread; reading properties does not start BLE. }
   TLazBleComponent = class(TComponent)
   private
     FBle: TLazBle;
@@ -105,11 +108,17 @@ type
     constructor Create(AOwner: TComponent;
       const ABackend: ILazBleBackend); reintroduce; overload;
     destructor Destroy; override;
+    { Start a scan with AdapterId and ScanTimeoutMs. Events run on the main
+      thread; ScanResults retains devices seen during the current scan. }
     procedure StartScan;
     procedure CancelScan;
     procedure ClearScanResults;
+    { Starts or repeats the asynchronous check for AdapterId. Results arrive
+      through OnAvailabilityChanged and, on failure, OnError. }
     procedure RefreshAvailability;
+    { Stop scan, availability work, and owned clients. }
     procedure Shutdown;
+    { Create a component-owned client for a unique device ID. }
     function CreateClient(const ADeviceId: string): TLazBleLclClient;
     function FindClient(const ADeviceId: string): TLazBleLclClient;
     procedure RemoveClient(const AClient: TLazBleLclClient);
@@ -119,14 +128,19 @@ type
     property ScanController: TLazBleLclScan read FScan;
     property LastErrorCode: Integer read GetLastErrorCode;
     property LastErrorMessage: string read GetLastErrorMessage;
+    { Backend metadata from the latest availability result. Fields may be
+      empty before a check, during a repeat check, or after load failure. }
     property BackendInfo: TLazBleBackendInfo read GetBackendInfo;
-    { Thread-safe core snapshot; available without RefreshAvailability. }
+    { Thread-safe core snapshot; available without RefreshAvailability and
+      without loading native BLE. Read the LCL component on its owning thread;
+      read this property again after availability changes for current values. }
     property DiagnosticInfo: TLazBleDiagnosticInfo read GetDiagnosticInfo;
     property ClientCount: Integer read GetClientCount;
     property Clients[const AIndex: Integer]: TLazBleLclClient
       read GetClient;
     property Facade: TLazBle read FBle;
   published
+    { Empty selects the backend's default adapter. }
     property AdapterId: string read FAdapterId write FAdapterId;
     property ScanTimeoutMs: Cardinal read FScanTimeoutMs write FScanTimeoutMs
       default DefaultLazBleScanTimeoutMs;
@@ -141,6 +155,8 @@ type
     property OnError: TLazBleLclErrorEvent read FOnError write FOnError;
   end;
 
+  { LCL wrapper for a device client. Assign LazBle and DeviceId or call
+    SelectDevice, then configure profiles through OnConfigureClient. }
   TLazBleLclClient = class(TComponent)
   private
     FLazBle: TLazBleComponent;
@@ -189,10 +205,14 @@ type
   public
     constructor Create(AOwner: TComponent); override;
     destructor Destroy; override;
+    { Set both DeviceId and the displayed DeviceName from a scan result. }
     procedure SelectDevice(const ADevice: TBleDeviceInfo);
+    { Transfer profile ownership to the underlying client before connection. }
     procedure AddProfile(const AProfile: TBleGattProfile;
       const ARequired: Boolean = True);
+    { Start asynchronous connection; watch OnConnected or OnError. }
     procedure Connect;
+    { Start asynchronous disconnection; watch OnDisconnected. }
     procedure Disconnect;
     procedure AddChangedHandler(const AHandler: TLazBleLclClientChangedEvent);
     procedure RemoveChangedHandler(
@@ -203,6 +223,7 @@ type
     property LastErrorMessage: string read FLastErrorMessage;
     property ReconnectAttempt: Cardinal read GetReconnectAttempt;
     property ReconnectDelayMs: Cardinal read GetReconnectDelayMs;
+    { Created on demand; may be nil until the first client operation. }
     property CoreClient: TBleClient read FCoreClient;
   published
     property LazBle: TLazBleComponent read FLazBle write SetLazBle;
@@ -211,6 +232,7 @@ type
       write SetAutoReconnect default False;
     property ReconnectOptions: TLazBleReconnectSettings
       read FReconnectOptions write SetReconnectOptions;
+    { Add profiles here when the underlying client is created. }
     property OnConfigureClient: TNotifyEvent read FOnConfigureClient
       write FOnConfigureClient;
     property OnDeviceChanged: TNotifyEvent read FOnDeviceChanged

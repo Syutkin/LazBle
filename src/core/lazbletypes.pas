@@ -12,6 +12,8 @@ type
   TBleOperationId = type QWord;
   TBleSubscriptionId = type QWord;
 
+  { Reconnect delays use milliseconds. MaximumAttempts limits retries;
+    the controller validates the delay range when options are assigned. }
   TLazBleReconnectOptions = record
     InitialDelayMs: Cardinal;
     MaximumDelayMs: Cardinal;
@@ -20,6 +22,7 @@ type
       AMaximumAttempts: Cardinal): TLazBleReconnectOptions; static;
   end;
 
+  { A scan result. DeviceId is the backend identifier used to create a client. }
   TBleDeviceInfo = record
     DeviceId: string;
     DeviceName: string;
@@ -38,10 +41,13 @@ type
   TBleAvailabilityEvent = procedure(Sender: TObject;
     const AAvailability: TBleAvailability) of object;
 
+  { Static information about the compiled LazBle package. None of these
+    fields describes the selected backend or a loaded native library. }
   TLazBleAbout = record
     Name: string;
     { Version of the compiled LazBle source, independent of native BLE. }
     Version: string;
+    { Human-readable package purpose; not a runtime capability report. }
     Description: string;
   end;
 
@@ -49,8 +55,11 @@ type
     reported by the loaded native backend, not the LazBle package version.
     Empty fields mean the value could not yet be obtained. }
   TLazBleBackendInfo = record
+    { Name reported by the backend in its availability result. }
     Name: string;
+    { Native version reported by the backend, if it could obtain one. }
     Version: string;
+    { Adapter selected by the backend; empty if selection did not complete. }
     AdapterId: string;
     { Loader warning for a native major version newer than the tested range.
       Empty when no warning was raised or no library was loaded. }
@@ -62,6 +71,7 @@ type
     NativeVersion means no native version was obtained. Reading this record
     never loads native libraries or starts an operation. }
   TLazBleDiagnosticInfo = record
+    { Version of the compiled LazBle package. }
     LazBleVersion: string;
     { Version of the compiled SimpleBlePascal package. }
     BindingVersion: string;
@@ -69,13 +79,17 @@ type
     MinimumNativeVersion: string;
     { Name supplied by ILazBleBackend, or 'unknown' if it returns empty. }
     BackendName: string;
-    { Version reported by the loaded native backend after availability check. }
+    { Version reported by the loaded native backend after an availability
+      check. Empty means not obtained, including after a failed check. }
     NativeVersion: string;
+    { Selected adapter identifier, empty until reported by the backend. }
     AdapterId: string;
+    { Last availability state; lbaUnknown before the first check. }
     Availability: TBleAvailability;
     { Error from the most recent availability check, if it failed. }
     ErrorMessage: string;
-    { Native loader warning from the most recent availability check. }
+    { Native loader warning from the most recent availability check; it does
+      not by itself make the backend unavailable. }
     WarningMessage: string;
   end;
   TLazBleAvailabilityResultEvent = procedure(Sender: TObject;
@@ -83,7 +97,8 @@ type
     const ABackendInfo: TLazBleBackendInfo) of object;
 
 const
-  { Source version of the LazBle package, also available without a facade. }
+  { Source version of the LazBle package, also available without a facade.
+    Keep it aligned with the package metadata when making a release. }
   LazBleVersion = '1.2.0';
   InvalidBleOperationId: TBleOperationId = 0;
   InvalidBleSubscriptionId: TBleSubscriptionId = 0;
@@ -108,11 +123,13 @@ const
   LazBleErrorInvalidProfileData = -1017;
 
 type
+  { Request waits for a GATT write response; Command writes without one. }
   TLazBleWriteMode = (
     lbwmRequest,
     lbwmCommand
   );
 
+  { Properties reported by service discovery for a characteristic. }
   TLazBleGattCharacteristicProperty = (
     lbgcpRead,
     lbgcpWriteRequest,
@@ -194,6 +211,7 @@ type
     Generation: QWord;
     BackendName: string;
     BackendVersion: string;
+    { Loader warning carried with an availability result, if any. }
     BackendWarning: string;
     AdapterId: string;
     DeviceId: string;
@@ -211,7 +229,8 @@ type
 function LazBleBackendEventIsTerminal(
   const AEvent: TLazBleBackendEvent): Boolean;
 { Returns static package information without constructing a backend or
-  loading a native library. Example: Info := LazBleGetAbout; }
+  loading a native library. Example: Info := LazBleGetAbout;
+  Info.Version is the LazBle version, not the SimpleCBLE version. }
 function LazBleGetAbout: TLazBleAbout;
 function LazBleCopyGattServices(
   const AServices: TLazBleGattServices): TLazBleGattServices;
