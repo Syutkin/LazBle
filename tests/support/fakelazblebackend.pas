@@ -35,6 +35,7 @@ type
     function GetOperationId(const AIndex: Integer): TBleOperationId;
     function GetCancelledOperationId(const AIndex: Integer): TBleOperationId;
   public
+    function GetBackendName: string;
     procedure SetEventSink(const AEventSink: ILazBleBackendEventSink);
     function Submit(const ACommand: TLazBleBackendCommand): TBleOperationId;
     procedure Cancel(const AOperationId: TBleOperationId);
@@ -61,6 +62,11 @@ type
   end;
 
 implementation
+
+function TFakeLazBleBackend.GetBackendName: string;
+begin
+  Result := 'FakeBLE';
+end;
 
 function TFakeLazBleBackend.AllocateOperationId: TBleOperationId;
 begin

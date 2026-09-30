@@ -454,6 +454,7 @@ begin
     AssertEquals('FakeBLE', FComponent.BackendInfo.Name);
     AssertEquals('2.3.4', FComponent.BackendInfo.Version);
     AssertEquals('hci-selected', FComponent.BackendInfo.AdapterId);
+    AssertEquals('2.3.4', FComponent.DiagnosticInfo.NativeVersion);
     AssertEquals(Int64(MainThreadID), Int64(FLastCallbackThreadId));
   finally
     Thread.WaitFor;

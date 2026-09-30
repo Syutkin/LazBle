@@ -322,6 +322,7 @@ begin
     BackendInfo.Name := AEvent.BackendName;
     BackendInfo.Version := AEvent.BackendVersion;
     BackendInfo.AdapterId := AEvent.AdapterId;
+    BackendInfo.LoadWarning := AEvent.BackendWarning;
     if AEvent.Available then
       FOnAvailabilityResult(Self, lbaAvailable, BackendInfo)
     else

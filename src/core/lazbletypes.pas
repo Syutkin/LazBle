@@ -38,16 +38,53 @@ type
   TBleAvailabilityEvent = procedure(Sender: TObject;
     const AAvailability: TBleAvailability) of object;
 
+  TLazBleAbout = record
+    Name: string;
+    { Version of the compiled LazBle source, independent of native BLE. }
+    Version: string;
+    Description: string;
+  end;
+
+  { Information returned by an availability check. Version is the version
+    reported by the loaded native backend, not the LazBle package version.
+    Empty fields mean the value could not yet be obtained. }
   TLazBleBackendInfo = record
     Name: string;
     Version: string;
     AdapterId: string;
+    { Loader warning for a native major version newer than the tested range.
+      Empty when no warning was raised or no library was loaded. }
+    LoadWarning: string;
+  end;
+
+  { A read-only snapshot. Static versions are available before any BLE work;
+    NativeVersion and AdapterId are filled by an availability check. Empty
+    NativeVersion means no native version was obtained. Reading this record
+    never loads native libraries or starts an operation. }
+  TLazBleDiagnosticInfo = record
+    LazBleVersion: string;
+    { Version of the compiled SimpleBlePascal package. }
+    BindingVersion: string;
+    { Minimum native SimpleCBLE version accepted by its loader. }
+    MinimumNativeVersion: string;
+    { Name supplied by ILazBleBackend, or 'unknown' if it returns empty. }
+    BackendName: string;
+    { Version reported by the loaded native backend after availability check. }
+    NativeVersion: string;
+    AdapterId: string;
+    Availability: TBleAvailability;
+    { Error from the most recent availability check, if it failed. }
+    ErrorMessage: string;
+    { Native loader warning from the most recent availability check. }
+    WarningMessage: string;
   end;
   TLazBleAvailabilityResultEvent = procedure(Sender: TObject;
     const AAvailability: TBleAvailability;
     const ABackendInfo: TLazBleBackendInfo) of object;
 
 const
+  { Source version of the LazBle package, also available without a facade. }
+  LazBleVersion = '1.2.0';
   InvalidBleOperationId: TBleOperationId = 0;
   InvalidBleSubscriptionId: TBleSubscriptionId = 0;
   // Negative codes are reserved for lazble; SimpleBLE error ordinals are nonnegative.
@@ -157,6 +194,7 @@ type
     Generation: QWord;
     BackendName: string;
     BackendVersion: string;
+    BackendWarning: string;
     AdapterId: string;
     DeviceId: string;
     DeviceName: string;
@@ -172,10 +210,20 @@ type
 
 function LazBleBackendEventIsTerminal(
   const AEvent: TLazBleBackendEvent): Boolean;
+{ Returns static package information without constructing a backend or
+  loading a native library. Example: Info := LazBleGetAbout; }
+function LazBleGetAbout: TLazBleAbout;
 function LazBleCopyGattServices(
   const AServices: TLazBleGattServices): TLazBleGattServices;
 
 implementation
+
+function LazBleGetAbout: TLazBleAbout;
+begin
+  Result.Name := 'LazBle';
+  Result.Version := LazBleVersion;
+  Result.Description := 'Asynchronous BLE and GATT client library for Free Pascal';
+end;
 
 class function TLazBleReconnectOptions.Create(const AInitialDelayMs,
   AMaximumDelayMs, AMaximumAttempts: Cardinal): TLazBleReconnectOptions;

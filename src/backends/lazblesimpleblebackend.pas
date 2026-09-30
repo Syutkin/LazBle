@@ -86,6 +86,7 @@ type
   public
     constructor Create; overload;
     destructor Destroy; override;
+    function GetBackendName: string;
     procedure SetEventSink(const AEventSink: ILazBleBackendEventSink);
     function Submit(const ACommand: TLazBleBackendCommand): TBleOperationId;
     procedure Cancel(const AOperationId: TBleOperationId);
@@ -135,9 +136,10 @@ type
   end;
 
   TLazBleNativeSimpleBleDriver = class(TInterfacedObject,
-    ILazBleSimpleBleDriver)
+    ILazBleSimpleBleDriver, ILazBleSimpleBleDriverLoadDiagnostics)
   private
     FLoaded: Boolean;
+    FLoadWarning: string;
     {$IFDEF LAZBLE_NATIVE_TESTS}
     FInjectedForTests: Boolean;
     {$ENDIF}
@@ -215,6 +217,7 @@ type
     constructor Create;
     destructor Destroy; override;
     function Open(out AErrorMessage: string): Boolean;
+    function GetLoadWarning: string;
     procedure Close;
     function Execute(const ACommand: TLazBleBackendCommand;
       const AOperationId: TBleOperationId;
@@ -543,6 +546,7 @@ begin
   if FLoaded then
     Exit(True);
 
+  FLoadWarning := '';
   LibraryDirectory := GetEnvironmentVariable('SIMPLECBLE_LIBRARY_DIR');
   Result := (LibraryDirectory <> '') and
     SimpleBleLoadLibrary(LibraryDirectory);
@@ -552,12 +556,18 @@ begin
     Result := SimpleBleLoadLibrary;
   if Result then
   begin
+    FLoadWarning := SimpleBleGetLastLoadWarning;
     SimpleBlePinLibrary;
     FLoaded := True;
     AErrorMessage := '';
   end
   else
+  begin
+    FLoadWarning := SimpleBleGetLastLoadWarning;
     AErrorMessage := SimpleBleGetLastLoadError;
+    if FLoadWarning <> '' then
+      AErrorMessage := AErrorMessage + '; ' + FLoadWarning;
+  end;
 end;
 
 function TLazBleNativeSimpleBleDriver.SelectAdapter(
@@ -1058,6 +1068,11 @@ begin
   Result := LoadLibrary(AErrorMessage);
 end;
 
+function TLazBleNativeSimpleBleDriver.GetLoadWarning: string;
+begin
+  Result := FLoadWarning;
+end;
+
 procedure TLazBleNativeSimpleBleDriver.Close;
 var
   CharacteristicUuid: TSimpleBleUuid;
@@ -1229,6 +1244,7 @@ begin
   BackendEvent.Kind := lbekAvailabilityResult;
   BackendEvent.OperationId := FOperationId;
   BackendEvent.BackendName := 'SimpleBLE';
+  BackendEvent.BackendWarning := FLoadWarning;
   if Assigned(SimpleBleGetVersion) then
   begin
     VersionValue := SimpleBleGetVersion();
@@ -1815,6 +1831,11 @@ begin
   FWorker := TBackendWorker.Create(Self);
 end;
 
+function TLazBleSimpleBleBackend.GetBackendName: string;
+begin
+  Result := 'SimpleBLE';
+end;
+
 destructor TLazBleSimpleBleBackend.Destroy;
 var
   Index: Integer;
@@ -2016,6 +2037,8 @@ end;
 procedure TLazBleSimpleBleBackend.ProcessOperation(
   const AOperation: TBackendOperation);
 var
+  BackendEvent: TLazBleBackendEvent;
+  Diagnostics: ILazBleSimpleBleDriverLoadDiagnostics;
   ErrorCode: Integer;
   ErrorMessage: string;
   OpenError: string;
@@ -2037,6 +2060,17 @@ begin
   begin
     ErrorCode := LazBleErrorBackendUnavailable;
     ErrorMessage := OpenError;
+    if (AOperation.Command.Kind = lbckCheckAvailability) and
+      Supports(FDriver, ILazBleSimpleBleDriverLoadDiagnostics,
+        Diagnostics) and (Diagnostics.GetLoadWarning <> '') then
+    begin
+      BackendEvent := Default(TLazBleBackendEvent);
+      BackendEvent.Kind := lbekAvailabilityResult;
+      BackendEvent.OperationId := AOperation.OperationId;
+      BackendEvent.BackendName := GetBackendName;
+      BackendEvent.BackendWarning := Diagnostics.GetLoadWarning;
+      FDriverEventSink.Emit(BackendEvent);
+    end;
   end;
   CompleteOperation(AOperation, Succeeded, ErrorCode, ErrorMessage);
 end;

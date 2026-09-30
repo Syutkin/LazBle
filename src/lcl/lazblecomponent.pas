@@ -80,6 +80,7 @@ type
     function GetLastErrorCode: Integer;
     function GetLastErrorMessage: string;
     function GetBackendInfo: TLazBleBackendInfo;
+    function GetDiagnosticInfo: TLazBleDiagnosticInfo;
     function GetClientCount: Integer;
     function GetClient(const AIndex: Integer): TLazBleLclClient;
     procedure ValidateClientDeviceId(const AClient: TLazBleLclClient;
@@ -119,6 +120,8 @@ type
     property LastErrorCode: Integer read GetLastErrorCode;
     property LastErrorMessage: string read GetLastErrorMessage;
     property BackendInfo: TLazBleBackendInfo read GetBackendInfo;
+    { Thread-safe core snapshot; available without RefreshAvailability. }
+    property DiagnosticInfo: TLazBleDiagnosticInfo read GetDiagnosticInfo;
     property ClientCount: Integer read GetClientCount;
     property Clients[const AIndex: Integer]: TLazBleLclClient
       read GetClient;
@@ -594,6 +597,14 @@ begin
     Result := FBle.BackendInfo
   else
     Result := Default(TLazBleBackendInfo);
+end;
+
+function TLazBleComponent.GetDiagnosticInfo: TLazBleDiagnosticInfo;
+begin
+  if Assigned(FBle) then
+    Result := FBle.DiagnosticInfo
+  else
+    Result := Default(TLazBleDiagnosticInfo);
 end;
 
 function TLazBleComponent.GetClientCount: Integer;

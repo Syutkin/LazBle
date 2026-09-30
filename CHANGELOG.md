@@ -2,8 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- Add `LazBleGetAbout` and `DiagnosticInfo` for library versions and BLE
+  diagnostics. Reading the snapshot does not load the native library.
+
 ### Changed
 
+- Backends now provide their name through `ILazBleBackend.GetBackendName`.
 - Require SimpleBlePascal 1.2.0 for the SimpleCBLE 1.2.0 ABI.
 - Read native error codes and messages from SimpleCBLE 1.2.0 `out_error`
   objects across adapter, scan, connection, and GATT operations.

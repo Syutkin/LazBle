@@ -21,7 +21,8 @@ type
     constructor CreateInternal(const ADriver: ILazBleSimpleBleDriver);
   end;
 
-  TFakeSimpleBleDriver = class(TInterfacedObject, ILazBleSimpleBleDriver)
+  TFakeSimpleBleDriver = class(TInterfacedObject, ILazBleSimpleBleDriver,
+    ILazBleSimpleBleDriverLoadDiagnostics)
   private
     FStartedEvent: TEvent;
     FReleaseEvent: TEvent;
@@ -31,6 +32,7 @@ type
     FExecuteCount: Integer;
     FOpenSucceeded: Boolean;
     FOpenErrorMessage: string;
+    FLoadWarning: string;
     FAvailability: Boolean;
     FAvailabilityErrorMessage: string;
     FBlockCommand: Boolean;
@@ -40,6 +42,7 @@ type
     constructor Create;
     destructor Destroy; override;
     function Open(out AErrorMessage: string): Boolean;
+    function GetLoadWarning: string;
     procedure Close;
     function Execute(const ACommand: TLazBleBackendCommand;
       const AOperationId: TBleOperationId;
@@ -48,6 +51,7 @@ type
     procedure CancelCurrent;
     procedure BlockCommand(const ACommandKind: TLazBleBackendCommandKind);
     procedure FailOpen(const AErrorMessage: string);
+    procedure WarnOnLoad(const AWarningMessage: string);
     procedure ReportUnavailable(const AErrorMessage: string);
     function WaitUntilStarted: Boolean;
     procedure AllowCompletion;
@@ -98,6 +102,7 @@ type
     procedure GattCommandsPreserveTypedProgressEvents;
     procedure AvailabilityCheckRunsAsynchronously;
     procedure DriverOpenFailureCompletesAvailabilityWithDiagnostic;
+    procedure DriverOpenFailurePreservesLoadWarning;
     procedure UnavailableAdapterAndDisabledBluetoothKeepDistinctDiagnostics;
     procedure EmitsNothingAfterTerminalShutdown;
     procedure DefaultBackendDoesNotLoadLibraryInConstructor;
@@ -136,10 +141,20 @@ begin
   Result := FOpenSucceeded;
 end;
 
+function TFakeSimpleBleDriver.GetLoadWarning: string;
+begin
+  Result := FLoadWarning;
+end;
+
 procedure TFakeSimpleBleDriver.FailOpen(const AErrorMessage: string);
 begin
   FOpenSucceeded := False;
   FOpenErrorMessage := AErrorMessage;
+end;
+
+procedure TFakeSimpleBleDriver.WarnOnLoad(const AWarningMessage: string);
+begin
+  FLoadWarning := AWarningMessage;
 end;
 
 procedure TFakeSimpleBleDriver.ReportUnavailable(const AErrorMessage: string);
@@ -728,6 +743,30 @@ begin
     FEventSinkObject.Events[0].ErrorMessage);
   AssertEquals(1, FDriverObject.OpenCount);
   AssertEquals(0, FDriverObject.ExecuteCount);
+end;
+
+procedure TLazBleSimpleBleBackendTest.DriverOpenFailurePreservesLoadWarning;
+var
+  Command: TLazBleBackendCommand;
+  OperationId: TBleOperationId;
+begin
+  FDriverObject.FailOpen('required symbol missing');
+  FDriverObject.WarnOnLoad('new native major version');
+  Command := Default(TLazBleBackendCommand);
+  Command.Kind := lbckCheckAvailability;
+
+  OperationId := FBackend.Submit(Command);
+
+  AssertTrue(FEventSinkObject.WaitForEventCount(2));
+  AssertEquals(Ord(lbekAvailabilityResult),
+    Ord(FEventSinkObject.Events[0].Kind));
+  AssertTrue(OperationId = FEventSinkObject.Events[0].OperationId);
+  AssertEquals('SimpleBLE', FEventSinkObject.Events[0].BackendName);
+  AssertEquals('new native major version',
+    FEventSinkObject.Events[0].BackendWarning);
+  AssertFalse(FEventSinkObject.Events[0].Available);
+  AssertEquals(Ord(lbekOperationFailed),
+    Ord(FEventSinkObject.Events[1].Kind));
 end;
 
 procedure TLazBleSimpleBleBackendTest.

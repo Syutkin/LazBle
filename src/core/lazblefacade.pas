@@ -33,8 +33,11 @@ type
     FReconnectTimerFactory: ILazBleReconnectTimerFactory;
     FBackendInfoLock: TRTLCriticalSection;
     FBackendInfo: TLazBleBackendInfo;
+    FBackendName: string;
+    FAvailability: TBleAvailability;
+    FAvailabilityError: string;
     function GetBackendInfo: TLazBleBackendInfo;
-    procedure SetBackendInfo(const ABackendInfo: TLazBleBackendInfo);
+    function GetDiagnosticInfo: TLazBleDiagnosticInfo;
     procedure OperationCancelled(Sender: TObject);
     procedure ScanResult(Sender: TObject; const ADeviceId,
       ADeviceName: string; const ARssi: SmallInt);
@@ -72,13 +75,18 @@ type
     function FindClient(const ADeviceId: string): TBleClient;
     procedure RemoveClient(const AClient: TBleClient);
     function ShutdownAsync: IBleOperation;
+    { Reading DiagnosticInfo never opens the native library or starts BLE.
+      BackendName comes from ILazBleBackend.GetBackendName before a check,
+      then from the backend's availability result when provided. }
+    property DiagnosticInfo: TLazBleDiagnosticInfo read GetDiagnosticInfo;
     property BackendInfo: TLazBleBackendInfo read GetBackendInfo;
   end;
 
 implementation
 
 uses
-  LazBleSimpleBleBackend;
+  LazBleSimpleBleBackend,
+  SimpleBle;
 
 type
   TBleClientAccess = class(TBleClient)
@@ -234,14 +242,21 @@ end;
 
 constructor TLazBle.Create(const ABackend: ILazBleBackend;
   const AReconnectTimerFactory: ILazBleReconnectTimerFactory);
+var
+  BackendName: string;
 begin
   inherited Create;
   if not Assigned(ABackend) then
     raise EArgumentNilException.Create('ABackend');
   if not Assigned(AReconnectTimerFactory) then
     raise EArgumentNilException.Create('AReconnectTimerFactory');
+  FBackendName := 'unknown';
+  BackendName := ABackend.GetBackendName;
+  if BackendName <> '' then
+    FBackendName := BackendName;
   InitCriticalSection(FBackendInfoLock);
   FBackendInfo := Default(TLazBleBackendInfo);
+  FAvailability := lbaUnknown;
   FReconnectTimerFactory := AReconnectTimerFactory;
   FOperations := TList.Create;
   FClients := TList.Create;
@@ -303,12 +318,22 @@ begin
   end;
 end;
 
-procedure TLazBle.SetBackendInfo(
-  const ABackendInfo: TLazBleBackendInfo);
+function TLazBle.GetDiagnosticInfo: TLazBleDiagnosticInfo;
 begin
+  Result := Default(TLazBleDiagnosticInfo);
+  Result.LazBleVersion := LazBleVersion;
+  Result.BindingVersion := SimpleBlePascalVersion;
+  Result.MinimumNativeVersion := SimpleBleMinimumNativeVersion;
   EnterCriticalSection(FBackendInfoLock);
   try
-    FBackendInfo := ABackendInfo;
+    Result.BackendName := FBackendName;
+    if FBackendInfo.Name <> '' then
+      Result.BackendName := FBackendInfo.Name;
+    Result.NativeVersion := FBackendInfo.Version;
+    Result.AdapterId := FBackendInfo.AdapterId;
+    Result.WarningMessage := FBackendInfo.LoadWarning;
+    Result.Availability := FAvailability;
+    Result.ErrorMessage := FAvailabilityError;
   finally
     LeaveCriticalSection(FBackendInfoLock);
   end;
@@ -388,7 +413,14 @@ procedure TLazBle.AvailabilityResult(Sender: TObject;
   const AAvailability: TBleAvailability;
   const ABackendInfo: TLazBleBackendInfo);
 begin
-  SetBackendInfo(ABackendInfo);
+  EnterCriticalSection(FBackendInfoLock);
+  try
+    FBackendInfo := ABackendInfo;
+    FAvailability := AAvailability;
+    FAvailabilityError := '';
+  finally
+    LeaveCriticalSection(FBackendInfoLock);
+  end;
   if Assigned(FActiveAvailability) and
     (FActiveAvailability.State = lbopPending) then
     TBleAvailabilityOperationAccess(
@@ -408,6 +440,27 @@ begin
   FActiveAvailabilityObject := nil;
   if not Assigned(Operation) then
     Exit;
+  EnterCriticalSection(FBackendInfoLock);
+  try
+    if Operation.CancelRequested then
+    begin
+      FAvailability := lbaUnknown;
+      FAvailabilityError := '';
+    end
+    else if ASucceeded and
+      (Operation.Availability in [lbaAvailable, lbaUnavailable]) then
+      FAvailabilityError := ''
+    else
+    begin
+      FAvailability := lbaUnavailable;
+      if ASucceeded then
+        FAvailabilityError := 'BLE backend did not report availability'
+      else
+        FAvailabilityError := AErrorMessage;
+    end;
+  finally
+    LeaveCriticalSection(FBackendInfoLock);
+  end;
   if Operation.CancelRequested then
     TBleAvailabilityOperationAccess(OperationObject).Finish(lbopCancelled)
   else if ASucceeded and
@@ -510,7 +563,14 @@ begin
   if Assigned(FActiveAvailability) and
     (FActiveAvailability.State = lbopPending) then
     Exit(FActiveAvailability);
-  SetBackendInfo(Default(TLazBleBackendInfo));
+  EnterCriticalSection(FBackendInfoLock);
+  try
+    FBackendInfo := Default(TLazBleBackendInfo);
+    FAvailability := lbaChecking;
+    FAvailabilityError := '';
+  finally
+    LeaveCriticalSection(FBackendInfoLock);
+  end;
   Operation := TBleAvailabilityOperationAccess.CreateInternal(
     @OperationCancelled);
   Result := Operation;
@@ -520,6 +580,13 @@ begin
   begin
     FActiveAvailability := nil;
     FActiveAvailabilityObject := nil;
+    EnterCriticalSection(FBackendInfoLock);
+    try
+      FAvailability := lbaUnavailable;
+      FAvailabilityError := 'Could not start BLE availability check';
+    finally
+      LeaveCriticalSection(FBackendInfoLock);
+    end;
     Operation.Finish(lbopFailed, 0,
       'Could not start BLE availability check');
   end;

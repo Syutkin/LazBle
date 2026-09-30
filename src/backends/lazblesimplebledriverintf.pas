@@ -24,6 +24,12 @@ type
     procedure CancelCurrent;
   end;
 
+  { Optional loader diagnostic. Fake drivers may omit it. }
+  ILazBleSimpleBleDriverLoadDiagnostics = interface
+    ['{3968643B-0620-4D6C-B419-AC16B1A67C69}']
+    function GetLoadWarning: string;
+  end;
+
   ILazBleSimpleBleDriverSinkControl = interface
     ['{362FDEDF-71E8-41F4-9A80-B2AEBD634F22}']
     procedure Detach;
