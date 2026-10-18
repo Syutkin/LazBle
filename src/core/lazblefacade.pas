@@ -510,6 +510,9 @@ begin
           begin
             if Operation.CancelRequested then
               TBleSessionOperationAccess(Operation).Finish(lbopCancelled)
+            else if ASession.ErrorMessage <> '' then
+              TBleSessionOperationAccess(Operation).Finish(lbopFailed,
+                ASession.ErrorCode, ASession.ErrorMessage)
             else
               TBleSessionOperationAccess(Operation).Finish(lbopFailed, 0,
                 'Could not connect and discover GATT services');
@@ -518,7 +521,11 @@ begin
           if AState = lbssDisconnected then
             TBleSessionOperationAccess(Operation).Finish(lbopSucceeded)
           else if AState = lbssError then
-            TBleSessionOperationAccess(Operation).Finish(lbopFailed, 0,
+            if ASession.ErrorMessage <> '' then
+              TBleSessionOperationAccess(Operation).Finish(lbopFailed,
+                ASession.ErrorCode, ASession.ErrorMessage)
+            else
+              TBleSessionOperationAccess(Operation).Finish(lbopFailed, 0,
                 'Could not disconnect BLE session');
       end;
       if Operation.State <> lbopPending then

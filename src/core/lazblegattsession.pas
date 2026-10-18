@@ -50,12 +50,16 @@ type
     FOperations: TList;
     FSubscriptions: TList;
     FServices: TLazBleGattServices;
+    FErrorCode: Integer;
+    FErrorMessage: string;
     FOnStateChanged: TLazBleSessionStateChangedEvent;
     FStateChangedHandlers: TLazBleSessionStateChangedEvents;
     procedure SetState(const AState: TLazBleSessionState);
     function GetState: TLazBleSessionState;
     function GetGeneration: QWord;
     function GetServices: TLazBleGattServices;
+    function GetErrorCode: Integer;
+    function GetErrorMessage: string;
     function GetOnStateChanged: TLazBleSessionStateChangedEvent;
     procedure SetOnStateChanged(
       const AHandler: TLazBleSessionStateChangedEvent);
@@ -99,6 +103,8 @@ type
     property Generation: QWord read GetGeneration;
     property State: TLazBleSessionState read GetState;
     property Services: TLazBleGattServices read GetServices;
+    property ErrorCode: Integer read GetErrorCode;
+    property ErrorMessage: string read GetErrorMessage;
     property OnStateChanged: TLazBleSessionStateChangedEvent
       read GetOnStateChanged write SetOnStateChanged;
   end;
@@ -286,6 +292,26 @@ begin
   EnterCriticalSection(FStateLock);
   try
     Result := FState;
+  finally
+    LeaveCriticalSection(FStateLock);
+  end;
+end;
+
+function TBleGattSession.GetErrorCode: Integer;
+begin
+  EnterCriticalSection(FStateLock);
+  try
+    Result := FErrorCode;
+  finally
+    LeaveCriticalSection(FStateLock);
+  end;
+end;
+
+function TBleGattSession.GetErrorMessage: string;
+begin
+  EnterCriticalSection(FStateLock);
+  try
+    Result := FErrorMessage;
   finally
     LeaveCriticalSection(FStateLock);
   end;
@@ -655,6 +681,8 @@ begin
   EnterCriticalSection(FStateLock);
   try
     FServices := nil;
+    FErrorCode := 0;
+    FErrorMessage := '';
     Inc(FGeneration);
   finally
     LeaveCriticalSection(FStateLock);
@@ -676,6 +704,13 @@ begin
     lbssError]) then
     Exit;
 
+  EnterCriticalSection(FStateLock);
+  try
+    FErrorCode := 0;
+    FErrorMessage := '';
+  finally
+    LeaveCriticalSection(FStateLock);
+  end;
   Result := Submit(lbckDisconnect);
   if Result = InvalidBleOperationId then
     Exit;
@@ -688,6 +723,20 @@ procedure TBleGattSession.HandleTerminalEvent(
 begin
   if AEvent.Kind = lbekOperationSucceeded then
     Exit;
+
+  if (AEvent.Kind = lbekOperationFailed) and
+    ((AEvent.OperationId = FConnectOperationId) or
+    (AEvent.OperationId = FDiscoveryOperationId) or
+    (AEvent.OperationId = FDisconnectOperationId)) then
+  begin
+    EnterCriticalSection(FStateLock);
+    try
+      FErrorCode := AEvent.ErrorCode;
+      FErrorMessage := AEvent.ErrorMessage;
+    finally
+      LeaveCriticalSection(FStateLock);
+    end;
+  end;
 
   if (AEvent.OperationId = FConnectOperationId) or
     (AEvent.OperationId = FDiscoveryOperationId) then

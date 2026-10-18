@@ -108,6 +108,10 @@ type
     procedure AvailabilityCheckDoesNotOverlapScan;
     procedure DiagnosticInfoIsAvailableBeforeNativeLoad;
     procedure ConnectCompletesAfterServiceDiscovery;
+    procedure ConnectPreservesBackendError;
+    procedure DiscoveryPreservesBackendError;
+    procedure DisconnectPreservesBackendError;
+    procedure RetryDoesNotReusePreviousBackendError;
     procedure TwoClientsConnectIndependently;
     procedure ShutdownCompletesAfterBackendShutdown;
     procedure CreateClientAfterShutdownRaises;
@@ -579,6 +583,78 @@ begin
   AssertEquals(Ord(lbopSucceeded), Ord(Operation.State));
   AssertEquals(Ord(lbcstReady), Ord(Client.State));
   AssertTrue(ClientGeneration(Client) > 0);
+end;
+
+procedure TLazBleClientTest.ConnectPreservesBackendError;
+var
+  Client: TBleClient;
+  Operation: IBleOperation;
+begin
+  Client := FBle.CreateClient('device-a');
+  Operation := Client.ConnectAsync;
+  AssertTrue(FBackendObject.CompleteOperation(FBackendObject.OperationIds[0],
+    lbekOperationFailed, 9, 'SimpleBLE connect failed: stale device'));
+  AssertEquals(Ord(lbopFailed), Ord(Operation.State));
+  AssertEquals(9, Operation.ErrorCode);
+  AssertEquals('SimpleBLE connect failed: stale device', Operation.ErrorMessage);
+end;
+
+procedure TLazBleClientTest.DiscoveryPreservesBackendError;
+var
+  Client: TBleClient;
+  Operation: IBleOperation;
+  OperationId: TBleOperationId;
+begin
+  Client := FBle.CreateClient('device-a');
+  Operation := Client.ConnectAsync;
+  EmitEvent(lbekConnected, FBackendObject.OperationIds[0], Client.DeviceId,
+    '', 0, ClientGeneration(Client));
+  OperationId := FBackendObject.OperationIds[FBackendObject.CommandCount - 1];
+  AssertTrue(FBackendObject.CompleteOperation(OperationId,
+    lbekOperationFailed, 0, 'Could not enumerate GATT services'));
+  AssertEquals(Ord(lbopFailed), Ord(Operation.State));
+  AssertEquals(0, Operation.ErrorCode);
+  AssertEquals('Could not enumerate GATT services', Operation.ErrorMessage);
+end;
+
+procedure TLazBleClientTest.DisconnectPreservesBackendError;
+var
+  Client: TBleClient;
+  Operation: IBleOperation;
+  OperationId: TBleOperationId;
+begin
+  Client := FBle.CreateClient('device-a');
+  Client.ConnectAsync;
+  CompleteTransportClient(Client);
+  Operation := Client.DisconnectAsync;
+  OperationId := FBackendObject.OperationIds[FBackendObject.CommandCount - 1];
+  AssertTrue(FBackendObject.CompleteOperation(OperationId,
+    lbekOperationFailed, 9, 'SimpleBLE disconnect failed'));
+  AssertEquals(Ord(lbopFailed), Ord(Operation.State));
+  AssertEquals(9, Operation.ErrorCode);
+  AssertEquals('SimpleBLE disconnect failed', Operation.ErrorMessage);
+end;
+
+procedure TLazBleClientTest.RetryDoesNotReusePreviousBackendError;
+var
+  Client: TBleClient;
+  Operation: IBleOperation;
+  OperationId: TBleOperationId;
+begin
+  Client := FBle.CreateClient('device-a');
+  Client.ConnectAsync;
+  AssertTrue(FBackendObject.CompleteOperation(FBackendObject.OperationIds[0],
+    lbekOperationFailed, 9, 'Previous failure'));
+  EmitEvent(lbekDisconnected, InvalidBleOperationId, Client.DeviceId, '', 0,
+    ClientGeneration(Client));
+  Operation := Client.ConnectAsync;
+  OperationId := FBackendObject.OperationIds[FBackendObject.CommandCount - 1];
+  AssertTrue(FBackendObject.CompleteOperation(OperationId,
+    lbekOperationFailed));
+  AssertEquals(Ord(lbopFailed), Ord(Operation.State));
+  AssertEquals(0, Operation.ErrorCode);
+  AssertEquals('Could not connect and discover GATT services',
+    Operation.ErrorMessage);
 end;
 
 procedure TLazBleClientTest.TwoClientsConnectIndependently;
