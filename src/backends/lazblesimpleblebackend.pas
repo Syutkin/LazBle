@@ -70,6 +70,7 @@ type
     FStopping: LongInt;
     FShutdownId: TBleOperationId;
     FShutdownDone: Boolean;
+    FShutdownFailed: Boolean;
     FShutdownErrorCode: Integer;
     FShutdownError: string;
     procedure RequireMainThread;
@@ -124,38 +125,6 @@ constructor EBackendError.Create(ACode: Integer; const Text: string);
 begin
   inherited Create(Text);
   Code := ACode;
-end;
-
-function CopyServices(const Native: array of TBleService): TLazBleGattServices;
-var
-  I, J, K: Integer;
-  C: TBleCharacteristic;
-begin
-  { Temporary boundary for the existing core records; removed in stage 3. }
-  Result := nil;
-  SetLength(Result, Length(Native));
-  for I := 0 to High(Native) do
-  begin
-    Result[I].Uuid := UTF8Encode(Native[I].Uuid);
-    Result[I].Data := Copy(Native[I].Data);
-    SetLength(Result[I].Characteristics, Length(Native[I].Characteristics));
-    for J := 0 to High(Native[I].Characteristics) do
-    begin
-      C := Native[I].Characteristics[J];
-      with Result[I].Characteristics[J] do
-      begin
-        Uuid := UTF8Encode(C.Uuid);
-        if C.CanRead then Include(Properties, lbgcpRead);
-        if C.CanWriteRequest then Include(Properties, lbgcpWriteRequest);
-        if C.CanWriteCommand then Include(Properties, lbgcpWriteCommand);
-        if C.CanNotify then Include(Properties, lbgcpNotify);
-        if C.CanIndicate then Include(Properties, lbgcpIndicate);
-        SetLength(Descriptors, Length(C.Descriptors));
-        for K := 0 to High(C.Descriptors) do
-          Descriptors[K].Uuid := UTF8Encode(C.Descriptors[K]);
-      end;
-    end;
-  end;
 end;
 
 constructor TLazBleSimpleBleBackend.TCommand.Create;
@@ -625,7 +594,7 @@ begin
       lbckDiscoverServices:
         begin
           Task.ResultEvent.Kind := lbekServicesDiscovered;
-          Task.ResultEvent.Services := CopyServices(Task.NativePeer.Services);
+          Task.ResultEvent.Services := Task.NativePeer.Services;
           Task.HasResult := True;
         end;
       lbckRead:
@@ -707,8 +676,10 @@ begin
       ReportPeer(Task.Peer, False);
     if Task.Success and (Task.Subscription <> nil) and
       (Task.Request.Kind = lbckSubscribe) then Task.Subscription.Active := True;
-    if Task.HasResult and Task.Success then Deliver(Task.ResultEvent);
   end;
+  { Accepted commands retain their real results during shutdown too. Core
+    suppresses new profile/session state work; native data events stay detached. }
+  if Task.HasResult and Task.Success then Deliver(Task.ResultEvent);
   if (Task.Subscription <> nil) and
     ((Task.Request.Kind = lbckUnsubscribe) or
       ((Task.Request.Kind = lbckSubscribe) and not Task.Success)) then
@@ -876,7 +847,7 @@ begin
       Event.DeviceId := Sub.Peer.DeviceId;
       Event.ServiceUuid := Sub.ServiceUuid;
       Event.CharacteristicUuid := Sub.CharacteristicUuid;
-      Event.Value := Copy(Data);
+      Event.Value := Data;
       Deliver(Event);
       Exit;
     end;
@@ -913,7 +884,8 @@ var
 
   procedure Remember(E: Exception);
   begin
-    if FShutdownError <> '' then Exit;
+    if FShutdownFailed then Exit;
+    FShutdownFailed := True;
     FShutdownError := E.Message;
     if E is EBleError then FShutdownErrorCode := Ord(EBleError(E).Code)
     else FShutdownErrorCode := LazBleErrorBackendUnavailable;
@@ -959,6 +931,7 @@ begin
   Event.Kind := lbekShutdownCompleted;
   Event.OperationId := FShutdownId;
   Event.BackendName := GetBackendName;
+  Event.ShutdownFailed := FShutdownFailed;
   Event.ErrorCode := FShutdownErrorCode;
   Event.ErrorMessage := FShutdownError;
   Deliver(Event);

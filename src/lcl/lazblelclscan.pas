@@ -357,8 +357,6 @@ begin
       NewState := lblssSucceeded;
     lbopCancelled:
       NewState := lblssCancelled;
-    lbopTimedOut:
-      NewState := lblssTimedOut;
   else
     NewState := lblssFailed;
   end;

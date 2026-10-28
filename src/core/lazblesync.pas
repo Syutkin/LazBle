@@ -5,7 +5,7 @@ unit LazBleSync;
 interface
 
 uses
-  SysUtils,
+  Classes, SysUtils,
   LazBleTypes,
   LazBleBackend,
   LazBleOperation,
@@ -18,6 +18,7 @@ type
   TLazBleSync = class
   private
     FBle: TLazBle;
+    FWaitError: string;
     function WaitForOperation(const AOperation: IBleOperation;
       const ATimeoutMs: Cardinal): Boolean;
   public
@@ -38,42 +39,6 @@ type
   end;
 
 implementation
-
-uses
-  SyncObjs;
-
-type
-  TOperationWaiter = class
-  private
-    FEvent: TEvent;
-  public
-    constructor Create;
-    destructor Destroy; override;
-    procedure Completed(Sender: TObject);
-    function Wait(const ATimeoutMs: Cardinal): Boolean;
-  end;
-
-constructor TOperationWaiter.Create;
-begin
-  inherited Create;
-  FEvent := TEvent.Create(nil, True, False, '');
-end;
-
-destructor TOperationWaiter.Destroy;
-begin
-  FEvent.Free;
-  inherited Destroy;
-end;
-
-procedure TOperationWaiter.Completed(Sender: TObject);
-begin
-  FEvent.SetEvent;
-end;
-
-function TOperationWaiter.Wait(const ATimeoutMs: Cardinal): Boolean;
-begin
-  Result := FEvent.WaitFor(ATimeoutMs) = wrSignaled;
-end;
 
 constructor TLazBleSync.Create;
 begin
@@ -96,20 +61,26 @@ end;
 function TLazBleSync.WaitForOperation(const AOperation: IBleOperation;
   const ATimeoutMs: Cardinal): Boolean;
 var
-  Waiter: TOperationWaiter;
+  Deadline, Remaining, NowTick: QWord;
 begin
-  if not Assigned(AOperation) then
-    Exit(False);
-  Waiter := TOperationWaiter.Create;
-  try
-    AOperation.OnCompleted := @Waiter.Completed;
-    if (AOperation.State = lbopPending) and not Waiter.Wait(ATimeoutMs) then
-      AOperation.Timeout;
-    AOperation.OnCompleted := nil;
-    Result := AOperation.State = lbopSucceeded;
-  finally
-    Waiter.Free;
+  LazBleRequireMainThread;
+  FWaitError := '';
+  if not Assigned(AOperation) then Exit(False);
+  Deadline := GetTickCount64 + ATimeoutMs;
+  while AOperation.State = lbopPending do
+  begin
+    NowTick := GetTickCount64;
+    if NowTick >= Deadline then
+    begin
+      FWaitError := 'Wait timed out; BLE operation may still be running';
+      Exit(False);
+    end;
+    Remaining := Deadline - NowTick;
+    if Remaining > 10 then Remaining := 10;
+    CheckSynchronize(LongInt(Remaining));
   end;
+  Result := AOperation.State = lbopSucceeded;
+  if not Result then FWaitError := AOperation.ErrorMessage;
 end;
 
 function TLazBleSync.Scan(const AAdapterId: string;
@@ -126,7 +97,7 @@ begin
     WaitTimeoutMs := ATimeoutMs + 1000;
   Result := WaitForOperation(Operation, WaitTimeoutMs);
   ADevices := Operation.Results;
-  AErrorMessage := Operation.ErrorMessage;
+  AErrorMessage := FWaitError;
 end;
 
 function TLazBleSync.CreateClient(const ADeviceId: string): TBleClient;
@@ -146,7 +117,7 @@ begin
   end;
   Operation := AClient.ConnectAsync;
   Result := WaitForOperation(Operation, ATimeoutMs);
-  AErrorMessage := Operation.ErrorMessage;
+  AErrorMessage := FWaitError;
 end;
 
 function TLazBleSync.Disconnect(const AClient: TBleClient;
@@ -161,7 +132,7 @@ begin
   end;
   Operation := AClient.DisconnectAsync;
   Result := WaitForOperation(Operation, ATimeoutMs);
-  AErrorMessage := Operation.ErrorMessage;
+  AErrorMessage := FWaitError;
 end;
 
 function TLazBleSync.Shutdown(const ATimeoutMs: Cardinal;
@@ -171,7 +142,7 @@ var
 begin
   Operation := FBle.ShutdownAsync;
   Result := WaitForOperation(Operation, ATimeoutMs);
-  AErrorMessage := Operation.ErrorMessage;
+  AErrorMessage := FWaitError;
 end;
 
 end.

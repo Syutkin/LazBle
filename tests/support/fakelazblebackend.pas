@@ -46,7 +46,8 @@ type
       const AEventKind: TLazBleBackendEventKind;
       const AErrorCode: Integer = 0;
       const AErrorMessage: string = ''): Boolean;
-    function CompleteShutdown: Boolean;
+    function CompleteShutdown(const AErrorCode: Integer = 0;
+      const AErrorMessage: string = ''; const AFailed: Boolean = False): Boolean;
     function CancellationWasRequested(
       const AOperationId: TBleOperationId): Boolean;
     function HasEventSink: Boolean;
@@ -65,11 +66,13 @@ implementation
 
 function TFakeLazBleBackend.GetBackendName: string;
 begin
+  LazBleRequireMainThread;
   Result := 'FakeBLE';
 end;
 
 function TFakeLazBleBackend.AllocateOperationId: TBleOperationId;
 begin
+  LazBleRequireMainThread;
   Inc(FNextOperationId);
   Result := FNextOperationId;
 end;
@@ -79,6 +82,7 @@ function TFakeLazBleBackend.FindOperation(
 var
   Index: Integer;
 begin
+  LazBleRequireMainThread;
   for Index := 0 to High(FOperations) do
     if FOperations[Index].OperationId = AOperationId then
       Exit(Index);
@@ -89,6 +93,7 @@ function TFakeLazBleBackend.AllOperationsAreTerminal: Boolean;
 var
   Operation: TFakeLazBleOperation;
 begin
+  LazBleRequireMainThread;
   for Operation in FOperations do
     if not Operation.TerminalDelivered then
       Exit(False);
@@ -100,6 +105,7 @@ procedure TFakeLazBleBackend.RecordCancellation(
 var
   Index: Integer;
 begin
+  LazBleRequireMainThread;
   Index := Length(FCancelledOperationIds);
   SetLength(FCancelledOperationIds, Index + 1);
   FCancelledOperationIds[Index] := AOperationId;
@@ -107,6 +113,7 @@ end;
 
 procedure TFakeLazBleBackend.Deliver(const AEvent: TLazBleBackendEvent);
 begin
+  LazBleRequireMainThread;
   if Assigned(FEventSink) then
     FEventSink.HandleBackendEvent(AEvent);
 end;
@@ -114,24 +121,28 @@ end;
 function TFakeLazBleBackend.GetCommand(
   const AIndex: Integer): TLazBleBackendCommand;
 begin
+  LazBleRequireMainThread;
   Result := FCommands[AIndex];
 end;
 
 function TFakeLazBleBackend.GetOperationId(
   const AIndex: Integer): TBleOperationId;
 begin
+  LazBleRequireMainThread;
   Result := FOperationIds[AIndex];
 end;
 
 function TFakeLazBleBackend.GetCancelledOperationId(
   const AIndex: Integer): TBleOperationId;
 begin
+  LazBleRequireMainThread;
   Result := FCancelledOperationIds[AIndex];
 end;
 
 procedure TFakeLazBleBackend.SetEventSink(
   const AEventSink: ILazBleBackendEventSink);
 begin
+  LazBleRequireMainThread;
   FEventSink := AEventSink;
 end;
 
@@ -140,6 +151,7 @@ function TFakeLazBleBackend.Submit(
 var
   Index: Integer;
 begin
+  LazBleRequireMainThread;
   if FShutdownStarted then
     Exit(InvalidBleOperationId);
 
@@ -149,6 +161,7 @@ begin
   SetLength(FOperationIds, Index + 1);
   SetLength(FOperations, Index + 1);
   FCommands[Index] := ACommand;
+  FCommands[Index].Value := Copy(ACommand.Value);
   FOperationIds[Index] := Result;
   FOperations[Index].OperationId := Result;
 end;
@@ -157,6 +170,7 @@ procedure TFakeLazBleBackend.Cancel(const AOperationId: TBleOperationId);
 var
   Index: Integer;
 begin
+  LazBleRequireMainThread;
   Index := FindOperation(AOperationId);
   if (Index < 0) or FOperations[Index].TerminalDelivered or
     FOperations[Index].CancellationRequested then
@@ -170,6 +184,7 @@ function TFakeLazBleBackend.BeginShutdown: TBleOperationId;
 var
   Index: Integer;
 begin
+  LazBleRequireMainThread;
   if FShutdownStarted then
     Exit(FShutdownOperationId);
 
@@ -183,6 +198,7 @@ end;
 
 procedure TFakeLazBleBackend.Emit(const AEvent: TLazBleBackendEvent);
 begin
+  LazBleRequireMainThread;
   EmitProgress(AEvent);
 end;
 
@@ -191,6 +207,7 @@ function TFakeLazBleBackend.EmitProgress(
 var
   Index: Integer;
 begin
+  LazBleRequireMainThread;
   Result := not FShutdownCompleted and
     not LazBleBackendEventIsTerminal(AEvent);
   if Result and (AEvent.OperationId <> InvalidBleOperationId) then
@@ -210,6 +227,7 @@ var
   BackendEvent: TLazBleBackendEvent;
   Index: Integer;
 begin
+  LazBleRequireMainThread;
   Result := False;
   if FShutdownCompleted or not (AEventKind in [
     lbekOperationSucceeded,
@@ -226,16 +244,20 @@ begin
   BackendEvent := Default(TLazBleBackendEvent);
   BackendEvent.Kind := AEventKind;
   BackendEvent.OperationId := AOperationId;
+  BackendEvent.Generation := FCommands[Index].Generation;
+  BackendEvent.DeviceId := FCommands[Index].DeviceId;
   BackendEvent.ErrorCode := AErrorCode;
   BackendEvent.ErrorMessage := AErrorMessage;
   Deliver(BackendEvent);
   Result := True;
 end;
 
-function TFakeLazBleBackend.CompleteShutdown: Boolean;
+function TFakeLazBleBackend.CompleteShutdown(const AErrorCode: Integer;
+  const AErrorMessage: string; const AFailed: Boolean): Boolean;
 var
   BackendEvent: TLazBleBackendEvent;
 begin
+  LazBleRequireMainThread;
   Result := FShutdownStarted and not FShutdownCompleted and
     AllOperationsAreTerminal;
   if not Result then
@@ -245,6 +267,9 @@ begin
   BackendEvent := Default(TLazBleBackendEvent);
   BackendEvent.Kind := lbekShutdownCompleted;
   BackendEvent.OperationId := FShutdownOperationId;
+  BackendEvent.ShutdownFailed := AFailed or (AErrorCode <> 0) or (AErrorMessage <> '');
+  BackendEvent.ErrorCode := AErrorCode;
+  BackendEvent.ErrorMessage := AErrorMessage;
   Deliver(BackendEvent);
 end;
 
@@ -253,22 +278,26 @@ function TFakeLazBleBackend.CancellationWasRequested(
 var
   Index: Integer;
 begin
+  LazBleRequireMainThread;
   Index := FindOperation(AOperationId);
   Result := (Index >= 0) and FOperations[Index].CancellationRequested;
 end;
 
 function TFakeLazBleBackend.HasEventSink: Boolean;
 begin
+  LazBleRequireMainThread;
   Result := Assigned(FEventSink);
 end;
 
 function TFakeLazBleBackend.CommandCount: Integer;
 begin
+  LazBleRequireMainThread;
   Result := Length(FCommands);
 end;
 
 function TFakeLazBleBackend.CancelledOperationCount: Integer;
 begin
+  LazBleRequireMainThread;
   Result := Length(FCancelledOperationIds);
 end;
 

@@ -28,8 +28,6 @@ type
     one GATT service. The caller retains the session for this object's life. }
   TBleByteChannel = class
   private
-    FLock: TRTLCriticalSection;
-    FCallbackLock: TRTLCriticalSection;
     FSession: TBleGattSession;
     FServiceUuid: string;
     FWriteCharacteristicUuid: string;
@@ -90,8 +88,6 @@ begin
   inherited Create;
   if not Assigned(ASession) then
     raise EArgumentNilException.Create('ASession');
-  InitCriticalSection(FLock);
-  InitCriticalSection(FCallbackLock);
   FSession := ASession;
   FServiceUuid := AServiceUuid;
   FWriteCharacteristicUuid := AWriteCharacteristicUuid;
@@ -103,33 +99,23 @@ destructor TBleByteChannel.Destroy;
 begin
   Detach;
   SetOnData(nil);
-  EnterCriticalSection(FLock);
-  try
-    FSession := nil;
-    FSubscription := nil;
-    FDetachOperation := nil;
-  finally
-    LeaveCriticalSection(FLock);
-  end;
-  DoneCriticalSection(FCallbackLock);
-  DoneCriticalSection(FLock);
+  FSession := nil;
+  FSubscription := nil;
+  FDetachOperation := nil;
   inherited Destroy;
 end;
 
 function TBleByteChannel.GetSubscription: IBleSubscription;
 begin
-  EnterCriticalSection(FLock);
-  try
-    Result := FSubscription;
-  finally
-    LeaveCriticalSection(FLock);
-  end;
+  LazBleRequireMainThread;
+  Result := FSubscription;
 end;
 
 function TBleByteChannel.GetState: TLazBleByteChannelState;
 var
   CurrentSubscription: IBleSubscription;
 begin
+  LazBleRequireMainThread;
   CurrentSubscription := GetSubscription;
   if not Assigned(CurrentSubscription) then
     Exit(lbchsDetached);
@@ -149,28 +135,21 @@ end;
 
 function TBleByteChannel.GetReady: Boolean;
 begin
+  LazBleRequireMainThread;
   Result := GetState = lbchsReady;
 end;
 
 function TBleByteChannel.GetOnData: TLazBleByteChannelDataEvent;
 begin
-  EnterCriticalSection(FCallbackLock);
-  try
-    Result := FOnData;
-  finally
-    LeaveCriticalSection(FCallbackLock);
-  end;
+  LazBleRequireMainThread;
+  Result := FOnData;
 end;
 
 procedure TBleByteChannel.SetOnData(
   const AHandler: TLazBleByteChannelDataEvent);
 begin
-  EnterCriticalSection(FCallbackLock);
-  try
-    FOnData := AHandler;
-  finally
-    LeaveCriticalSection(FCallbackLock);
-  end;
+  LazBleRequireMainThread;
+  FOnData := AHandler;
 end;
 
 procedure TBleByteChannel.SubscriptionDataReceived(Sender: TObject;
@@ -178,6 +157,7 @@ procedure TBleByteChannel.SubscriptionDataReceived(Sender: TObject;
 var
   Handler: TLazBleByteChannelDataEvent;
 begin
+  LazBleRequireMainThread;
   Handler := GetOnData;
   if Assigned(Handler) then
     Handler(Self, AValue);
@@ -187,6 +167,7 @@ function TBleByteChannel.Attach: IBleSubscription;
 var
   CurrentSubscription: IBleSubscription;
 begin
+  LazBleRequireMainThread;
   CurrentSubscription := GetSubscription;
   if Assigned(CurrentSubscription) and
     (CurrentSubscription.State in [lbsubPending, lbsubActive,
@@ -196,13 +177,8 @@ begin
   CurrentSubscription := FSession.SubscribeAsync(FServiceUuid,
     FNotifyCharacteristicUuid);
   CurrentSubscription.OnData := @SubscriptionDataReceived;
-  EnterCriticalSection(FLock);
-  try
-    FDetachOperation := nil;
-    FSubscription := CurrentSubscription;
-  finally
-    LeaveCriticalSection(FLock);
-  end;
+  FDetachOperation := nil;
+  FSubscription := CurrentSubscription;
   Result := CurrentSubscription;
 end;
 
@@ -210,13 +186,9 @@ function TBleByteChannel.Detach: IBleGattOperation;
 var
   CurrentSubscription: IBleSubscription;
 begin
-  EnterCriticalSection(FLock);
-  try
-    Result := FDetachOperation;
-    CurrentSubscription := FSubscription;
-  finally
-    LeaveCriticalSection(FLock);
-  end;
+  LazBleRequireMainThread;
+  Result := FDetachOperation;
+  CurrentSubscription := FSubscription;
   if Assigned(Result) then
     Exit;
   if not Assigned(CurrentSubscription) then
@@ -224,19 +196,15 @@ begin
 
   CurrentSubscription.OnData := nil;
   Result := CurrentSubscription.Unsubscribe;
-  EnterCriticalSection(FLock);
-  try
-    if not Assigned(FDetachOperation) then
-      FDetachOperation := Result
-    else
-      Result := FDetachOperation;
-  finally
-    LeaveCriticalSection(FLock);
-  end;
+  if not Assigned(FDetachOperation) then
+    FDetachOperation := Result
+  else
+    Result := FDetachOperation;
 end;
 
 function TBleByteChannel.SendAsync(const AValue: TBytes): IBleGattOperation;
 begin
+  LazBleRequireMainThread;
   if not Ready or not Assigned(FSession) then
     Exit(TBleGattOperationAccess.CreateTerminal(lbopFailed,
       'BLE byte channel is not ready'));

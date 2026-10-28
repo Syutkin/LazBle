@@ -33,14 +33,12 @@ type
     const AOperationId: TBleOperationId) of object;
 
   { Device GATT session used by TBleClient and profiles. Services reflect the
-    current connection and are invalidated when it ends. }
+    current connection as read-only upstream records and are invalidated when it ends. }
   TBleGattSession = class
   private
-    FStateLock: TRTLCriticalSection;
-    FCallbackLock: TRTLCriticalSection;
-    FEntriesLock: TRTLCriticalSection;
     FDeviceId: string;
     FState: TLazBleSessionState;
+    FShuttingDown: Boolean;
     FGeneration: QWord;
     FConnectOperationId: TBleOperationId;
     FDiscoveryOperationId: TBleOperationId;
@@ -50,6 +48,7 @@ type
     FOperations: TList;
     FSubscriptions: TList;
     FServices: TLazBleGattServices;
+    FConnectionEstablished, FLastOperationCancelled, FLastOperationFailed: Boolean;
     FErrorCode: Integer;
     FErrorMessage: string;
     FOnStateChanged: TLazBleSessionStateChangedEvent;
@@ -69,7 +68,7 @@ type
     procedure OperationCancelled(Sender: TObject);
     function UnsubscribeSubscription(
       const ASubscription: TBleSubscription): IBleGattOperation;
-    procedure InvalidateGattState;
+    procedure InvalidateGattState(const AForce: Boolean = False);
     procedure HandleTerminalEvent(const AEvent: TLazBleBackendEvent);
   protected
     constructor Create(const ADeviceId: string;
@@ -77,8 +76,11 @@ type
       const ACancelOperation: TLazBleCancelOperation);
     function Connect: TBleOperationId;
     function Disconnect: TBleOperationId;
+    procedure CancelConnect;
+    procedure CancelDisconnect;
     procedure HandleBackendEvent(const AEvent: TLazBleBackendEvent);
     procedure HandleBackendShutdown;
+    procedure PrepareShutdown;
     procedure AddStateChangedHandler(
       const AHandler: TLazBleSessionStateChangedEvent);
     procedure RemoveStateChangedHandler(
@@ -103,6 +105,8 @@ type
     property Generation: QWord read GetGeneration;
     property State: TLazBleSessionState read GetState;
     property Services: TLazBleGattServices read GetServices;
+    property LastOperationFailed: Boolean read FLastOperationFailed;
+    property LastOperationCancelled: Boolean read FLastOperationCancelled;
     property ErrorCode: Integer read GetErrorCode;
     property ErrorMessage: string read GetErrorMessage;
     property OnStateChanged: TLazBleSessionStateChangedEvent
@@ -116,7 +120,7 @@ type
   public
     constructor CreateInternal(const AOperationId: TBleOperationId;
       const AKind: TLazBleBackendCommandKind;
-      const AOnCancel: TLazBleOperationCancelEvent);
+      const AOnCancel: TLazBleOperationCancelEvent; const AGeneration: QWord);
     constructor CreateTerminal(const AKind: TLazBleBackendCommandKind;
       const AState: TLazBleOperationState; const AErrorMessage: string = '');
     procedure HandleEvent(const AEvent: TLazBleBackendEvent);
@@ -124,15 +128,18 @@ type
     procedure DetachFromSession;
     function Matches(const AOperationId: TBleOperationId): Boolean;
     function OperationId: TBleOperationId;
+    function OperationKind: TLazBleBackendCommandKind;
   end;
 
   TBleSubscriptionAccess = class(TBleSubscription)
   public
     constructor CreateInternal(const AOperationId: TBleOperationId;
       const AGeneration: QWord; const AUnsubscribe: TLazBleUnsubscribe);
-    procedure BeginUnsubscribeInternal(const AOperation: IBleGattOperation);
     procedure HandleEvent(const AEvent: TLazBleBackendEvent);
-    procedure InvalidateInternal;
+    procedure InvalidateInternal(const AForce: Boolean = False);
+    procedure DetachCallbacksInternal;
+    function CleanupPendingInternal: Boolean;
+    procedure BeginShutdownInternal;
     procedure DetachFromSession;
     function OperationId: TBleOperationId;
     function SubscriptionId: TBleSubscriptionId;
@@ -158,9 +165,9 @@ type
 constructor TBleGattOperationAccess.CreateInternal(
   const AOperationId: TBleOperationId;
   const AKind: TLazBleBackendCommandKind;
-  const AOnCancel: TLazBleOperationCancelEvent);
+  const AOnCancel: TLazBleOperationCancelEvent; const AGeneration: QWord);
 begin
-  inherited Create(AOperationId, AKind, AOnCancel);
+  inherited Create(AOperationId, AKind, AOnCancel, AGeneration);
 end;
 
 constructor TBleGattOperationAccess.CreateTerminal(
@@ -173,27 +180,35 @@ end;
 procedure TBleGattOperationAccess.HandleEvent(
   const AEvent: TLazBleBackendEvent);
 begin
+  LazBleRequireMainThread;
   HandleBackendEvent(AEvent);
 end;
 
 procedure TBleGattOperationAccess.CancelWithoutBackend;
 begin
+  LazBleRequireMainThread;
   CancelLocally;
 end;
 
+function TBleGattOperationAccess.OperationKind: TLazBleBackendCommandKind;
+begin Result := GetKind; end;
+
 procedure TBleGattOperationAccess.DetachFromSession;
 begin
+  LazBleRequireMainThread;
   DetachOwner;
 end;
 
 function TBleGattOperationAccess.Matches(
   const AOperationId: TBleOperationId): Boolean;
 begin
+  LazBleRequireMainThread;
   Result := MatchesOperationId(AOperationId);
 end;
 
 function TBleGattOperationAccess.OperationId: TBleOperationId;
 begin
+  LazBleRequireMainThread;
   Result := GetOperationId;
 end;
 
@@ -204,61 +219,58 @@ begin
   inherited Create(AOperationId, AGeneration, AUnsubscribe);
 end;
 
-procedure TBleSubscriptionAccess.BeginUnsubscribeInternal(
-  const AOperation: IBleGattOperation);
-begin
-  BeginUnsubscribe(AOperation);
-end;
-
 procedure TBleSubscriptionAccess.HandleEvent(
   const AEvent: TLazBleBackendEvent);
 begin
+  LazBleRequireMainThread;
   HandleBackendEvent(AEvent);
 end;
 
-procedure TBleSubscriptionAccess.InvalidateInternal;
+procedure TBleSubscriptionAccess.InvalidateInternal(const AForce: Boolean);
+begin Invalidate(AForce); end;
+procedure TBleSubscriptionAccess.DetachCallbacksInternal;
+begin DetachCallbacks; end;
+function TBleSubscriptionAccess.CleanupPendingInternal: Boolean;
+begin Result := CleanupPending; end;
+
+procedure TBleSubscriptionAccess.BeginShutdownInternal;
 begin
-  Invalidate;
+  BeginShutdown;
 end;
 
 procedure TBleSubscriptionAccess.DetachFromSession;
 begin
+  LazBleRequireMainThread;
   DetachOwner;
 end;
 
 function TBleSubscriptionAccess.OperationId: TBleOperationId;
 begin
+  LazBleRequireMainThread;
   Result := GetOperationId;
 end;
 
 function TBleSubscriptionAccess.SubscriptionId: TBleSubscriptionId;
 begin
+  LazBleRequireMainThread;
   Result := GetSubscriptionId;
 end;
 
 function TBleGattSession.GetServices: TLazBleGattServices;
 begin
-  EnterCriticalSection(FStateLock);
-  try
-    Result := LazBleCopyGattServices(FServices);
-  finally
-    LeaveCriticalSection(FStateLock);
-  end;
+  LazBleRequireMainThread;
+  Result := FServices;
 end;
 
 function TBleGattSession.HasService(const AServiceUuid: string): Boolean;
 var
   Service: TLazBleGattService;
 begin
-  EnterCriticalSection(FStateLock);
-  try
-    for Service in FServices do
-      if SameText(Service.Uuid, AServiceUuid) then
-        Exit(True);
-    Result := False;
-  finally
-    LeaveCriticalSection(FStateLock);
-  end;
+  LazBleRequireMainThread;
+  for Service in FServices do
+    if SameText(UTF8Encode(Service.Uuid), AServiceUuid) then
+      Exit(True);
+  Result := False;
 end;
 
 function TBleGattSession.TryGetCharacteristic(const AServiceUuid,
@@ -268,112 +280,77 @@ var
   Characteristic: TLazBleGattCharacteristic;
   Service: TLazBleGattService;
 begin
+  LazBleRequireMainThread;
   ACharacteristic := Default(TLazBleGattCharacteristic);
-  EnterCriticalSection(FStateLock);
-  try
-    for Service in FServices do
-      if SameText(Service.Uuid, AServiceUuid) then
-        for Characteristic in Service.Characteristics do
-          if SameText(Characteristic.Uuid, ACharacteristicUuid) then
-          begin
-            ACharacteristic.Uuid := Characteristic.Uuid;
-            ACharacteristic.Properties := Characteristic.Properties;
-            ACharacteristic.Descriptors := Copy(Characteristic.Descriptors);
-            Exit(True);
-          end;
-    Result := False;
-  finally
-    LeaveCriticalSection(FStateLock);
-  end;
+  for Service in FServices do
+    if SameText(UTF8Encode(Service.Uuid), AServiceUuid) then
+      for Characteristic in Service.Characteristics do
+        if SameText(UTF8Encode(Characteristic.Uuid), ACharacteristicUuid) then
+        begin
+          ACharacteristic := Characteristic;
+          Exit(True);
+        end;
+  Result := False;
 end;
 
 function TBleGattSession.GetState: TLazBleSessionState;
 begin
-  EnterCriticalSection(FStateLock);
-  try
-    Result := FState;
-  finally
-    LeaveCriticalSection(FStateLock);
-  end;
+  LazBleRequireMainThread;
+  Result := FState;
 end;
 
 function TBleGattSession.GetErrorCode: Integer;
 begin
-  EnterCriticalSection(FStateLock);
-  try
-    Result := FErrorCode;
-  finally
-    LeaveCriticalSection(FStateLock);
-  end;
+  LazBleRequireMainThread;
+  Result := FErrorCode;
 end;
 
 function TBleGattSession.GetErrorMessage: string;
 begin
-  EnterCriticalSection(FStateLock);
-  try
-    Result := FErrorMessage;
-  finally
-    LeaveCriticalSection(FStateLock);
-  end;
+  LazBleRequireMainThread;
+  Result := FErrorMessage;
 end;
 
 function TBleGattSession.GetGeneration: QWord;
 begin
-  EnterCriticalSection(FStateLock);
-  try
-    Result := FGeneration;
-  finally
-    LeaveCriticalSection(FStateLock);
-  end;
+  LazBleRequireMainThread;
+  Result := FGeneration;
 end;
 
 function TBleGattSession.GetOnStateChanged:
   TLazBleSessionStateChangedEvent;
 begin
-  EnterCriticalSection(FCallbackLock);
-  try
-    Result := FOnStateChanged;
-  finally
-    LeaveCriticalSection(FCallbackLock);
-  end;
+  LazBleRequireMainThread;
+  Result := FOnStateChanged;
 end;
 
 procedure TBleGattSession.SetOnStateChanged(
   const AHandler: TLazBleSessionStateChangedEvent);
 begin
-  EnterCriticalSection(FCallbackLock);
-  try
-    FOnStateChanged := AHandler;
-  finally
-    LeaveCriticalSection(FCallbackLock);
-  end;
+  LazBleRequireMainThread;
+  FOnStateChanged := AHandler;
 end;
 
 procedure TBleGattSession.SetState(const AState: TLazBleSessionState);
 var
   Handler: TLazBleSessionStateChangedEvent;
   Handlers: TLazBleSessionStateChangedEvents;
+  DeliveryGeneration: QWord;
 begin
-  EnterCriticalSection(FStateLock);
-  try
-    if FState = AState then
-      Exit;
-    FState := AState;
-  finally
-    LeaveCriticalSection(FStateLock);
-  end;
-  EnterCriticalSection(FCallbackLock);
-  try
-    Handler := FOnStateChanged;
-    Handlers := Copy(FStateChangedHandlers);
-  finally
-    LeaveCriticalSection(FCallbackLock);
-  end;
+  LazBleRequireMainThread;
+  if FState = AState then
+    Exit;
+  FState := AState;
+  DeliveryGeneration := FGeneration;
+  Handler := FOnStateChanged;
+  Handlers := Copy(FStateChangedHandlers);
   if Assigned(Handler) then
     Handler(Self, AState);
   for Handler in Handlers do
-    if Assigned(Handler) then
-      Handler(Self, AState);
+  begin
+    if (FState <> AState) or (FGeneration <> DeliveryGeneration) then Break;
+    if Assigned(Handler) then Handler(Self, AState);
+  end;
 end;
 
 function SameStateChangedHandler(const AFirst,
@@ -389,19 +366,15 @@ var
   Handler: TLazBleSessionStateChangedEvent;
   Index: Integer;
 begin
+  LazBleRequireMainThread;
   if not Assigned(AHandler) then
     Exit;
-  EnterCriticalSection(FCallbackLock);
-  try
-    for Handler in FStateChangedHandlers do
-      if SameStateChangedHandler(Handler, AHandler) then
-        Exit;
-    Index := Length(FStateChangedHandlers);
-    SetLength(FStateChangedHandlers, Index + 1);
-    FStateChangedHandlers[Index] := AHandler;
-  finally
-    LeaveCriticalSection(FCallbackLock);
-  end;
+  for Handler in FStateChangedHandlers do
+    if SameStateChangedHandler(Handler, AHandler) then
+      Exit;
+  Index := Length(FStateChangedHandlers);
+  SetLength(FStateChangedHandlers, Index + 1);
+  FStateChangedHandlers[Index] := AHandler;
 end;
 
 procedure TBleGattSession.RemoveStateChangedHandler(
@@ -410,21 +383,17 @@ var
   Index: Integer;
   MoveIndex: Integer;
 begin
-  EnterCriticalSection(FCallbackLock);
-  try
-    for Index := 0 to High(FStateChangedHandlers) do
-      if SameStateChangedHandler(FStateChangedHandlers[Index], AHandler) then
-      begin
-        for MoveIndex := Index to High(FStateChangedHandlers) - 1 do
-          FStateChangedHandlers[MoveIndex] :=
-            FStateChangedHandlers[MoveIndex + 1];
-        SetLength(FStateChangedHandlers,
-          Length(FStateChangedHandlers) - 1);
-        Exit;
-      end;
-  finally
-    LeaveCriticalSection(FCallbackLock);
-  end;
+  LazBleRequireMainThread;
+  for Index := 0 to High(FStateChangedHandlers) do
+    if SameStateChangedHandler(FStateChangedHandlers[Index], AHandler) then
+    begin
+      for MoveIndex := Index to High(FStateChangedHandlers) - 1 do
+        FStateChangedHandlers[MoveIndex] :=
+          FStateChangedHandlers[MoveIndex + 1];
+      SetLength(FStateChangedHandlers,
+        Length(FStateChangedHandlers) - 1);
+      Exit;
+    end;
 end;
 
 constructor TBleGattSession.Create(const ADeviceId: string;
@@ -432,9 +401,6 @@ constructor TBleGattSession.Create(const ADeviceId: string;
   const ACancelOperation: TLazBleCancelOperation);
 begin
   inherited Create;
-  InitCriticalSection(FStateLock);
-  InitCriticalSection(FCallbackLock);
-  InitCriticalSection(FEntriesLock);
   FDeviceId := ADeviceId;
   FSubmitCommand := ASubmitCommand;
   FCancelOperation := ACancelOperation;
@@ -444,20 +410,17 @@ begin
 end;
 
 destructor TBleGattSession.Destroy;
+var I: Integer;
 begin
-  InvalidateGattState;
+  for I := 0 to FOperations.Count - 1 do
+    TBleGattOperationEntry(FOperations[I]).Operation.OnCompleted := nil;
+  for I := 0 to FSubscriptions.Count - 1 do
+    TBleSubscriptionAccess(TBleSubscriptionEntry(FSubscriptions[I]).Instance).DetachCallbacksInternal;
+  InvalidateGattState(True);
   SetOnStateChanged(nil);
-  EnterCriticalSection(FCallbackLock);
-  try
-    FStateChangedHandlers := nil;
-  finally
-    LeaveCriticalSection(FCallbackLock);
-  end;
+  FStateChangedHandlers := nil;
   FSubscriptions.Free;
   FOperations.Free;
-  DoneCriticalSection(FEntriesLock);
-  DoneCriticalSection(FCallbackLock);
-  DoneCriticalSection(FStateLock);
   inherited Destroy;
 end;
 
@@ -466,6 +429,7 @@ function TBleGattSession.Submit(
 var
   Command: TLazBleBackendCommand;
 begin
+  LazBleRequireMainThread;
   Result := InvalidBleOperationId;
   if not Assigned(FSubmitCommand) then
     Exit;
@@ -483,23 +447,19 @@ var
   Operation: TBleGattOperationAccess;
   OperationId: TBleOperationId;
 begin
+  LazBleRequireMainThread;
   OperationId := InvalidBleOperationId;
   if (State = lbssConnected) and Assigned(FSubmitCommand) then
     OperationId := FSubmitCommand(ACommand);
   Operation := TBleGattOperationAccess.CreateInternal(OperationId,
-    ACommand.Kind, @OperationCancelled);
+    ACommand.Kind, @OperationCancelled, ACommand.Generation);
   Result := Operation;
   if Operation.State <> lbopPending then
     Exit;
   Entry := TBleGattOperationEntry.Create;
   Entry.Instance := Operation;
   Entry.Operation := Result;
-  EnterCriticalSection(FEntriesLock);
-  try
-    FOperations.Add(Entry);
-  finally
-    LeaveCriticalSection(FEntriesLock);
-  end;
+  FOperations.Add(Entry);
 end;
 
 procedure TBleGattSession.OperationCancelled(Sender: TObject);
@@ -508,20 +468,16 @@ var
   Entry: TBleGattOperationEntry;
   OperationId: TBleOperationId;
 begin
+  LazBleRequireMainThread;
   OperationId := InvalidBleOperationId;
-  EnterCriticalSection(FEntriesLock);
-  try
-    for Index := 0 to FOperations.Count - 1 do
+  for Index := 0 to FOperations.Count - 1 do
+  begin
+    Entry := TBleGattOperationEntry(FOperations[Index]);
+    if Entry.Instance = Sender then
     begin
-      Entry := TBleGattOperationEntry(FOperations[Index]);
-      if Entry.Instance = Sender then
-      begin
-        OperationId := TBleGattOperationAccess(Entry.Instance).OperationId;
-        Break;
-      end;
+      OperationId := TBleGattOperationAccess(Entry.Instance).OperationId;
+      Break;
     end;
-  finally
-    LeaveCriticalSection(FEntriesLock);
   end;
   if (OperationId <> InvalidBleOperationId) and Assigned(FCancelOperation) then
     FCancelOperation(OperationId)
@@ -534,6 +490,7 @@ function TBleGattSession.ReadAsync(
 var
   Command: TLazBleBackendCommand;
 begin
+  LazBleRequireMainThread;
   Command := Default(TLazBleBackendCommand);
   Command.Kind := lbckRead;
   Command.Generation := Generation;
@@ -549,13 +506,14 @@ function TBleGattSession.WriteAsync(
 var
   Command: TLazBleBackendCommand;
 begin
+  LazBleRequireMainThread;
   Command := Default(TLazBleBackendCommand);
   Command.Kind := lbckWrite;
   Command.Generation := Generation;
   Command.DeviceId := FDeviceId;
   Command.ServiceUuid := AServiceUuid;
   Command.CharacteristicUuid := ACharacteristicUuid;
-  Command.Value := Copy(AValue);
+  Command.Value := AValue; { backend copies the buffer at Submit }
   Command.WriteMode := AWriteMode;
   Result := SubmitGattCommand(Command);
 end;
@@ -568,6 +526,7 @@ var
   OperationId: TBleOperationId;
   Subscription: TBleSubscriptionAccess;
 begin
+  LazBleRequireMainThread;
   Command := Default(TLazBleBackendCommand);
   Command.Kind := lbckSubscribe;
   Command.Generation := Generation;
@@ -585,12 +544,7 @@ begin
   Entry := TBleSubscriptionEntry.Create;
   Entry.Instance := Subscription;
   Entry.Subscription := Result;
-  EnterCriticalSection(FEntriesLock);
-  try
-    FSubscriptions.Add(Entry);
-  finally
-    LeaveCriticalSection(FEntriesLock);
-  end;
+  FSubscriptions.Add(Entry);
 end;
 
 function TBleGattSession.UnsubscribeSubscription(
@@ -598,15 +552,12 @@ function TBleGattSession.UnsubscribeSubscription(
 var
   Command: TLazBleBackendCommand;
 begin
-  if ASubscription.State = lbsubPending then
+  LazBleRequireMainThread;
+  if TBleSubscriptionAccess(ASubscription).SubscriptionId = InvalidBleSubscriptionId then
   begin
     if Assigned(FCancelOperation) then
-      FCancelOperation(
-        TBleSubscriptionAccess(ASubscription).OperationId);
-    Result := TBleGattOperationAccess.CreateTerminal(
-      lbckUnsubscribe, lbopSucceeded);
-    TBleSubscriptionAccess(ASubscription).BeginUnsubscribeInternal(Result);
-    Exit;
+      FCancelOperation(TBleSubscriptionAccess(ASubscription).OperationId);
+    Exit(nil); { Wait for the actual Notify outcome; the token chains cleanup. }
   end;
   Command := Default(TLazBleBackendCommand);
   Command.Kind := lbckUnsubscribe;
@@ -615,144 +566,138 @@ begin
   Command.SubscriptionId :=
     TBleSubscriptionAccess(ASubscription).SubscriptionId;
   Result := SubmitGattCommand(Command);
-  TBleSubscriptionAccess(ASubscription).BeginUnsubscribeInternal(Result);
 end;
 
-procedure TBleGattSession.InvalidateGattState;
+procedure TBleGattSession.InvalidateGattState(const AForce: Boolean);
 var
-  OperationEntry: TBleGattOperationEntry;
-  SubscriptionEntry: TBleSubscriptionEntry;
+  OpEntry: TBleGattOperationEntry;
+  SubEntry: TBleSubscriptionEntry;
   Operations: TBleGattOperationInterfaces;
-  OperationObjects: TBleGattOperationObjects;
+  Instances: TBleGattOperationObjects;
   Subscriptions: TBleSubscriptionInterfaces;
-  SubscriptionObjects: TBleSubscriptionObjects;
-  Index: Integer;
+  Tokens: TBleSubscriptionObjects;
+  I, J: Integer;
 begin
-  Operations := nil;
-  OperationObjects := nil;
-  Subscriptions := nil;
-  SubscriptionObjects := nil;
-  EnterCriticalSection(FStateLock);
-  try
-    FServices := nil;
-  finally
-    LeaveCriticalSection(FStateLock);
-  end;
-  EnterCriticalSection(FEntriesLock);
-  try
-    SetLength(Operations, FOperations.Count);
-    SetLength(OperationObjects, FOperations.Count);
-    for Index := 0 to FOperations.Count - 1 do
-    begin
-      OperationEntry := TBleGattOperationEntry(FOperations[Index]);
-      Operations[Index] := OperationEntry.Operation;
-      OperationObjects[Index] := OperationEntry.Instance;
-      OperationEntry.Free;
-    end;
-    FOperations.Clear;
-    SetLength(Subscriptions, FSubscriptions.Count);
-    SetLength(SubscriptionObjects, FSubscriptions.Count);
-    for Index := 0 to FSubscriptions.Count - 1 do
-    begin
-      SubscriptionEntry := TBleSubscriptionEntry(FSubscriptions[Index]);
-      Subscriptions[Index] := SubscriptionEntry.Subscription;
-      SubscriptionObjects[Index] := SubscriptionEntry.Instance;
-      SubscriptionEntry.Free;
-    end;
-    FSubscriptions.Clear;
-  finally
-    LeaveCriticalSection(FEntriesLock);
-  end;
-  for Index := 0 to High(OperationObjects) do
+  LazBleRequireMainThread;
+  FServices := nil;
+  SetLength(Operations,FOperations.Count); SetLength(Instances,FOperations.Count);
+  for I := 0 to FOperations.Count - 1 do
   begin
-    TBleGattOperationAccess(OperationObjects[Index]).DetachFromSession;
-    TBleGattOperationAccess(OperationObjects[Index]).CancelWithoutBackend;
+    OpEntry := TBleGattOperationEntry(FOperations[I]);
+    Operations[I] := OpEntry.Operation; Instances[I] := OpEntry.Instance;
   end;
-  for Index := 0 to High(SubscriptionObjects) do
-    TBleSubscriptionAccess(SubscriptionObjects[Index]).InvalidateInternal;
+  for I := 0 to High(Operations) do
+    if AForce then
+    begin
+      TBleGattOperationAccess(Instances[I]).DetachFromSession;
+      TBleGattOperationAccess(Instances[I]).CancelWithoutBackend;
+      for J := FOperations.Count - 1 downto 0 do
+      begin
+        OpEntry := TBleGattOperationEntry(FOperations[J]);
+        if OpEntry.Instance <> Instances[I] then Continue;
+        FOperations.Delete(J); OpEntry.Free; Break;
+      end;
+    end
+    else Operations[I].Cancel; { queued calls skip, in-flight calls retain real outcomes }
+  SetLength(Subscriptions,FSubscriptions.Count); SetLength(Tokens,FSubscriptions.Count);
+  for I := 0 to FSubscriptions.Count - 1 do
+  begin
+    SubEntry := TBleSubscriptionEntry(FSubscriptions[I]);
+    Subscriptions[I] := SubEntry.Subscription; Tokens[I] := SubEntry.Instance;
+  end;
+  for I := 0 to High(Tokens) do
+  begin
+    TBleSubscriptionAccess(Tokens[I]).InvalidateInternal(AForce);
+    if TBleSubscriptionAccess(Tokens[I]).CleanupPendingInternal then Continue;
+    for J := FSubscriptions.Count - 1 downto 0 do
+    begin
+      SubEntry := TBleSubscriptionEntry(FSubscriptions[J]);
+      if SubEntry.Instance <> Tokens[I] then Continue;
+      FSubscriptions.Delete(J); SubEntry.Free; Break;
+    end;
+  end;
 end;
 
 function TBleGattSession.Connect: TBleOperationId;
 begin
+  LazBleRequireMainThread;
   Result := InvalidBleOperationId;
   if not (State in [lbssDisconnected, lbssError]) then
     Exit;
 
-  EnterCriticalSection(FStateLock);
-  try
-    FServices := nil;
-    FErrorCode := 0;
-    FErrorMessage := '';
-    Inc(FGeneration);
-  finally
-    LeaveCriticalSection(FStateLock);
-  end;
+  FServices := nil;
+  FErrorCode := 0;
+  FErrorMessage := '';
+  Inc(FGeneration);
   Result := Submit(lbckConnect);
   if Result = InvalidBleOperationId then
   begin
     SetState(lbssError);
     Exit;
   end;
+  FLastOperationCancelled := False;
+  FLastOperationFailed := False;
+  FConnectionEstablished := False;
   FConnectOperationId := Result;
   SetState(lbssConnecting);
 end;
 
 function TBleGattSession.Disconnect: TBleOperationId;
 begin
+  LazBleRequireMainThread;
   Result := InvalidBleOperationId;
   if not (State in [lbssConnecting, lbssDiscovering, lbssConnected,
     lbssError]) then
     Exit;
 
-  EnterCriticalSection(FStateLock);
-  try
-    FErrorCode := 0;
-    FErrorMessage := '';
-  finally
-    LeaveCriticalSection(FStateLock);
-  end;
+  FErrorCode := 0;
+  FErrorMessage := '';
   Result := Submit(lbckDisconnect);
   if Result = InvalidBleOperationId then
     Exit;
+  FLastOperationCancelled := False;
+  FLastOperationFailed := False;
   FDisconnectOperationId := Result;
   SetState(lbssDisconnecting);
 end;
 
-procedure TBleGattSession.HandleTerminalEvent(
-  const AEvent: TLazBleBackendEvent);
+procedure TBleGattSession.CancelConnect;
 begin
-  if AEvent.Kind = lbekOperationSucceeded then
-    Exit;
+  LazBleRequireMainThread;
+  if not Assigned(FCancelOperation) then Exit;
+  if State = lbssConnecting then FCancelOperation(FConnectOperationId)
+  else if State = lbssDiscovering then FCancelOperation(FDiscoveryOperationId);
+end;
 
-  if (AEvent.Kind = lbekOperationFailed) and
-    ((AEvent.OperationId = FConnectOperationId) or
+procedure TBleGattSession.CancelDisconnect;
+begin
+  LazBleRequireMainThread;
+  if (State = lbssDisconnecting) and Assigned(FCancelOperation) then
+    FCancelOperation(FDisconnectOperationId);
+end;
+
+procedure TBleGattSession.HandleTerminalEvent(const AEvent: TLazBleBackendEvent);
+begin
+  LazBleRequireMainThread;
+  if AEvent.Kind = lbekOperationSucceeded then Exit;
+  if not ((AEvent.OperationId = FConnectOperationId) or
     (AEvent.OperationId = FDiscoveryOperationId) or
-    (AEvent.OperationId = FDisconnectOperationId)) then
+    (AEvent.OperationId = FDisconnectOperationId)) then Exit;
+  FLastOperationCancelled := AEvent.Kind = lbekOperationCancelled;
+  FLastOperationFailed := AEvent.Kind = lbekOperationFailed;
+  FErrorCode := AEvent.ErrorCode;
+  FErrorMessage := AEvent.ErrorMessage;
+  if FLastOperationCancelled then
   begin
-    EnterCriticalSection(FStateLock);
-    try
-      FErrorCode := AEvent.ErrorCode;
-      FErrorMessage := AEvent.ErrorMessage;
-    finally
-      LeaveCriticalSection(FStateLock);
-    end;
-  end;
-
-  if (AEvent.OperationId = FConnectOperationId) or
-    (AEvent.OperationId = FDiscoveryOperationId) then
-  begin
-    if AEvent.Kind = lbekOperationCancelled then
-      SetState(lbssDisconnected)
-    else
-      SetState(lbssError);
-  end
-  else if AEvent.OperationId = FDisconnectOperationId then
-  begin
-    if AEvent.Kind = lbekOperationFailed then
+    if AEvent.OperationId = FDisconnectOperationId then
+      if FConnectionEstablished then SetState(lbssConnected) else SetState(lbssDisconnected)
+    else if FConnectionEstablished then
+      { Discovery was cancelled, but the native connection remains. An explicit
+        Disconnect is available from Error; do not simulate a disconnect. }
       SetState(lbssError)
-    else
-      SetState(lbssDisconnected);
-  end;
+    else SetState(lbssDisconnected);
+  end
+  else SetState(lbssError);
 end;
 
 procedure TBleGattSession.HandleBackendEvent(
@@ -767,87 +712,100 @@ var
   RemoveIndex: Integer;
   Index: Integer;
 begin
+  LazBleRequireMainThread;
   Operations := nil;
   OperationObjects := nil;
   Subscriptions := nil;
   SubscriptionObjects := nil;
   if (AEvent.DeviceId <> '') and (AEvent.DeviceId <> FDeviceId) then
     Exit;
-  if (AEvent.Generation <> 0) and (AEvent.Generation <> Generation) then
-    Exit;
 
-  EnterCriticalSection(FEntriesLock);
-  try
-    SetLength(Operations, FOperations.Count);
-    SetLength(OperationObjects, FOperations.Count);
-    for Index := 0 to FOperations.Count - 1 do
-    begin
-      OperationEntry := TBleGattOperationEntry(FOperations[Index]);
-      Operations[Index] := OperationEntry.Operation;
-      OperationObjects[Index] := OperationEntry.Instance;
-    end;
-    SetLength(Subscriptions, FSubscriptions.Count);
-    SetLength(SubscriptionObjects, FSubscriptions.Count);
-    for Index := 0 to FSubscriptions.Count - 1 do
-    begin
-      SubscriptionEntry := TBleSubscriptionEntry(FSubscriptions[Index]);
-      Subscriptions[Index] := SubscriptionEntry.Subscription;
-      SubscriptionObjects[Index] := SubscriptionEntry.Instance;
-    end;
-  finally
-    LeaveCriticalSection(FEntriesLock);
+  SetLength(Operations, FOperations.Count);
+  SetLength(OperationObjects, FOperations.Count);
+  for Index := 0 to FOperations.Count - 1 do
+  begin
+    OperationEntry := TBleGattOperationEntry(FOperations[Index]);
+    Operations[Index] := OperationEntry.Operation;
+    OperationObjects[Index] := OperationEntry.Instance;
+  end;
+  SetLength(Subscriptions, FSubscriptions.Count);
+  SetLength(SubscriptionObjects, FSubscriptions.Count);
+  for Index := 0 to FSubscriptions.Count - 1 do
+  begin
+    SubscriptionEntry := TBleSubscriptionEntry(FSubscriptions[Index]);
+    Subscriptions[Index] := SubscriptionEntry.Subscription;
+    SubscriptionObjects[Index] := SubscriptionEntry.Instance;
   end;
 
   for Index := 0 to High(OperationObjects) do
   begin
+    if (TBleGattOperationAccess(OperationObjects[Index]).OperationKind = lbckUnsubscribe) and
+      (AEvent.OperationId = TBleGattOperationAccess(OperationObjects[Index]).OperationId) and
+      (AEvent.Kind in [lbekOperationFailed, lbekOperationCancelled]) then
+    begin
+      if (State = lbssConnected) and
+        (TBleGattOperationAccess(OperationObjects[Index]).OperationGeneration = Generation) then
+      begin
+        Disconnect;
+        FLastOperationFailed := True;
+        FErrorCode := AEvent.ErrorCode;
+        FErrorMessage := AEvent.ErrorMessage;
+      end;
+    end;
     TBleGattOperationAccess(OperationObjects[Index]).HandleEvent(AEvent);
     if OperationObjects[Index].State = lbopPending then
       Continue;
     TBleGattOperationAccess(OperationObjects[Index]).DetachFromSession;
-    EnterCriticalSection(FEntriesLock);
-    try
-      for RemoveIndex := FOperations.Count - 1 downto 0 do
-      begin
-        OperationEntry := TBleGattOperationEntry(FOperations[RemoveIndex]);
-        if OperationEntry.Instance <> OperationObjects[Index] then
-          Continue;
-        FOperations.Delete(RemoveIndex);
-        OperationEntry.Free;
-        Break;
-      end;
-    finally
-      LeaveCriticalSection(FEntriesLock);
+    for RemoveIndex := FOperations.Count - 1 downto 0 do
+    begin
+      OperationEntry := TBleGattOperationEntry(FOperations[RemoveIndex]);
+      if OperationEntry.Instance <> OperationObjects[Index] then
+        Continue;
+      FOperations.Delete(RemoveIndex);
+      OperationEntry.Free;
+      Break;
     end;
   end;
   for Index := 0 to High(SubscriptionObjects) do
   begin
     TBleSubscriptionAccess(SubscriptionObjects[Index]).HandleEvent(AEvent);
     if not (SubscriptionObjects[Index].State in
-      [lbsubInactive, lbsubFailed]) then
+      [lbsubInactive, lbsubFailed]) or
+      TBleSubscriptionAccess(SubscriptionObjects[Index]).CleanupPendingInternal then
       Continue;
     TBleSubscriptionAccess(SubscriptionObjects[Index]).DetachFromSession;
-    EnterCriticalSection(FEntriesLock);
-    try
-      for RemoveIndex := FSubscriptions.Count - 1 downto 0 do
-      begin
-        SubscriptionEntry := TBleSubscriptionEntry(
-          FSubscriptions[RemoveIndex]);
-        if SubscriptionEntry.Instance <> SubscriptionObjects[Index] then
-          Continue;
-        FSubscriptions.Delete(RemoveIndex);
-        SubscriptionEntry.Free;
-        Break;
-      end;
-    finally
-      LeaveCriticalSection(FEntriesLock);
+    for RemoveIndex := FSubscriptions.Count - 1 downto 0 do
+    begin
+      SubscriptionEntry := TBleSubscriptionEntry(
+        FSubscriptions[RemoveIndex]);
+      if SubscriptionEntry.Instance <> SubscriptionObjects[Index] then
+        Continue;
+      FSubscriptions.Delete(RemoveIndex);
+      SubscriptionEntry.Free;
+      Break;
     end;
   end;
 
+  { Command IDs/own generations route late results before the current-session
+    filter. Reconnecting must not orphan an accepted old command. }
+  if (AEvent.Generation <> 0) and (AEvent.Generation <> Generation) then Exit;
+  if FShuttingDown then
+  begin
+    { A requested Disconnect still reports a real failure/cancellation. Other
+      session pipelines close at ShutdownCompleted without starting discovery. }
+    if (AEvent.OperationId = FDisconnectOperationId) and
+      (AEvent.Kind in [lbekOperationFailed, lbekOperationCancelled]) then
+      HandleTerminalEvent(AEvent);
+    Exit;
+  end;
   case AEvent.Kind of
     lbekConnected:
       if (State = lbssConnecting) and
         (AEvent.OperationId = FConnectOperationId) then
       begin
+        FConnectionEstablished := True;
+        FLastOperationCancelled := False;
+        FLastOperationFailed := False;
         FDiscoveryOperationId := Submit(lbckDiscoverServices);
         if FDiscoveryOperationId = InvalidBleOperationId then
           SetState(lbssError)
@@ -858,30 +816,40 @@ begin
       if (State = lbssDiscovering) and
         (AEvent.OperationId = FDiscoveryOperationId) then
       begin
-        EnterCriticalSection(FStateLock);
-        try
-          FServices := LazBleCopyGattServices(AEvent.Services);
-        finally
-          LeaveCriticalSection(FStateLock);
-        end;
+        FServices := AEvent.Services;
         SetState(lbssConnected);
       end;
     lbekDisconnected:
       if State <> lbssDisconnected then
       begin
-        InvalidateGattState;
+        FConnectionEstablished := False;
+        FLastOperationCancelled := False;
+        FServices := nil;
         SetState(lbssDisconnected);
+        InvalidateGattState;
       end;
     lbekOperationSucceeded,
     lbekOperationFailed,
     lbekOperationCancelled:
       HandleTerminalEvent(AEvent);
   end;
+
+end;
+
+procedure TBleGattSession.PrepareShutdown;
+var I: Integer;
+begin
+  LazBleRequireMainThread;
+  FShuttingDown := True;
+  for I := 0 to FSubscriptions.Count - 1 do
+    TBleSubscriptionAccess(TBleSubscriptionEntry(FSubscriptions[I]).Instance).BeginShutdownInternal;
 end;
 
 procedure TBleGattSession.HandleBackendShutdown;
 begin
-  InvalidateGattState;
+  LazBleRequireMainThread;
+  FConnectionEstablished := False;
+  InvalidateGattState(True);
   FSubmitCommand := nil;
   FCancelOperation := nil;
   SetState(lbssDisconnected);

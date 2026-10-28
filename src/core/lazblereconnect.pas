@@ -12,8 +12,8 @@ uses
 type
   TLazBleReconnectTimerEvent = procedure of object;
 
-  { Timer supplied to a reconnect controller. Start replaces the pending
-    callback; Cancel prevents a scheduled callback from firing. }
+  { Main-thread API and callback. Start replaces the pending action; Cancel
+    also removes an elapsed action queued for main-thread delivery. }
   ILazBleReconnectTimer = interface
     ['{CC96705B-0E67-4995-B8FB-BC617A0CC483}']
     procedure Start(const ADelayMs: Cardinal;
@@ -29,7 +29,6 @@ type
   { Calculates retry delays and tracks attempts for one client. }
   TLazBleReconnectController = class
   private
-    FLock: TRTLCriticalSection;
     FTimer: ILazBleReconnectTimer;
     FOptions: TLazBleReconnectOptions;
     FEnabled: Boolean;
@@ -74,44 +73,32 @@ uses
   SyncObjs;
 
 type
-  ILazBleReconnectTimerInternal = interface
-    ['{A423B289-DA75-49A8-8316-884714AA8C0C}']
-    procedure Fire;
-  end;
-
   TLazBleThreadReconnectTimer = class;
-
   TLazBleReconnectTimerThread = class(TThread)
   private
+    FOwner: TLazBleThreadReconnectTimer;
     FDelayMs: Cardinal;
-    FOwner: ILazBleReconnectTimerInternal;
     FWakeEvent: TEvent;
   protected
     procedure Execute; override;
   public
-    constructor Create(const ADelayMs: Cardinal;
-      const AOwner: ILazBleReconnectTimerInternal);
+    constructor Create(ADelayMs: Cardinal; AOwner: TLazBleThreadReconnectTimer);
     destructor Destroy; override;
     procedure Cancel;
   end;
 
-  TLazBleThreadReconnectTimer = class(TInterfacedObject,
-    ILazBleReconnectTimer, ILazBleReconnectTimerInternal)
+  TLazBleThreadReconnectTimer = class(TInterfacedObject, ILazBleReconnectTimer)
   private
-    FLock: TRTLCriticalSection;
     FThread: TLazBleReconnectTimerThread;
     FHandler: TLazBleReconnectTimerEvent;
     procedure Fire;
   public
-    constructor Create;
     destructor Destroy; override;
-    procedure Start(const ADelayMs: Cardinal;
-      const AHandler: TLazBleReconnectTimerEvent);
+    procedure Start(const ADelayMs: Cardinal; const AHandler: TLazBleReconnectTimerEvent);
     procedure Cancel;
   end;
 
-  TLazBleThreadReconnectTimerFactory = class(TInterfacedObject,
-    ILazBleReconnectTimerFactory)
+  TLazBleThreadReconnectTimerFactory = class(TInterfacedObject, ILazBleReconnectTimerFactory)
   public
     function CreateTimer: ILazBleReconnectTimer;
   end;
@@ -122,7 +109,6 @@ begin
   inherited Create;
   if not Assigned(ATimer) then
     raise EArgumentNilException.Create('ATimer');
-  InitCriticalSection(FLock);
   FTimer := ATimer;
   FOptions := TLazBleReconnectOptions.Create(1000, 30000, 5);
 end;
@@ -132,85 +118,57 @@ begin
   SetOnElapsed(nil);
   Disable;
   FTimer := nil;
-  DoneCriticalSection(FLock);
   inherited Destroy;
 end;
 
 function TLazBleReconnectController.GetEnabled: Boolean;
 begin
-  EnterCriticalSection(FLock);
-  try
-    Result := FEnabled;
-  finally
-    LeaveCriticalSection(FLock);
-  end;
+  LazBleRequireMainThread;
+  Result := FEnabled;
 end;
 
 function TLazBleReconnectController.GetWaiting: Boolean;
 begin
-  EnterCriticalSection(FLock);
-  try
-    Result := FWaiting;
-  finally
-    LeaveCriticalSection(FLock);
-  end;
+  LazBleRequireMainThread;
+  Result := FWaiting;
 end;
 
 function TLazBleReconnectController.GetAttempt: Cardinal;
 begin
-  EnterCriticalSection(FLock);
-  try
-    Result := FAttempt;
-  finally
-    LeaveCriticalSection(FLock);
-  end;
+  LazBleRequireMainThread;
+  Result := FAttempt;
 end;
 
 function TLazBleReconnectController.GetDelayMs: Cardinal;
 begin
-  EnterCriticalSection(FLock);
-  try
-    Result := FDelayMs;
-  finally
-    LeaveCriticalSection(FLock);
-  end;
+  LazBleRequireMainThread;
+  Result := FDelayMs;
 end;
 
 function TLazBleReconnectController.GetOptions: TLazBleReconnectOptions;
 begin
-  EnterCriticalSection(FLock);
-  try
-    Result := FOptions;
-  finally
-    LeaveCriticalSection(FLock);
-  end;
+  LazBleRequireMainThread;
+  Result := FOptions;
 end;
 
 function TLazBleReconnectController.GetOnElapsed:
   TLazBleReconnectTimerEvent;
 begin
-  EnterCriticalSection(FLock);
-  try
-    Result := FOnElapsed;
-  finally
-    LeaveCriticalSection(FLock);
-  end;
+  LazBleRequireMainThread;
+  Result := FOnElapsed;
 end;
 
 procedure TLazBleReconnectController.SetOnElapsed(
   const AHandler: TLazBleReconnectTimerEvent);
 begin
-  EnterCriticalSection(FLock);
-  try
-    FOnElapsed := AHandler;
-  finally
-    LeaveCriticalSection(FLock);
-  end;
+  LazBleRequireMainThread;
+  FOnElapsed := AHandler;
 end;
 
 procedure TLazBleReconnectController.ValidateOptions(
   const AOptions: TLazBleReconnectOptions);
 begin
+  LazBleRequireMainThread;
   if AOptions.InitialDelayMs = 0 then
     raise EArgumentOutOfRangeException.Create('InitialDelayMs');
   if AOptions.MaximumDelayMs < AOptions.InitialDelayMs then
@@ -222,58 +180,38 @@ end;
 procedure TLazBleReconnectController.SetOptions(
   const AOptions: TLazBleReconnectOptions);
 begin
+  LazBleRequireMainThread;
   ValidateOptions(AOptions);
   Cancel;
-  EnterCriticalSection(FLock);
-  try
-    FOptions := AOptions;
-    FAttempt := 0;
-  finally
-    LeaveCriticalSection(FLock);
-  end;
+  FOptions := AOptions;
+  FAttempt := 0;
 end;
 
 procedure TLazBleReconnectController.Enable;
 begin
-  EnterCriticalSection(FLock);
-  try
-    FEnabled := True;
-  finally
-    LeaveCriticalSection(FLock);
-  end;
+  LazBleRequireMainThread;
+  FEnabled := True;
 end;
 
 procedure TLazBleReconnectController.Disable;
 begin
-  EnterCriticalSection(FLock);
-  try
-    FEnabled := False;
-  finally
-    LeaveCriticalSection(FLock);
-  end;
+  LazBleRequireMainThread;
+  FEnabled := False;
   Reset;
 end;
 
 procedure TLazBleReconnectController.Reset;
 begin
+  LazBleRequireMainThread;
   Cancel;
-  EnterCriticalSection(FLock);
-  try
-    FAttempt := 0;
-    FDelayMs := 0;
-  finally
-    LeaveCriticalSection(FLock);
-  end;
+  FAttempt := 0;
+  FDelayMs := 0;
 end;
 
 procedure TLazBleReconnectController.Cancel;
 begin
-  EnterCriticalSection(FLock);
-  try
-    FWaiting := False;
-  finally
-    LeaveCriticalSection(FLock);
-  end;
+  LazBleRequireMainThread;
+  FWaiting := False;
   FTimer.Cancel;
 end;
 
@@ -282,28 +220,24 @@ var
   ScheduledDelayMs: Cardinal;
   DoubledDelay: QWord;
 begin
-  EnterCriticalSection(FLock);
-  try
-    Result := FEnabled and not FWaiting and
-      (FAttempt < FOptions.MaximumAttempts);
-    if not Result then
-      Exit;
-    Inc(FAttempt);
-    if FAttempt = 1 then
-      FDelayMs := FOptions.InitialDelayMs
+  LazBleRequireMainThread;
+  Result := FEnabled and not FWaiting and
+    (FAttempt < FOptions.MaximumAttempts);
+  if not Result then
+    Exit;
+  Inc(FAttempt);
+  if FAttempt = 1 then
+    FDelayMs := FOptions.InitialDelayMs
+  else
+  begin
+    DoubledDelay := QWord(FDelayMs) * 2;
+    if DoubledDelay > FOptions.MaximumDelayMs then
+      FDelayMs := FOptions.MaximumDelayMs
     else
-    begin
-      DoubledDelay := QWord(FDelayMs) * 2;
-      if DoubledDelay > FOptions.MaximumDelayMs then
-        FDelayMs := FOptions.MaximumDelayMs
-      else
-        FDelayMs := Cardinal(DoubledDelay);
-    end;
-    FWaiting := True;
-    ScheduledDelayMs := FDelayMs;
-  finally
-    LeaveCriticalSection(FLock);
+      FDelayMs := Cardinal(DoubledDelay);
   end;
+  FWaiting := True;
+  ScheduledDelayMs := FDelayMs;
   FTimer.Start(ScheduledDelayMs, @TimerElapsed);
 end;
 
@@ -311,24 +245,19 @@ procedure TLazBleReconnectController.TimerElapsed;
 var
   Handler: TLazBleReconnectTimerEvent;
 begin
-  EnterCriticalSection(FLock);
-  try
-    if not FEnabled or not FWaiting then
-      Exit;
-    FWaiting := False;
-    Handler := FOnElapsed;
-  finally
-    LeaveCriticalSection(FLock);
-  end;
+  LazBleRequireMainThread;
+  if not FEnabled or not FWaiting then
+    Exit;
+  FWaiting := False;
+  Handler := FOnElapsed;
   if Assigned(Handler) then
     Handler;
 end;
 
-constructor TLazBleReconnectTimerThread.Create(const ADelayMs: Cardinal;
-  const AOwner: ILazBleReconnectTimerInternal);
+constructor TLazBleReconnectTimerThread.Create(ADelayMs: Cardinal;
+  AOwner: TLazBleThreadReconnectTimer);
 begin
   inherited Create(True);
-  FreeOnTerminate := False;
   FDelayMs := ADelayMs;
   FOwner := AOwner;
   FWakeEvent := TEvent.Create(nil, True, False, '');
@@ -347,90 +276,54 @@ begin
 end;
 
 procedure TLazBleReconnectTimerThread.Execute;
-var
-  Owner: ILazBleReconnectTimerInternal;
 begin
   if (FWakeEvent.WaitFor(FDelayMs) = wrTimeout) and not Terminated then
-  begin
-    Owner := FOwner;
-    if Assigned(Owner) then
-      Owner.Fire;
-    Owner := nil;
-  end;
-  FOwner := nil;
-end;
-
-constructor TLazBleThreadReconnectTimer.Create;
-begin
-  inherited Create;
-  InitCriticalSection(FLock);
+    TThread.Queue(Self, @FOwner.Fire);
 end;
 
 destructor TLazBleThreadReconnectTimer.Destroy;
 begin
   Cancel;
-  DoneCriticalSection(FLock);
   inherited Destroy;
 end;
 
 procedure TLazBleThreadReconnectTimer.Start(const ADelayMs: Cardinal;
   const AHandler: TLazBleReconnectTimerEvent);
-var
-  Owner: ILazBleReconnectTimerInternal;
 begin
-  if ADelayMs = 0 then
-    raise EArgumentOutOfRangeException.Create('ADelayMs');
-  if not Assigned(AHandler) then
-    raise EArgumentNilException.Create('AHandler');
+  LazBleRequireMainThread;
+  if ADelayMs = 0 then raise EArgumentOutOfRangeException.Create('ADelayMs');
+  if not Assigned(AHandler) then raise EArgumentNilException.Create('AHandler');
   Cancel;
-  EnterCriticalSection(FLock);
-  try
-    FHandler := AHandler;
-    Owner := Self;
-    FThread := TLazBleReconnectTimerThread.Create(ADelayMs, Owner);
-    FThread.Start;
-  finally
-    LeaveCriticalSection(FLock);
-  end;
+  FHandler := AHandler;
+  FThread := TLazBleReconnectTimerThread.Create(ADelayMs, Self);
+  FThread.Start;
 end;
 
 procedure TLazBleThreadReconnectTimer.Cancel;
 var
   TimerThread: TLazBleReconnectTimerThread;
 begin
-  EnterCriticalSection(FLock);
-  try
-    FHandler := nil;
-    TimerThread := FThread;
-    FThread := nil;
-  finally
-    LeaveCriticalSection(FLock);
-  end;
-  if not Assigned(TimerThread) then
-    Exit;
+  LazBleRequireMainThread;
+  FHandler := nil;
+  TimerThread := FThread;
+  FThread := nil;
+  if TimerThread = nil then Exit;
   TimerThread.Cancel;
-  if TimerThread.ThreadID = GetCurrentThreadId then
-    TimerThread.FreeOnTerminate := True
-  else
-  begin
-    TimerThread.WaitFor;
-    TimerThread.Free;
-  end;
+  { The worker only waits/queues and never Synchronizes or calls a client.
+    Join before removing its queue entry, including Queue racing with Cancel. }
+  TimerThread.WaitFor;
+  TThread.RemoveQueuedEvents(TimerThread);
+  TimerThread.Free;
 end;
 
 procedure TLazBleThreadReconnectTimer.Fire;
 var
   Handler: TLazBleReconnectTimerEvent;
 begin
-  EnterCriticalSection(FLock);
-  try
-    Handler := FHandler;
-    FHandler := nil;
-  finally
-    LeaveCriticalSection(FLock);
-  end;
-  if Assigned(Handler) then
-    Handler;
+  LazBleRequireMainThread;
+  Handler := FHandler;
+  FHandler := nil;
+  if Assigned(Handler) then Handler;
 end;
 
 function TLazBleThreadReconnectTimerFactory.CreateTimer:

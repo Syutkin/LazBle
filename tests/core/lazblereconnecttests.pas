@@ -5,7 +5,7 @@ unit LazBleReconnectTests;
 interface
 
 uses
-  SysUtils,
+  Classes, SysUtils,
   fpcunit,
   testregistry,
   LazBleTypes,
@@ -19,6 +19,7 @@ type
     FTimerObject: TFakeLazBleReconnectTimer;
     FController: TLazBleReconnectController;
     FElapsedCount: Integer;
+    FElapsedThread: TThreadID;
     procedure Elapsed;
   protected
     procedure SetUp; override;
@@ -31,6 +32,9 @@ type
     procedure DisableCancelsPendingTimer;
     procedure RejectsInvalidOptions;
     procedure DefaultTimerIsCancelledWithController;
+    procedure DefaultTimerDeliversOnMainThread;
+    procedure CancelDropsExpiredQueuedAction;
+    procedure DestroyDropsExpiredQueuedAction;
   end;
 
 implementation
@@ -38,6 +42,7 @@ implementation
 procedure TLazBleReconnectControllerTest.Elapsed;
 begin
   Inc(FElapsedCount);
+  FElapsedThread := GetCurrentThreadID;
 end;
 
 procedure TLazBleReconnectControllerTest.SetUp;
@@ -167,6 +172,36 @@ begin
   Controller.Free;
 
   AssertEquals(0, FElapsedCount);
+end;
+
+procedure TLazBleReconnectControllerTest.DefaultTimerDeliversOnMainThread;
+var Timer: ILazBleReconnectTimer; Deadline: QWord;
+begin
+  Timer := LazBleCreateDefaultReconnectTimerFactory.CreateTimer;
+  Timer.Start(1,@Elapsed); Deadline := GetTickCount64+2000;
+  while (FElapsedCount=0) and (GetTickCount64<Deadline) do CheckSynchronize(5);
+  AssertEquals(1,FElapsedCount);
+  AssertEquals(QWord(MainThreadID),QWord(FElapsedThread));
+end;
+
+procedure TLazBleReconnectControllerTest.CancelDropsExpiredQueuedAction;
+var Timer: ILazBleReconnectTimer;
+begin
+  Timer := LazBleCreateDefaultReconnectTimerFactory.CreateTimer;
+  Timer.Start(1,@Elapsed); Sleep(100); { expire without processing the main queue }
+  Timer.Cancel; CheckSynchronize;
+  AssertEquals(0,FElapsedCount);
+end;
+
+procedure TLazBleReconnectControllerTest.DestroyDropsExpiredQueuedAction;
+var Controller: TLazBleReconnectController; Timer: ILazBleReconnectTimer;
+begin
+  Timer := LazBleCreateDefaultReconnectTimerFactory.CreateTimer;
+  Controller := TLazBleReconnectController.Create(Timer);
+  Controller.SetOptions(TLazBleReconnectOptions.Create(1,1,1));
+  Controller.OnElapsed := @Elapsed; Controller.Enable; Controller.Schedule;
+  Sleep(100); Controller.Free; CheckSynchronize;
+  AssertEquals(0,FElapsedCount);
 end;
 
 initialization

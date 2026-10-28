@@ -37,6 +37,7 @@ type
       const AOperationId: TBleOperationId);
   protected
     procedure Execute; override;
+    procedure DeliverOnMain;
   public
     constructor Create(const ABackend: TFakeLazBleBackend;
       const AAction: TClientBackendAction; const ACommandIndex: Integer;
@@ -138,6 +139,12 @@ begin
 end;
 
 procedure TClientBackendThread.Execute;
+begin
+  TThread.Queue(Self, @DeliverOnMain);
+  FFinished.SetEvent;
+end;
+
+procedure TClientBackendThread.DeliverOnMain;
 var
   OperationId: TBleOperationId;
 begin
@@ -317,11 +324,11 @@ begin
   AssertEquals(Ord(lbcstError), Ord(FClient.State));
   AssertEquals(0, FConnectedCount);
   AssertEquals(1, FErrorCount);
-  AssertEquals(0, FErrorCode);
-  AssertEquals('Could not connect and discover GATT services',
+  AssertEquals(55, FErrorCode);
+  AssertEquals('Connection rejected',
     FErrorMessage);
-  AssertEquals(0, FClient.LastErrorCode);
-  AssertEquals('Could not connect and discover GATT services',
+  AssertEquals(55, FClient.LastErrorCode);
+  AssertEquals('Connection rejected',
     FClient.LastErrorMessage);
   AssertEquals(Int64(MainThreadID), Int64(FLastCallbackThreadId));
 end;

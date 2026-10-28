@@ -217,17 +217,16 @@ begin
   SetLength(BackendEvent.Services[0].Characteristics, 1);
   BackendEvent.Services[0].Characteristics[0].Uuid :=
     BatteryLevelCharacteristicUuid;
-  BackendEvent.Services[0].Characteristics[0].Properties :=
-    [lbgcpRead, lbgcpNotify];
+  BackendEvent.Services[0].Characteristics[0].CanRead := True;
+BackendEvent.Services[0].Characteristics[0].CanNotify := True;
   BackendEvent.Services[1].Uuid := NusServiceUuid;
   SetLength(BackendEvent.Services[1].Characteristics, 2);
   BackendEvent.Services[1].Characteristics[0].Uuid :=
     NusRxCharacteristicUuid;
-  BackendEvent.Services[1].Characteristics[0].Properties :=
-    [lbgcpWriteCommand];
+  BackendEvent.Services[1].Characteristics[0].CanWriteCommand := True;
   BackendEvent.Services[1].Characteristics[1].Uuid :=
     NusTxCharacteristicUuid;
-  BackendEvent.Services[1].Characteristics[1].Properties := [lbgcpNotify];
+  BackendEvent.Services[1].Characteristics[1].CanNotify := True;
   AssertTrue(FBackendObject.EmitProgress(BackendEvent));
   FProfile := TTestBatteryProfile.Create;
   FProfile.BindToSession(FSession);

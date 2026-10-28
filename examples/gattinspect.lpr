@@ -51,18 +51,18 @@ begin
 end;
 
 function PropertiesToText(
-  const AProperties: TLazBleGattCharacteristicProperties): string;
+  const ACharacteristic: TLazBleGattCharacteristic): string;
 begin
   Result := '';
-  if lbgcpRead in AProperties then
+  if ACharacteristic.CanRead then
     AppendProperty(Result, 'read');
-  if lbgcpWriteRequest in AProperties then
+  if ACharacteristic.CanWriteRequest then
     AppendProperty(Result, 'write-request');
-  if lbgcpWriteCommand in AProperties then
+  if ACharacteristic.CanWriteCommand then
     AppendProperty(Result, 'write-command');
-  if lbgcpNotify in AProperties then
+  if ACharacteristic.CanNotify then
     AppendProperty(Result, 'notify');
-  if lbgcpIndicate in AProperties then
+  if ACharacteristic.CanIndicate then
     AppendProperty(Result, 'indicate');
   if Result = '' then
     Result := 'none';
@@ -100,11 +100,11 @@ begin
       WriteLn('    Characteristic ',
         Services[ServiceIndex].Characteristics[CharacteristicIndex].Uuid,
         ' [', PropertiesToText(Services[ServiceIndex].Characteristics[
-          CharacteristicIndex].Properties), ']');
+          CharacteristicIndex]), ']');
       for DescriptorIndex := 0 to High(Services[ServiceIndex].Characteristics[
         CharacteristicIndex].Descriptors) do
         WriteLn('        Descriptor ', Services[ServiceIndex].Characteristics[
-          CharacteristicIndex].Descriptors[DescriptorIndex].Uuid);
+          CharacteristicIndex].Descriptors[DescriptorIndex]);
     end;
   end;
 end;

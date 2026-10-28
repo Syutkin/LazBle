@@ -10,7 +10,7 @@ uses
   LazBleOperation;
 
 type
-  { Value contains the bytes returned by a successful GATT read. }
+  { Main-thread operation. Value is a read-only managed snapshot of a GATT read. }
   IBleGattOperation = interface(IBleOperation)
     ['{88355E9C-04D6-46E7-9B3E-6E3470C9E980}']
     function GetValue: TBytes;
@@ -19,15 +19,17 @@ type
 
   TBleGattOperation = class(TBleOperation, IBleGattOperation)
   private
-    FValueLock: TRTLCriticalSection;
     FOperationId: TBleOperationId;
+    FGeneration: QWord;
     FKind: TLazBleBackendCommandKind;
     FValue: TBytes;
     function GetValue: TBytes;
   protected
+    { A local operation that awaits a chained native cleanup. }
+    constructor CreatePending(const AKind: TLazBleBackendCommandKind);
     constructor Create(const AOperationId: TBleOperationId;
       const AKind: TLazBleBackendCommandKind;
-      const AOnCancel: TLazBleOperationCancelEvent);
+      const AOnCancel: TLazBleOperationCancelEvent; const AGeneration: QWord = 0);
     constructor CreateCompleted(const AKind: TLazBleBackendCommandKind;
       const AState: TLazBleOperationState;
       const AErrorMessage: string = '');
@@ -37,6 +39,7 @@ type
     function MatchesOperationId(const AOperationId: TBleOperationId): Boolean;
     function GetOperationId: TBleOperationId;
     function GetKind: TLazBleBackendCommandKind;
+    property OperationGeneration: QWord read FGeneration;
   public
     destructor Destroy; override;
     property Value: TBytes read GetValue;
@@ -44,13 +47,19 @@ type
 
 implementation
 
+constructor TBleGattOperation.CreatePending(const AKind: TLazBleBackendCommandKind);
+begin
+  inherited Create(nil);
+  FKind := AKind;
+end;
+
 constructor TBleGattOperation.Create(const AOperationId: TBleOperationId;
   const AKind: TLazBleBackendCommandKind;
-  const AOnCancel: TLazBleOperationCancelEvent);
+  const AOnCancel: TLazBleOperationCancelEvent; const AGeneration: QWord);
 begin
   inherited Create(AOnCancel);
-  InitCriticalSection(FValueLock);
   FOperationId := AOperationId;
+  FGeneration := AGeneration;
   FKind := AKind;
   if AOperationId = InvalidBleOperationId then
     Complete(lbopFailed, LazBleErrorInvalidState,
@@ -62,7 +71,6 @@ constructor TBleGattOperation.CreateCompleted(
   const AState: TLazBleOperationState; const AErrorMessage: string);
 begin
   inherited Create(nil);
-  InitCriticalSection(FValueLock);
   FOperationId := InvalidBleOperationId;
   FKind := AKind;
   if AState = lbopFailed then
@@ -73,41 +81,28 @@ end;
 
 destructor TBleGattOperation.Destroy;
 begin
-  EnterCriticalSection(FValueLock);
-  try
-    FValue := nil;
-  finally
-    LeaveCriticalSection(FValueLock);
-  end;
-  DoneCriticalSection(FValueLock);
+  FValue := nil;
   inherited Destroy;
 end;
 
 function TBleGattOperation.GetValue: TBytes;
 begin
-  EnterCriticalSection(FValueLock);
-  try
-    Result := Copy(FValue);
-  finally
-    LeaveCriticalSection(FValueLock);
-  end;
+  LazBleRequireMainThread;
+  Result := FValue;
 end;
 
 procedure TBleGattOperation.HandleBackendEvent(
   const AEvent: TLazBleBackendEvent);
 begin
+  LazBleRequireMainThread;
   if (State <> lbopPending) or
+    ((AEvent.Generation <> 0) and (AEvent.Generation <> FGeneration)) or
     (AEvent.OperationId <> FOperationId) then
     Exit;
   case AEvent.Kind of
     lbekReadResult:
       begin
-        EnterCriticalSection(FValueLock);
-        try
-          FValue := Copy(AEvent.Value);
-        finally
-          LeaveCriticalSection(FValueLock);
-        end;
+        FValue := AEvent.Value;
       end;
     lbekOperationSucceeded:
       Complete(lbopSucceeded);
@@ -120,27 +115,32 @@ end;
 
 procedure TBleGattOperation.CancelLocally;
 begin
+  LazBleRequireMainThread;
   Complete(lbopCancelled);
 end;
 
 procedure TBleGattOperation.DetachOwner;
 begin
+  LazBleRequireMainThread;
   DetachCancelHandler;
 end;
 
 function TBleGattOperation.MatchesOperationId(
   const AOperationId: TBleOperationId): Boolean;
 begin
+  LazBleRequireMainThread;
   Result := FOperationId = AOperationId;
 end;
 
 function TBleGattOperation.GetOperationId: TBleOperationId;
 begin
+  LazBleRequireMainThread;
   Result := FOperationId;
 end;
 
 function TBleGattOperation.GetKind: TLazBleBackendCommandKind;
 begin
+  LazBleRequireMainThread;
   Result := FKind;
 end;
 

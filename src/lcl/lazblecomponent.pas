@@ -1126,7 +1126,7 @@ begin
     if Assigned(CompletedHandler) then
       CompletedHandler(Self);
   end
-  else if CompletedMessage.State in [lbopFailed, lbopTimedOut] then
+  else if CompletedMessage.State in [lbopFailed] then
   begin
     FLastErrorCode := CompletedMessage.ErrorCode;
     FLastErrorMessage := CompletedMessage.ErrorMessage;

@@ -26,14 +26,15 @@ type
     constructor CreateTracked(const ADestroyCount: PInteger);
     destructor Destroy; override;
     procedure Succeed;
+    procedure FailNative;
   end;
 
   TLazBleOperationTest = class(TTestCase)
   published
     procedure LateCompletionHandlerRunsExactlyOnce;
     procedure InterfaceOwnsCompletedOperationLifetime;
-    procedure CancelWithoutBackendCompletesOperation;
-    procedure TimeoutHasLazBleErrorCode;
+    procedure CancelWithoutHandlerWaitsForOutcome;
+    procedure CancelDoesNotHideNativeFailure;
   end;
 
 implementation
@@ -60,6 +61,9 @@ procedure TTrackedOperation.Succeed;
 begin
   Complete(lbopSucceeded);
 end;
+
+procedure TTrackedOperation.FailNative;
+begin Complete(lbopFailed, 0, 'native invalid argument'); end;
 
 procedure TLazBleOperationTest.LateCompletionHandlerRunsExactlyOnce;
 var
@@ -100,26 +104,25 @@ begin
   AssertEquals(1, DestroyCount);
 end;
 
-procedure TLazBleOperationTest.CancelWithoutBackendCompletesOperation;
-var
-  Operation: IBleOperation;
+procedure TLazBleOperationTest.CancelWithoutHandlerWaitsForOutcome;
+var Operation: IBleOperation; Instance: TTrackedOperation;
 begin
-  Operation := TTrackedOperation.CreateTracked(nil);
-
+  Instance := TTrackedOperation.CreateTracked(nil); Operation := Instance;
   Operation.Cancel;
-
-  AssertEquals(Ord(lbopCancelled), Ord(Operation.State));
+  AssertEquals(Ord(lbopPending), Ord(Operation.State));
   AssertTrue(Operation.CancelRequested);
+  Instance.Succeed;
+  AssertEquals(Ord(lbopSucceeded), Ord(Operation.State));
 end;
 
-procedure TLazBleOperationTest.TimeoutHasLazBleErrorCode;
-var
-  Operation: IBleOperation;
+procedure TLazBleOperationTest.CancelDoesNotHideNativeFailure;
+var Operation: IBleOperation; Instance: TTrackedOperation;
 begin
-  Operation := TTrackedOperation.CreateTracked(nil);
-  Operation.Timeout;
-  AssertEquals(Ord(lbopTimedOut), Ord(Operation.State));
-  AssertEquals(LazBleErrorOperationTimedOut, Operation.ErrorCode);
+  Instance := TTrackedOperation.CreateTracked(nil); Operation := Instance;
+  Operation.Cancel; Instance.FailNative;
+  AssertEquals(Ord(lbopFailed), Ord(Operation.State));
+  AssertEquals(0, Operation.ErrorCode);
+  AssertEquals('native invalid argument', Operation.ErrorMessage);
 end;
 
 initialization

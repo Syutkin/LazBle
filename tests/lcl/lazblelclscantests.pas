@@ -28,6 +28,7 @@ type
     FFinished: TEvent;
   protected
     procedure Execute; override;
+    procedure DeliverOnMain;
   public
     constructor Create(const ABackend: TFakeLazBleBackend;
       const AOperationId: TBleOperationId; const AResults: array of TBleDeviceInfo;
@@ -99,6 +100,12 @@ begin
 end;
 
 procedure TScanEmissionThread.Execute;
+begin
+  TThread.Queue(Self, @DeliverOnMain);
+  FFinished.SetEvent;
+end;
+
+procedure TScanEmissionThread.DeliverOnMain;
 var
   BackendEvent: TLazBleBackendEvent;
   DeviceInfo: TBleDeviceInfo;

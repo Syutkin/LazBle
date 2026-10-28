@@ -13,14 +13,13 @@ type
     lbopPending,
     lbopSucceeded,
     lbopFailed,
-    lbopCancelled,
-    lbopTimedOut
+    lbopCancelled
   );
 
   TLazBleOperationCompletedEvent = procedure(Sender: TObject) of object;
   TLazBleOperationCancelEvent = procedure(Sender: TObject) of object;
 
-  { A pending asynchronous request. Keep the interface while observing its
+  { Main-thread asynchronous request. Keep the interface while observing its
     result; OnCompleted also fires when assigned after completion. }
   IBleOperation = interface
     ['{5FCBB469-393D-4D89-AC6D-54E2B2F10292}']
@@ -30,10 +29,9 @@ type
     function GetCancelRequested: Boolean;
     function GetOnCompleted: TLazBleOperationCompletedEvent;
     procedure SetOnCompleted(const AHandler: TLazBleOperationCompletedEvent);
-    { Request cancellation; inspect State for the eventual outcome. }
+    { Best-effort request; only a backend outcome completes a submitted command.
+      Started native calls and orderly shutdown may still succeed or fail. }
     procedure Cancel;
-    { Mark a pending request as timed out. }
-    procedure Timeout;
     property State: TLazBleOperationState read GetState;
     property ErrorCode: Integer read GetErrorCode;
     property ErrorMessage: string read GetErrorMessage;
@@ -62,8 +60,6 @@ type
 
   TBleOperation = class(TInterfacedObject, IBleOperation)
   private
-    FLock: TRTLCriticalSection;
-    FCallbackLock: TRTLCriticalSection;
     FState: TLazBleOperationState;
     FErrorCode: Integer;
     FErrorMessage: string;
@@ -88,7 +84,6 @@ type
   public
     destructor Destroy; override;
     procedure Cancel;
-    procedure Timeout;
     property State: TLazBleOperationState read GetState;
     property ErrorCode: Integer read GetErrorCode;
     property ErrorMessage: string read GetErrorMessage;
@@ -99,8 +94,6 @@ type
 
   TBleScanOperation = class(TBleOperation, IBleScanOperation)
   private
-    FResultsLock: TRTLCriticalSection;
-    FResultCallbackLock: TRTLCriticalSection;
     FResults: TBleDeviceInfos;
     FOnResult: TLazBleScanResultEvent;
     function GetResults: TBleDeviceInfos;
@@ -120,7 +113,6 @@ type
   TBleAvailabilityOperation = class(TBleOperation,
     IBleAvailabilityOperation)
   private
-    FAvailabilityLock: TRTLCriticalSection;
     FAvailability: TBleAvailability;
     function GetAvailability: TBleAvailability;
   protected
@@ -144,117 +136,73 @@ constructor TBleAvailabilityOperation.Create(
   const AOnCancel: TLazBleOperationCancelEvent);
 begin
   inherited Create(AOnCancel);
-  InitCriticalSection(FAvailabilityLock);
   FAvailability := lbaUnknown;
 end;
 
 destructor TBleAvailabilityOperation.Destroy;
 begin
-  DoneCriticalSection(FAvailabilityLock);
   inherited Destroy;
 end;
 
 function TBleAvailabilityOperation.GetAvailability: TBleAvailability;
 begin
-  EnterCriticalSection(FAvailabilityLock);
-  try
-    Result := FAvailability;
-  finally
-    LeaveCriticalSection(FAvailabilityLock);
-  end;
+  LazBleRequireMainThread;
+  Result := FAvailability;
 end;
 
 procedure TBleAvailabilityOperation.SetAvailability(
   const AAvailability: TBleAvailability);
 begin
+  LazBleRequireMainThread;
   if AAvailability in [lbaUnknown, lbaChecking] then
     raise EArgumentException.Create(
       'A terminal BLE availability result is required');
-  EnterCriticalSection(FAvailabilityLock);
-  try
-    FAvailability := AAvailability;
-  finally
-    LeaveCriticalSection(FAvailabilityLock);
-  end;
+  FAvailability := AAvailability;
 end;
 
 constructor TBleOperation.Create(
   const AOnCancel: TLazBleOperationCancelEvent);
 begin
   inherited Create;
-  InitCriticalSection(FLock);
-  InitCriticalSection(FCallbackLock);
   FState := lbopPending;
   FOnCancel := AOnCancel;
 end;
 
 destructor TBleOperation.Destroy;
 begin
-  EnterCriticalSection(FCallbackLock);
-  try
-    FOnCompleted := nil;
-  finally
-    LeaveCriticalSection(FCallbackLock);
-  end;
-  EnterCriticalSection(FLock);
-  try
-    FOnCancel := nil;
-  finally
-    LeaveCriticalSection(FLock);
-  end;
-  DoneCriticalSection(FCallbackLock);
-  DoneCriticalSection(FLock);
+  FOnCompleted := nil;
+  FOnCancel := nil;
   inherited Destroy;
 end;
 
 function TBleOperation.GetState: TLazBleOperationState;
 begin
-  EnterCriticalSection(FLock);
-  try
-    Result := FState;
-  finally
-    LeaveCriticalSection(FLock);
-  end;
+  LazBleRequireMainThread;
+  Result := FState;
 end;
 
 function TBleOperation.GetErrorCode: Integer;
 begin
-  EnterCriticalSection(FLock);
-  try
-    Result := FErrorCode;
-  finally
-    LeaveCriticalSection(FLock);
-  end;
+  LazBleRequireMainThread;
+  Result := FErrorCode;
 end;
 
 function TBleOperation.GetErrorMessage: string;
 begin
-  EnterCriticalSection(FLock);
-  try
-    Result := FErrorMessage;
-  finally
-    LeaveCriticalSection(FLock);
-  end;
+  LazBleRequireMainThread;
+  Result := FErrorMessage;
 end;
 
 function TBleOperation.GetCancelRequested: Boolean;
 begin
-  EnterCriticalSection(FLock);
-  try
-    Result := FCancelRequested;
-  finally
-    LeaveCriticalSection(FLock);
-  end;
+  LazBleRequireMainThread;
+  Result := FCancelRequested;
 end;
 
 function TBleOperation.GetOnCompleted: TLazBleOperationCompletedEvent;
 begin
-  EnterCriticalSection(FCallbackLock);
-  try
-    Result := FOnCompleted;
-  finally
-    LeaveCriticalSection(FCallbackLock);
-  end;
+  LazBleRequireMainThread;
+  Result := FOnCompleted;
 end;
 
 procedure TBleOperation.SetOnCompleted(
@@ -262,23 +210,14 @@ procedure TBleOperation.SetOnCompleted(
 var
   NotifyNow: Boolean;
 begin
-  EnterCriticalSection(FCallbackLock);
-  try
-    if not SameCompletedHandler(FOnCompleted, AHandler) then
-      FCompletionDelivered := False;
-    FOnCompleted := AHandler;
-    EnterCriticalSection(FLock);
-    try
-      NotifyNow := Assigned(AHandler) and
-        (FState <> lbopPending) and not FCompletionDelivered;
-      if NotifyNow then
-        FCompletionDelivered := True;
-    finally
-      LeaveCriticalSection(FLock);
-    end;
-  finally
-    LeaveCriticalSection(FCallbackLock);
-  end;
+  LazBleRequireMainThread;
+  if not SameCompletedHandler(FOnCompleted, AHandler) then
+    FCompletionDelivered := False;
+  FOnCompleted := AHandler;
+  NotifyNow := Assigned(AHandler) and
+    (FState <> lbopPending) and not FCompletionDelivered;
+  if NotifyNow then
+    FCompletionDelivered := True;
   if NotifyNow then
     AHandler(Self);
 end;
@@ -287,16 +226,12 @@ procedure TBleOperation.NotifyCompleted;
 var
   Handler: TLazBleOperationCompletedEvent;
 begin
+  LazBleRequireMainThread;
   Handler := nil;
-  EnterCriticalSection(FCallbackLock);
-  try
-    if Assigned(FOnCompleted) and not FCompletionDelivered then
-    begin
-      Handler := FOnCompleted;
-      FCompletionDelivered := True;
-    end;
-  finally
-    LeaveCriticalSection(FCallbackLock);
+  if Assigned(FOnCompleted) and not FCompletionDelivered then
+  begin
+    Handler := FOnCompleted;
+    FCompletionDelivered := True;
   end;
   if Assigned(Handler) then
     Handler(Self);
@@ -305,20 +240,16 @@ end;
 function TBleOperation.Complete(const AState: TLazBleOperationState;
   const AErrorCode: Integer; const AErrorMessage: string): Boolean;
 begin
+  LazBleRequireMainThread;
   if AState = lbopPending then
     raise EArgumentException.Create('A terminal operation state is required');
-  EnterCriticalSection(FLock);
-  try
-    Result := FState = lbopPending;
-    if Result then
-    begin
-      FState := AState;
-      FErrorCode := AErrorCode;
-      FErrorMessage := AErrorMessage;
-      FOnCancel := nil;
-    end;
-  finally
-    LeaveCriticalSection(FLock);
+  Result := FState = lbopPending;
+  if Result then
+  begin
+    FState := AState;
+    FErrorCode := AErrorCode;
+    FErrorMessage := AErrorMessage;
+    FOnCancel := nil;
   end;
   if Result then
     NotifyCompleted;
@@ -326,84 +257,33 @@ end;
 
 procedure TBleOperation.DetachCancelHandler;
 begin
-  EnterCriticalSection(FLock);
-  try
-    FOnCancel := nil;
-  finally
-    LeaveCriticalSection(FLock);
-  end;
+  LazBleRequireMainThread;
+  FOnCancel := nil;
 end;
 
 procedure TBleOperation.Cancel;
 var
   CancelHandler: TLazBleOperationCancelEvent;
 begin
-  EnterCriticalSection(FLock);
-  try
-    if (FState <> lbopPending) or FCancelRequested then
-      Exit;
-    FCancelRequested := True;
-    CancelHandler := FOnCancel;
-  finally
-    LeaveCriticalSection(FLock);
-  end;
-  if Assigned(CancelHandler) then
-    CancelHandler(Self)
-  else
-    Complete(lbopCancelled);
-end;
-
-procedure TBleOperation.Timeout;
-var
-  CancelHandler: TLazBleOperationCancelEvent;
-  TimedOut: Boolean;
-begin
-  EnterCriticalSection(FLock);
-  try
-    TimedOut := FState = lbopPending;
-    if TimedOut then
-    begin
-      FCancelRequested := True;
-      FState := lbopTimedOut;
-      FErrorCode := LazBleErrorOperationTimedOut;
-      FErrorMessage := 'BLE operation timed out';
-      CancelHandler := FOnCancel;
-      FOnCancel := nil;
-    end;
-  finally
-    LeaveCriticalSection(FLock);
-  end;
-  if not TimedOut then
+  LazBleRequireMainThread;
+  if (FState <> lbopPending) or FCancelRequested then
     Exit;
+  FCancelRequested := True;
+  CancelHandler := FOnCancel;
   if Assigned(CancelHandler) then
     CancelHandler(Self);
-  NotifyCompleted;
 end;
 
 constructor TBleScanOperation.Create(
   const AOnCancel: TLazBleOperationCancelEvent);
 begin
   inherited Create(AOnCancel);
-  InitCriticalSection(FResultsLock);
-  InitCriticalSection(FResultCallbackLock);
 end;
 
 destructor TBleScanOperation.Destroy;
 begin
-  EnterCriticalSection(FResultCallbackLock);
-  try
-    FOnResult := nil;
-  finally
-    LeaveCriticalSection(FResultCallbackLock);
-  end;
-  EnterCriticalSection(FResultsLock);
-  try
-    FResults := nil;
-  finally
-    LeaveCriticalSection(FResultsLock);
-  end;
-  DoneCriticalSection(FResultsLock);
-  DoneCriticalSection(FResultCallbackLock);
+  FOnResult := nil;
+  FResults := nil;
   inherited Destroy;
 end;
 
@@ -415,29 +295,25 @@ var
   Index: Integer;
   ResultInfo: TBleDeviceInfo;
 begin
+  LazBleRequireMainThread;
   Found := False;
-  EnterCriticalSection(FResultsLock);
-  try
-    for Index := 0 to High(FResults) do
-      if SameText(FResults[Index].DeviceId, ADeviceId) then
-      begin
-        FResults[Index].DeviceName := ADeviceName;
-        FResults[Index].Rssi := ARssi;
-        ResultInfo := FResults[Index];
-        Found := True;
-        Break;
-      end;
-    if not Found then
+  for Index := 0 to High(FResults) do
+    if SameText(FResults[Index].DeviceId, ADeviceId) then
     begin
-      Index := Length(FResults);
-      SetLength(FResults, Index + 1);
-      FResults[Index].DeviceId := ADeviceId;
       FResults[Index].DeviceName := ADeviceName;
       FResults[Index].Rssi := ARssi;
       ResultInfo := FResults[Index];
+      Found := True;
+      Break;
     end;
-  finally
-    LeaveCriticalSection(FResultsLock);
+  if not Found then
+  begin
+    Index := Length(FResults);
+    SetLength(FResults, Index + 1);
+    FResults[Index].DeviceId := ADeviceId;
+    FResults[Index].DeviceName := ADeviceName;
+    FResults[Index].Rssi := ARssi;
+    ResultInfo := FResults[Index];
   end;
   Handler := GetOnResult;
   if Assigned(Handler) then
@@ -447,33 +323,21 @@ end;
 
 function TBleScanOperation.GetResults: TBleDeviceInfos;
 begin
-  EnterCriticalSection(FResultsLock);
-  try
-    Result := Copy(FResults);
-  finally
-    LeaveCriticalSection(FResultsLock);
-  end;
+  LazBleRequireMainThread;
+  Result := Copy(FResults);
 end;
 
 function TBleScanOperation.GetOnResult: TLazBleScanResultEvent;
 begin
-  EnterCriticalSection(FResultCallbackLock);
-  try
-    Result := FOnResult;
-  finally
-    LeaveCriticalSection(FResultCallbackLock);
-  end;
+  LazBleRequireMainThread;
+  Result := FOnResult;
 end;
 
 procedure TBleScanOperation.SetOnResult(
   const AHandler: TLazBleScanResultEvent);
 begin
-  EnterCriticalSection(FResultCallbackLock);
-  try
-    FOnResult := AHandler;
-  finally
-    LeaveCriticalSection(FResultCallbackLock);
-  end;
+  LazBleRequireMainThread;
+  FOnResult := AHandler;
 end;
 
 end.

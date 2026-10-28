@@ -6,7 +6,7 @@ unit LazBleTypes;
 interface
 
 uses
-  SysUtils;
+  Classes, SysUtils, SimpleDelphiBLE;
 
 type
   TBleOperationId = type QWord;
@@ -119,7 +119,6 @@ const
   LazBleErrorNativeDataTooLarge = -1013;
   LazBleErrorCommandNotImplemented = -1014;
   LazBleErrorBackendUnavailable = -1015;
-  LazBleErrorOperationTimedOut = -1016;
   LazBleErrorInvalidProfileData = -1017;
 
 type
@@ -129,35 +128,14 @@ type
     lbwmCommand
   );
 
-  { Properties reported by service discovery for a characteristic. }
-  TLazBleGattCharacteristicProperty = (
-    lbgcpRead,
-    lbgcpWriteRequest,
-    lbgcpWriteCommand,
-    lbgcpNotify,
-    lbgcpIndicate
-  );
-  TLazBleGattCharacteristicProperties = set of
-    TLazBleGattCharacteristicProperty;
-
-  TLazBleGattDescriptor = record
-    Uuid: string;
-  end;
-  TLazBleGattDescriptors = array of TLazBleGattDescriptor;
-
-  TLazBleGattCharacteristic = record
-    Uuid: string;
-    Properties: TLazBleGattCharacteristicProperties;
-    Descriptors: TLazBleGattDescriptors;
-  end;
-  TLazBleGattCharacteristics = array of TLazBleGattCharacteristic;
-
-  TLazBleGattService = record
-    Uuid: string;
-    Data: TBytes;
-    Characteristics: TLazBleGattCharacteristics;
-  end;
-  TLazBleGattServices = array of TLazBleGattService;
+  { Aliases of upstream records. Snapshots and their nested arrays are read-only;
+    consumers needing mutable data must explicitly copy the arrays they change. }
+  TLazBleGattDescriptor = UnicodeString;
+  TLazBleGattDescriptors = specialize TArray<UnicodeString>;
+  TLazBleGattCharacteristic = TBleCharacteristic;
+  TLazBleGattCharacteristics = specialize TArray<TBleCharacteristic>;
+  TLazBleGattService = TBleService;
+  TLazBleGattServices = specialize TArray<TBleService>;
 
   TLazBleBackendCommandKind = (
     lbckStartScan,
@@ -221,6 +199,8 @@ type
     Rssi: SmallInt;
     Available: Boolean;
     Value: TBytes;
+    { Explicit flag for ShutdownCompleted: native error 0/empty text is valid. }
+    ShutdownFailed: Boolean;
     ErrorCode: Integer;
     ErrorMessage: string;
     Services: TLazBleGattServices;
@@ -232,8 +212,8 @@ function LazBleBackendEventIsTerminal(
   loading a native library. Example: Info := LazBleGetAbout;
   Info.Version is the LazBle version, not the SimpleCBLE version. }
 function LazBleGetAbout: TLazBleAbout;
-function LazBleCopyGattServices(
-  const AServices: TLazBleGattServices): TLazBleGattServices;
+{ Main-thread contract shared by core, profiles, and custom backends. }
+procedure LazBleRequireMainThread;
 
 implementation
 
@@ -263,32 +243,10 @@ begin
   ];
 end;
 
-function LazBleCopyGattServices(
-  const AServices: TLazBleGattServices): TLazBleGattServices;
-var
-  CharacteristicIndex: Integer;
-  ServiceIndex: Integer;
+procedure LazBleRequireMainThread;
 begin
-  Result := nil;
-  SetLength(Result, Length(AServices));
-  for ServiceIndex := 0 to High(AServices) do
-  begin
-    Result[ServiceIndex].Uuid := AServices[ServiceIndex].Uuid;
-    Result[ServiceIndex].Data := Copy(AServices[ServiceIndex].Data);
-    SetLength(Result[ServiceIndex].Characteristics,
-      Length(AServices[ServiceIndex].Characteristics));
-    for CharacteristicIndex := 0 to
-      High(AServices[ServiceIndex].Characteristics) do
-    begin
-      Result[ServiceIndex].Characteristics[CharacteristicIndex].Uuid :=
-        AServices[ServiceIndex].Characteristics[CharacteristicIndex].Uuid;
-      Result[ServiceIndex].Characteristics[CharacteristicIndex].Properties :=
-        AServices[ServiceIndex].Characteristics[CharacteristicIndex].Properties;
-      Result[ServiceIndex].Characteristics[CharacteristicIndex].Descriptors :=
-        Copy(AServices[ServiceIndex].Characteristics[
-          CharacteristicIndex].Descriptors);
-    end;
-  end;
+  if GetCurrentThreadID <> MainThreadID then
+    raise EInvalidOperation.Create('LazBle API requires the main thread');
 end;
 
 end.

@@ -93,11 +93,10 @@ begin
     SetLength(BackendEvent.Services[0].Characteristics, 2);
     BackendEvent.Services[0].Characteristics[0].Uuid :=
       NusRxCharacteristicUuid;
-    BackendEvent.Services[0].Characteristics[0].Properties :=
-      [lbgcpWriteCommand];
+    BackendEvent.Services[0].Characteristics[0].CanWriteCommand := True;
     BackendEvent.Services[0].Characteristics[1].Uuid :=
       NusTxCharacteristicUuid;
-    BackendEvent.Services[0].Characteristics[1].Properties := [lbgcpNotify];
+    BackendEvent.Services[0].Characteristics[1].CanNotify := True;
   end;
   AssertTrue(FBackendObject.EmitProgress(BackendEvent));
 end;

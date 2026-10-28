@@ -26,7 +26,6 @@ type
     connecting; RX writes use command mode and TX delivers notifications. }
   TNusProfile = class(TBleGattProfile)
   private
-    FCallbackLock: TRTLCriticalSection;
     FChannel: TBleByteChannel;
     FOnData: TNusDataEvent;
     function GetOnData: TNusDataEvent;
@@ -67,11 +66,11 @@ end;
 constructor TNusProfile.Create;
 begin
   inherited Create;
-  InitCriticalSection(FCallbackLock);
 end;
 
 procedure TNusProfile.DoBind;
 begin
+  LazBleRequireMainThread;
   FChannel := TBleByteChannel.Create(Session, NusServiceUuid,
     NusRxCharacteristicUuid, NusTxCharacteristicUuid, lbwmCommand);
   FChannel.OnData := @ChannelDataReceived;
@@ -85,28 +84,19 @@ begin
     FChannel.OnData := nil;
   FChannel.Free;
   FChannel := nil;
-  DoneCriticalSection(FCallbackLock);
   inherited Destroy;
 end;
 
 function TNusProfile.GetOnData: TNusDataEvent;
 begin
-  EnterCriticalSection(FCallbackLock);
-  try
-    Result := FOnData;
-  finally
-    LeaveCriticalSection(FCallbackLock);
-  end;
+  LazBleRequireMainThread;
+  Result := FOnData;
 end;
 
 procedure TNusProfile.SetOnData(const AHandler: TNusDataEvent);
 begin
-  EnterCriticalSection(FCallbackLock);
-  try
-    FOnData := AHandler;
-  finally
-    LeaveCriticalSection(FCallbackLock);
-  end;
+  LazBleRequireMainThread;
+  FOnData := AHandler;
 end;
 
 procedure TNusProfile.ChannelDataReceived(Sender: TObject;
@@ -114,6 +104,7 @@ procedure TNusProfile.ChannelDataReceived(Sender: TObject;
 var
   Handler: TNusDataEvent;
 begin
+  LazBleRequireMainThread;
   Handler := GetOnData;
   if Assigned(Handler) then
     Handler(Self, DeviceId, AValue);
@@ -122,6 +113,7 @@ end;
 procedure TNusProfile.SubscriptionStateChanged(Sender: TObject;
   const AState: TLazBleSubscriptionState);
 begin
+  LazBleRequireMainThread;
   RefreshState;
 end;
 
@@ -129,6 +121,7 @@ procedure TNusProfile.DoAttach;
 var
   Characteristic: TLazBleGattCharacteristic;
 begin
+  LazBleRequireMainThread;
   if not Assigned(FChannel) then
   begin
     MarkError('NUS profile is not bound to a client');
@@ -146,7 +139,7 @@ begin
       LazBleErrorGattNotFound);
     Exit;
   end;
-  if not (lbgcpWriteCommand in Characteristic.Properties) then
+  if not (Characteristic.CanWriteCommand) then
   begin
     MarkError('NUS RX characteristic does not support write commands',
       LazBleErrorGattPropertyNotSupported);
@@ -159,7 +152,7 @@ begin
       LazBleErrorGattNotFound);
     Exit;
   end;
-  if not (lbgcpNotify in Characteristic.Properties) then
+  if not (Characteristic.CanNotify) then
   begin
     MarkError('NUS TX characteristic does not support notifications',
       LazBleErrorGattPropertyNotSupported);
@@ -176,6 +169,7 @@ procedure TNusProfile.MarkSubscriptionError;
 var
   Subscription: IBleSubscription;
 begin
+  LazBleRequireMainThread;
   Subscription := FChannel.Subscription;
   if Assigned(Subscription) and (Subscription.ErrorMessage <> '') then
     MarkError(Subscription.ErrorMessage, Subscription.ErrorCode)
@@ -185,6 +179,7 @@ end;
 
 procedure TNusProfile.DoDetach;
 begin
+  LazBleRequireMainThread;
   if not Assigned(FChannel) then
     Exit;
   if Assigned(FChannel.Subscription) then
@@ -194,6 +189,7 @@ end;
 
 procedure TNusProfile.RefreshState;
 begin
+  LazBleRequireMainThread;
   if not Assigned(FChannel) or (CurrentState = lbgpsError) then
     Exit;
   case FChannel.State of
@@ -208,6 +204,7 @@ end;
 
 function TNusProfile.SendAsync(const AValue: TBytes): IBleGattOperation;
 begin
+  LazBleRequireMainThread;
   if Assigned(FChannel) then
     Result := FChannel.SendAsync(AValue)
   else

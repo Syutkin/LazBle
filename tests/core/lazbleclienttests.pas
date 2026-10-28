@@ -78,6 +78,7 @@ type
     FBackend: TFakeLazBleBackend;
   protected
     procedure Execute; override;
+    procedure DeliverOnMain;
   public
     constructor Create(const ABackend: TFakeLazBleBackend);
   end;
@@ -103,7 +104,7 @@ type
     procedure ScanDeduplicatesWithoutChangingDiscoveryOrder;
     procedure ScanPublishesEachNewAndUpdatedResult;
     procedure CancellingScanCancelsBackendOperation;
-    procedure TimedOutScanKeepsTimedOutStateAfterTerminalEvent;
+    procedure CancelRequestDoesNotHideSuccessfulScan;
     procedure AvailabilityCheckReturnsTypedResult;
     procedure AvailabilityCheckDoesNotOverlapScan;
     procedure DiagnosticInfoIsAvailableBeforeNativeLoad;
@@ -137,7 +138,7 @@ type
     procedure FacadeDetachesBackendBeforeDestroyingClientsAndProfiles;
     procedure ShutdownCancelsActiveClientConnection;
     procedure ShutdownCancelsClientWhileProfileIsAttaching;
-    procedure ShutdownCancelsMultiplePendingDisconnects;
+    procedure ShutdownWaitsForActualDisconnectOutcomes;
     procedure AutoReconnectIsDisabledByDefault;
     procedure InitialConnectFailureDoesNotStartReconnect;
     procedure InitialRequiredProfileFailureDoesNotStartReconnect;
@@ -265,6 +266,11 @@ end;
 
 procedure TScanCompletionThread.Execute;
 begin
+  TThread.Queue(Self, @DeliverOnMain);
+end;
+
+procedure TScanCompletionThread.DeliverOnMain;
+begin
   while (FBackend.CommandCount = 0) and not Terminated do
     Sleep(1);
   if not Terminated then
@@ -326,11 +332,10 @@ begin
   SetLength(BackendEvent.Services[0].Characteristics, 2);
   BackendEvent.Services[0].Characteristics[0].Uuid :=
     NusRxCharacteristicUuid;
-  BackendEvent.Services[0].Characteristics[0].Properties :=
-    [lbgcpWriteCommand];
+  BackendEvent.Services[0].Characteristics[0].CanWriteCommand := True;
   BackendEvent.Services[0].Characteristics[1].Uuid :=
     NusTxCharacteristicUuid;
-  BackendEvent.Services[0].Characteristics[1].Properties := [lbgcpNotify];
+  BackendEvent.Services[0].Characteristics[1].CanNotify := True;
   AssertTrue(FBackendObject.EmitProgress(BackendEvent));
 end;
 
@@ -439,7 +444,7 @@ begin
   AssertEquals(Ord(lbopCancelled), Ord(Operation.State));
 end;
 
-procedure TLazBleClientTest.TimedOutScanKeepsTimedOutStateAfterTerminalEvent;
+procedure TLazBleClientTest.CancelRequestDoesNotHideSuccessfulScan;
 var
   Observer: TClientOperationObserver;
   Operation: IBleScanOperation;
@@ -450,13 +455,13 @@ begin
   Operation.OnCompleted := @Observer.Completed;
   OperationId := FBackendObject.OperationIds[0];
   try
-    Operation.Timeout;
+    Operation.Cancel;
 
-    AssertEquals(Ord(lbopTimedOut), Ord(Operation.State));
+    AssertEquals(Ord(lbopPending), Ord(Operation.State));
     AssertTrue(FBackendObject.CancellationWasRequested(OperationId));
     AssertTrue(FBackendObject.CompleteOperation(OperationId,
-      lbekOperationCancelled));
-    AssertEquals(Ord(lbopTimedOut), Ord(Operation.State));
+      lbekOperationSucceeded));
+    AssertEquals(Ord(lbopSucceeded), Ord(Operation.State));
     AssertEquals(1, Observer.CompletionCount);
   finally
     Operation.OnCompleted := nil;
@@ -653,8 +658,7 @@ begin
     lbekOperationFailed));
   AssertEquals(Ord(lbopFailed), Ord(Operation.State));
   AssertEquals(0, Operation.ErrorCode);
-  AssertEquals('Could not connect and discover GATT services',
-    Operation.ErrorMessage);
+  AssertEquals('', Operation.ErrorMessage);
 end;
 
 procedure TLazBleClientTest.TwoClientsConnectIndependently;
@@ -1143,71 +1147,60 @@ begin
     AssertTrue(FBackendObject.CompleteOperation(
       FBackendObject.OperationIds[Index], lbekOperationCancelled));
   end;
+  AssertEquals(Ord(lbopPending), Ord(ConnectOperation.State));
+  AssertTrue(FBackendObject.CompleteShutdown);
   AssertEquals(Ord(lbopCancelled), Ord(ConnectOperation.State));
   AssertEquals(Ord(lbcstDisconnected), Ord(Client.State));
-  AssertTrue(FBackendObject.CompleteShutdown);
   AssertEquals(Ord(lbopSucceeded), Ord(ShutdownOperation.State));
   AssertFalse(FBackendObject.HasEventSink);
 end;
 
 procedure TLazBleClientTest.ShutdownCancelsClientWhileProfileIsAttaching;
-var
-  Client: TBleClient;
-  ConnectOperation: IBleOperation;
-  DisconnectOperationId: TBleOperationId;
+var Client: TBleClient; ConnectOperation, ShutdownOperation: IBleOperation;
   Profile: TManualGattProfile;
-  ShutdownOperation: IBleOperation;
 begin
   Client := FBle.CreateClient('device-a');
-  Profile := TManualGattProfile.Create;
-  Client.AddProfile(Profile);
-  ConnectOperation := Client.ConnectAsync;
-  CompleteTransportClient(Client);
-  AssertTrue(FBackendObject.CompleteOperation(
-    FBackendObject.OperationIds[0], lbekOperationSucceeded));
-  AssertTrue(FBackendObject.CompleteOperation(
-    FBackendObject.OperationIds[1], lbekOperationSucceeded));
-  AssertEquals(Ord(lbcstAttachingProfiles), Ord(Client.State));
-
+  Profile := TManualGattProfile.Create; Client.AddProfile(Profile);
+  ConnectOperation := Client.ConnectAsync; CompleteTransportClient(Client);
+  FBackendObject.CompleteOperation(FBackendObject.OperationIds[0], lbekOperationSucceeded);
+  FBackendObject.CompleteOperation(FBackendObject.OperationIds[1], lbekOperationSucceeded);
   ShutdownOperation := FBle.ShutdownAsync;
-
-  AssertEquals(Ord(lbopCancelled), Ord(ConnectOperation.State));
+  AssertEquals(Ord(lbopPending), Ord(ConnectOperation.State));
   AssertEquals(1, Profile.DetachCount);
-  DisconnectOperationId := FBackendObject.OperationIds[
-    FBackendObject.CommandCount - 1];
-  AssertTrue(FBackendObject.CancellationWasRequested(DisconnectOperationId));
-  AssertTrue(FBackendObject.CompleteOperation(DisconnectOperationId,
-    lbekOperationCancelled));
+  AssertEquals('Shutdown owns disconnect cleanup, no compensating command', 2, FBackendObject.CommandCount);
+  Profile.CompleteAttach;
+  AssertFalse(Client.State = lbcstReady);
   AssertTrue(FBackendObject.CompleteShutdown);
+  AssertEquals(Ord(lbopCancelled), Ord(ConnectOperation.State));
   AssertEquals(Ord(lbopSucceeded), Ord(ShutdownOperation.State));
 end;
 
-procedure TLazBleClientTest.ShutdownCancelsMultiplePendingDisconnects;
-var
-  FirstClient, SecondClient: TBleClient;
+procedure TLazBleClientTest.ShutdownWaitsForActualDisconnectOutcomes;
+var FirstClient, SecondClient: TBleClient;
   FirstDisconnect, SecondDisconnect, ShutdownOperation: IBleOperation;
+  FirstId, SecondId: TBleOperationId; I: Integer;
 begin
   FirstClient := FBle.CreateClient('device-a');
   SecondClient := FBle.CreateClient('device-b');
-  FirstClient.ConnectAsync;
-  CompleteTransportClient(FirstClient);
-  SecondClient.ConnectAsync;
-  CompleteTransportClient(SecondClient);
-  AssertEquals(Ord(lbcstReady), Ord(FirstClient.State));
-  AssertEquals(Ord(lbcstReady), Ord(SecondClient.State));
-
+  FirstClient.ConnectAsync; CompleteTransportClient(FirstClient);
+  SecondClient.ConnectAsync; CompleteTransportClient(SecondClient);
+  for I := 0 to FBackendObject.CommandCount - 1 do
+    FBackendObject.CompleteOperation(FBackendObject.OperationIds[I], lbekOperationSucceeded);
   FirstDisconnect := FirstClient.DisconnectAsync;
+  FirstId := FBackendObject.OperationIds[FBackendObject.CommandCount-1];
   SecondDisconnect := SecondClient.DisconnectAsync;
+  SecondId := FBackendObject.OperationIds[FBackendObject.CommandCount-1];
+  ShutdownOperation := FBle.ShutdownAsync;
   AssertEquals(Ord(lbopPending), Ord(FirstDisconnect.State));
   AssertEquals(Ord(lbopPending), Ord(SecondDisconnect.State));
-
-  ShutdownOperation := FBle.ShutdownAsync;
-  AssertEquals('first disconnect', Ord(lbopCancelled),
-    Ord(FirstDisconnect.State));
-  AssertEquals('second disconnect', Ord(lbopCancelled),
-    Ord(SecondDisconnect.State));
-  AssertTrue(Assigned(ShutdownOperation));
-  AssertEquals(Ord(lbopPending), Ord(ShutdownOperation.State));
+  EmitEvent(lbekDisconnected, FirstId, FirstClient.DeviceId);
+  FBackendObject.CompleteOperation(FirstId, lbekOperationSucceeded);
+  FBackendObject.CompleteOperation(SecondId, lbekOperationCancelled);
+  AssertEquals(Ord(lbopPending), Ord(FirstDisconnect.State));
+  AssertEquals(Ord(lbopCancelled), Ord(SecondDisconnect.State));
+  AssertTrue(FBackendObject.CompleteShutdown);
+  AssertEquals(Ord(lbopSucceeded), Ord(FirstDisconnect.State));
+  AssertEquals(Ord(lbopSucceeded), Ord(ShutdownOperation.State));
 end;
 
 procedure TLazBleClientTest.DefaultFacadeDoesNotLoadNativeLibraryWhenCreated;

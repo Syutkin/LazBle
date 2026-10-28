@@ -14,10 +14,10 @@ The default backend now uses the public API of
 The matching native libraries are required at link time and before program
 startup. The former SimpleBlePascal driver and lazy loader have been removed.
 
-Migration is in progress: stage 2 (native backend) is implemented. Core contract
-changes, reconnect timers, the blocking console facade, and LCL/Entime lifecycle
-changes remain for stages 3–4. In particular, `TLazBleSync` still uses its old
-waiter and must not be used with the new default backend until stage 4.
+Migration is in progress: stages 1–3 are implemented. Core/profiles now use
+the main-thread contract and upstream GATT records. Reconnect and `TLazBleSync`
+work with the new backend. LCL/Entime dispatch, lifecycle, deployment, and release
+work remain for stages 4–5. This unreleased migration contains breaking API changes.
 
 ## Architecture
 
@@ -187,14 +187,16 @@ and restarts its IDE executable once because design-time packages are linked
 into the IDE. This does not rebuild FPC or the complete Lazarus/LCL source
 tree. Merely building the package does not modify or rebuild the IDE.
 
-The blocking `TLazBleSync` facade in `LazBleSync` is awaiting its stage-4
-main-loop update; use asynchronous operations with the default backend for now.
-GUI applications should use the asynchronous API.
+Console callers can use `TLazBleSync`: it pumps `CheckSynchronize` while waiting.
+A wait deadline returns False with an explanation that the operation may still
+be running. It neither cancels nor changes the operation's eventual result.
+GUI applications and callbacks must use the asynchronous API.
 
 ## Threads and callbacks
 
-The SimpleDelphiBLE backend API (including construction, sink registration,
-submission, cancellation and shutdown) runs on the main thread. One command
+The LazBle API, including core/profile state reads, handler registration,
+submission, cancellation, and lifetime management, runs on the main thread.
+Custom backends and reconnect timers must deliver on that thread too. One command
 worker performs blocking BLE operations. SimpleDelphiBLE delivers native events
 through `edMainThread`; command setup and completion use RTL `Synchronize`.
 Console asynchronous applications must pump `CheckSynchronize`; LCL does this
@@ -217,10 +219,47 @@ subscriptions to a characteristic are rejected. Unsubscribe retires local value
 delivery even on a native error. Queued upstream events carry no session token,
 so absolute attribution across reconnects is not guaranteed.
 
-Other core/LCL threading contracts and reconnect timer delivery are still being
-migrated in stages 3–4. Leave `AutoReconnect` disabled with the default backend
-until its timer has been moved to the main thread in stage 3. Do not assume the whole facade already enforces the new
-main-thread-only API.
+Reconnect waits on a timer thread, then queues the client action once on the
+main thread. Cancel also removes an elapsed action waiting in the queue. The
+existing backoff/attempt policy, disabled default, and no retry of an initial
+failure are preserved.
+
+`CancelRequested` records a request and does not select the terminal state.
+There is no public `IBleOperation.Timeout` or `lbopTimedOut` state. Cancelling
+profile attachment after connection/discovery does not undo the connection;
+attachment completes normally. If queued discovery is cancelled after connecting,
+the client enters Error and an explicit Disconnect remains available. Connection
+loss requests cancellation of queued GATT work while retaining real outcomes of
+in-flight calls, including their own generation after reconnect.
+
+Unsubscribe closes local delivery immediately. When Notify is pending, it waits
+for the actual outcome: cancelled/failed Notify needs no native unsubscribe;
+successful Notify is followed by Unsubscribe. The returned cleanup operation
+cannot be cancelled once delivery is retired (`CancelRequested` can still be
+recorded). Explicit client Disconnect likewise continues after profiles/reconnect
+intent have been retired; Cancel does not rebuild a partly attached connection.
+Failure preserves its native code/text, leaves the token inactive
+with error (`lbsubFailed`), and disconnects the affected session; the configured
+reconnect policy may then run. Shutdown can interrupt pending logical cleanup.
+
+GATT names in `LazBleTypes` are aliases of upstream `TBleService` and
+`TBleCharacteristic`. Use `CanRead`, `CanWriteRequest`, `CanWriteCommand`,
+`CanNotify`, and `CanIndicate` booleans; descriptors are UnicodeString UUIDs.
+Services, nested arrays, read values, and notification payloads are read-only
+managed snapshots. Explicitly copy each array you intend to mutate. Write buffers
+are copied once, at backend Submit.
+
+An accepted command's data and outcome survive orderly shutdown. Pending
+connect/profile pipelines finish when shutdown closes the session, without
+starting new discovery or notification delivery. Custom backends must set
+`ShutdownFailed` on a failed `lbekShutdownCompleted`; neither code 0 nor empty
+text can distinguish failure from success. The facade preserves that failure.
+Destruction before awaited shutdown is a blocking fallback that abandons pending
+logical operations and detaches callbacks; it does not promise their native
+outcomes.
+
+LCL still contains its older dispatch/clone layer pending stage 4. Interactive
+console examples that block in ReadLn also need a main-loop update in that stage.
 
 ## Custom profiles
 
@@ -300,10 +339,10 @@ its platform loader requirements. The old `fpmake.pp` / `manifest.xml` packaging
 has been removed: upstream does not supply a compatible fppkg package, and LazBle
 does not maintain a second binding/package wrapper for it.
 
-Run the reproducible stage-2 checks from the Entime root:
+Run the reproducible stage-3 checks from the Entime root:
 
 ```sh
-bash scripts/run-simpledelphible-stage2.sh /path/to/simpleble-v1.3.0
+bash scripts/run-simpledelphible-stage3.sh /path/to/simpleble-v1.3.0
 ```
 
 The script builds upstream PLAIN, runs core/profile regressions and native backend

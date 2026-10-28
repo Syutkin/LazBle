@@ -6,7 +6,7 @@ interface
 
 uses Classes, SysUtils, fpcunit, testregistry, SimpleDelphiBLE,
   LazBleTypes, LazBleBackend, LazBleSimpleBleBackend, LazBleFacade,
-  LazBleClient, LazBleOperation, LazBleBattery, LazBleGattProfile;
+  LazBleClient, LazBleOperation, LazBleBattery, LazBleGattProfile, LazBleSync;
 
 type
   TNativeEventSink = class(TInterfacedObject, ILazBleBackendEventSink)
@@ -62,6 +62,8 @@ type
     procedure UnsubscribeAfterLinkLossRetiresHandler;
     procedure ShutdownWhileNativeConnectCompletes;
     procedure ShutdownFromSubscribeCompletion;
+    procedure NativeFacadeReconnectUsesMainThreadTimer;
+    procedure NativeSyncPumpsMainThreadEvents;
   end;
 
 implementation
@@ -75,6 +77,10 @@ const
   ErrorValue = '0000fff2-0000-1000-8000-00805f9b34fb';
 
 type
+  TClientGenerationAccess = class(TBleClient)
+    function CurrentGeneration: QWord;
+  end;
+
   TNativeDisconnect = class(TThread)
     Peer: TBlePeripheral;
     procedure Execute; override;
@@ -85,6 +91,9 @@ type
     Rejected: Boolean;
     procedure Execute; override;
   end;
+
+function TClientGenerationAccess.CurrentGeneration: QWord;
+begin Result := Generation; end;
 
 procedure TNativeDisconnect.Execute;
 begin
@@ -311,7 +320,8 @@ begin
         if Ch.Uuid = TestValue then
         begin
           Found := True;
-          AssertTrue(Ch.Properties = [lbgcpRead,lbgcpWriteRequest,lbgcpWriteCommand,lbgcpNotify,lbgcpIndicate]);
+          AssertTrue(Ch.CanRead and Ch.CanWriteRequest and Ch.CanWriteCommand and
+            Ch.CanNotify and Ch.CanIndicate);
           AssertTrue(Length(Ch.Descriptors) > 0);
         end;
   AssertTrue('Public GATT records converted', Found);
@@ -522,6 +532,47 @@ begin
   Shutdown;
   FEvents.ShutdownBackend := nil;
   N := Length(FEvents.Events); Pump(1100); AssertEquals(N, Length(FEvents.Events));
+end;
+
+procedure TLazBleSimpleBleBackendTest.NativeFacadeReconnectUsesMainThreadTimer;
+var Ble: TLazBle; Client: TBleClient; Battery: TBleBatteryProfile;
+  Op: IBleOperation; Deadline, Generation: QWord; Worker: TNativeDisconnect;
+begin
+  Shutdown; Ble := TLazBle.Create;
+  try
+    Client := Ble.CreateClient(Device); Battery := TBleBatteryProfile.Create; Client.AddProfile(Battery);
+    Client.ReconnectOptions := TLazBleReconnectOptions.Create(10,20,2); Client.AutoReconnect := True;
+    Op := Client.ConnectAsync; Deadline := GetTickCount64+8000;
+    while (Op.State=lbopPending) and (GetTickCount64<Deadline) do CheckSynchronize(5);
+    AssertEquals(Op.ErrorMessage,Ord(lbopSucceeded),Ord(Op.State));
+    Generation := TClientGenerationAccess(Client).CurrentGeneration;
+    Worker := TNativeDisconnect.Create(True);
+    Worker.Peer := TBleAdapter.GetAdapters[0].GetConnectedPeripherals[0];
+    try Worker.Start; Worker.WaitFor; finally Worker.Free; end;
+    Deadline := GetTickCount64+8000;
+    while ((Client.State<>lbcstReady) or
+      (TClientGenerationAccess(Client).CurrentGeneration=Generation)) and
+      (GetTickCount64<Deadline) do CheckSynchronize(5);
+    AssertTrue('New session established',TClientGenerationAccess(Client).CurrentGeneration>Generation);
+    AssertEquals(Ord(lbcstReady),Ord(Client.State)); AssertEquals(100,Battery.LevelPercent);
+    Op := Ble.ShutdownAsync; Deadline := GetTickCount64+8000;
+    while (Op.State=lbopPending) and (GetTickCount64<Deadline) do CheckSynchronize(5);
+    AssertEquals(Op.ErrorMessage,Ord(lbopSucceeded),Ord(Op.State));
+  finally Ble.Free; end;
+end;
+
+procedure TLazBleSimpleBleBackendTest.NativeSyncPumpsMainThreadEvents;
+var Sync: TLazBleSync; Devices: TBleDeviceInfos; Client: TBleClient; Error: string;
+begin
+  Shutdown; Sync := TLazBleSync.Create;
+  try
+    AssertTrue(Error,Sync.Scan('',100,Devices,Error)); AssertTrue(Length(Devices)>0);
+    Client := Sync.CreateClient(Device);
+    AssertTrue(Error,Sync.Connect(Client,8000,Error));
+    AssertTrue(Length(Client.Services)>0);
+    AssertTrue(Error,Sync.Disconnect(Client,8000,Error));
+    AssertTrue(Error,Sync.Shutdown(8000,Error));
+  finally Sync.Free; end;
 end;
 
 initialization

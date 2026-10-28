@@ -20,12 +20,12 @@ type
   );
 
   TLazBleScanCompletedEvent = procedure(Sender: TObject;
-    const ASucceeded: Boolean; const AErrorCode: Integer;
+    const AOutcome: TLazBleBackendEventKind; const AErrorCode: Integer;
     const AErrorMessage: string) of object;
   TLazBleCentralStateChangedEvent = procedure(Sender: TObject;
     const AState: TLazBleCentralState) of object;
   TLazBleAvailabilityCompletedEvent = procedure(Sender: TObject;
-    const ASucceeded: Boolean; const AErrorCode: Integer;
+    const AOutcome: TLazBleBackendEventKind; const AErrorCode: Integer;
     const AErrorMessage: string) of object;
 
   TBleCentralManager = class;
@@ -33,7 +33,6 @@ type
   TLazBleManagerEventSink = class(TInterfacedObject,
     ILazBleBackendEventSink)
   private
-    FLock: TRTLCriticalSection;
     FManager: TBleCentralManager;
   public
     constructor Create(const AManager: TBleCentralManager);
@@ -54,6 +53,9 @@ type
     FScanOperationId: TBleOperationId;
     FAvailabilityOperationId: TBleOperationId;
     FShutdownOperationId: TBleOperationId;
+    FShutdownFailed: Boolean;
+    FShutdownErrorCode: Integer;
+    FShutdownErrorMessage: string;
     FOnScanResult: TLazBleScanResultEvent;
     FOnScanCompleted: TLazBleScanCompletedEvent;
     FOnAvailabilityResult: TLazBleAvailabilityResultEvent;
@@ -79,6 +81,9 @@ type
     { Create a session managed by this central manager. }
     function CreateSession(const ADeviceId: string): TBleGattSession;
     function BeginShutdown: TBleOperationId;
+    property ShutdownFailed: Boolean read FShutdownFailed;
+    property ShutdownErrorCode: Integer read FShutdownErrorCode;
+    property ShutdownErrorMessage: string read FShutdownErrorMessage;
     property State: TLazBleCentralState read FState;
     property OnScanResult: TLazBleScanResultEvent read FOnScanResult
       write FOnScanResult;
@@ -102,6 +107,7 @@ type
       const ACancelOperation: TLazBleCancelOperation);
     procedure HandleEvent(const AEvent: TLazBleBackendEvent);
     procedure HandleShutdown;
+    procedure PrepareShutdownInternal;
   end;
 
 constructor TBleGattSessionAccess.CreateInternal(const ADeviceId: string;
@@ -114,16 +120,24 @@ end;
 procedure TBleGattSessionAccess.HandleEvent(
   const AEvent: TLazBleBackendEvent);
 begin
+  LazBleRequireMainThread;
   HandleBackendEvent(AEvent);
 end;
 
 procedure TBleGattSessionAccess.HandleShutdown;
 begin
+  LazBleRequireMainThread;
   HandleBackendShutdown;
+end;
+
+procedure TBleGattSessionAccess.PrepareShutdownInternal;
+begin
+  PrepareShutdown;
 end;
 
 procedure TBleCentralManager.SetState(const AState: TLazBleCentralState);
 begin
+  LazBleRequireMainThread;
   if FState = AState then
     Exit;
   FState := AState;
@@ -135,20 +149,19 @@ constructor TLazBleManagerEventSink.Create(
   const AManager: TBleCentralManager);
 begin
   inherited Create;
-  InitCriticalSection(FLock);
   FManager := AManager;
 end;
 
 destructor TLazBleManagerEventSink.Destroy;
 begin
   Detach;
-  DoneCriticalSection(FLock);
   inherited Destroy;
 end;
 
 procedure TBleCentralManager.CancelOperation(
   const AOperationId: TBleOperationId);
 begin
+  LazBleRequireMainThread;
   if Assigned(FBackend) and
     not (FState in [lbcsShuttingDown, lbcsShutdown]) then
     FBackend.Cancel(AOperationId);
@@ -156,24 +169,17 @@ end;
 
 procedure TLazBleManagerEventSink.Detach;
 begin
-  EnterCriticalSection(FLock);
-  try
-    FManager := nil;
-  finally
-    LeaveCriticalSection(FLock);
-  end;
+  LazBleRequireMainThread;
+  LazBleRequireMainThread;
+  FManager := nil;
 end;
 
 procedure TLazBleManagerEventSink.HandleBackendEvent(
   const AEvent: TLazBleBackendEvent);
 begin
-  EnterCriticalSection(FLock);
-  try
-    if Assigned(FManager) then
-      FManager.HandleBackendEvent(AEvent);
-  finally
-    LeaveCriticalSection(FLock);
-  end;
+  LazBleRequireMainThread;
+  LazBleRequireMainThread;
+  if Assigned(FManager) then FManager.HandleBackendEvent(AEvent);
 end;
 
 constructor TBleCentralManager.Create(const ABackend: ILazBleBackend);
@@ -210,6 +216,7 @@ end;
 
 procedure TBleCentralManager.DetachBackendEvents;
 begin
+  LazBleRequireMainThread;
   if Assigned(FBackend) then
     FBackend.SetEventSink(nil);
   if Assigned(FEventSinkObject) then
@@ -219,6 +226,7 @@ end;
 function TBleCentralManager.SubmitCommand(
   const ACommand: TLazBleBackendCommand): TBleOperationId;
 begin
+  LazBleRequireMainThread;
   if not Assigned(FBackend) or
     (FState in [lbcsShuttingDown, lbcsShutdown]) then
     Exit(InvalidBleOperationId);
@@ -230,6 +238,7 @@ function TBleCentralManager.StartScan(const AAdapterId: string;
 var
   Command: TLazBleBackendCommand;
 begin
+  LazBleRequireMainThread;
   Result := InvalidBleOperationId;
   if (FState <> lbcsIdle) or
     (FAvailabilityOperationId <> InvalidBleOperationId) then
@@ -251,6 +260,7 @@ function TBleCentralManager.CheckAvailability(
 var
   Command: TLazBleBackendCommand;
 begin
+  LazBleRequireMainThread;
   Result := InvalidBleOperationId;
   if (FState <> lbcsIdle) or
     (FAvailabilityOperationId <> InvalidBleOperationId) then
@@ -265,12 +275,14 @@ end;
 
 procedure TBleCentralManager.CancelAvailabilityCheck;
 begin
+  LazBleRequireMainThread;
   if FAvailabilityOperationId <> InvalidBleOperationId then
     CancelOperation(FAvailabilityOperationId);
 end;
 
 procedure TBleCentralManager.CancelScan;
 begin
+  LazBleRequireMainThread;
   if (FState = lbcsScanning) and
     (FScanOperationId <> InvalidBleOperationId) then
     CancelOperation(FScanOperationId);
@@ -281,6 +293,7 @@ function TBleCentralManager.CreateSession(
 var
   Index: Integer;
 begin
+  LazBleRequireMainThread;
   Result := nil;
   if FState in [lbcsShuttingDown, lbcsShutdown] then
     Exit;
@@ -296,12 +309,16 @@ begin
 end;
 
 function TBleCentralManager.BeginShutdown: TBleOperationId;
+var I: Integer;
 begin
+  LazBleRequireMainThread;
   if FState = lbcsShutdown then
     Exit(FShutdownOperationId);
   if FState = lbcsShuttingDown then
     Exit(FShutdownOperationId);
   SetState(lbcsShuttingDown);
+  for I := 0 to FSessions.Count - 1 do
+    TBleGattSessionAccess(FSessions[I]).PrepareShutdownInternal;
   FShutdownOperationId := FBackend.BeginShutdown;
   Result := FShutdownOperationId;
 end;
@@ -312,6 +329,7 @@ var
   BackendInfo: TLazBleBackendInfo;
   Index: Integer;
 begin
+  LazBleRequireMainThread;
   if FState = lbcsShutdown then
     Exit;
 
@@ -338,6 +356,9 @@ begin
     (AEvent.Kind = lbekShutdownCompleted) and
     (AEvent.OperationId = FShutdownOperationId) then
   begin
+    FShutdownFailed := AEvent.ShutdownFailed;
+    FShutdownErrorCode := AEvent.ErrorCode;
+    FShutdownErrorMessage := AEvent.ErrorMessage;
     for Index := 0 to FSessions.Count - 1 do
       TBleGattSessionAccess(FSessions[Index]).HandleShutdown;
     FBackend.SetEventSink(nil);
@@ -356,7 +377,7 @@ begin
     if FState = lbcsScanning then
       SetState(lbcsIdle);
     if Assigned(FOnScanCompleted) then
-      FOnScanCompleted(Self, AEvent.Kind = lbekOperationSucceeded,
+      FOnScanCompleted(Self, AEvent.Kind,
         AEvent.ErrorCode, AEvent.ErrorMessage);
   end;
 
@@ -366,7 +387,7 @@ begin
     FAvailabilityOperationId := InvalidBleOperationId;
     if Assigned(FOnAvailabilityCompleted) then
       FOnAvailabilityCompleted(Self,
-        AEvent.Kind = lbekOperationSucceeded, AEvent.ErrorCode,
+        AEvent.Kind, AEvent.ErrorCode,
         AEvent.ErrorMessage);
   end;
 end;

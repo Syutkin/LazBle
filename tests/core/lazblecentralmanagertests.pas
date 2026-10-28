@@ -6,7 +6,7 @@ interface
 
 uses
   Classes,
-  SyncObjs,
+  SysUtils,
   fpcunit,
   testregistry,
   LazBleTypes,
@@ -45,7 +45,7 @@ type
   public
     procedure ScanResult(Sender: TObject; const ADeviceId,
       ADeviceName: string; const ARssi: SmallInt);
-    procedure ScanCompleted(Sender: TObject; const ASucceeded: Boolean;
+    procedure ScanCompleted(Sender: TObject; const AOutcome: TLazBleBackendEventKind;
       const AErrorCode: Integer; const AErrorMessage: string);
     procedure SessionStateChanged(Sender: TObject;
       const AState: TLazBleSessionState);
@@ -59,19 +59,6 @@ type
     property LastSessionState: TLazBleSessionState read FLastSessionState;
   end;
 
-  TBlockingScanObserver = class
-  private
-    FEntered: TEvent;
-    FRelease: TEvent;
-  public
-    constructor Create;
-    destructor Destroy; override;
-    procedure ScanResult(Sender: TObject; const ADeviceId,
-      ADeviceName: string; const ARssi: SmallInt);
-    property Entered: TEvent read FEntered;
-    property ReleaseEvent: TEvent read FRelease;
-  end;
-
   TEventSinkDeliveryThread = class(TThread)
   private
     FEventSink: ILazBleBackendEventSink;
@@ -81,17 +68,6 @@ type
   public
     constructor Create(const AEventSink: ILazBleBackendEventSink;
       const ABackendEvent: TLazBleBackendEvent);
-  end;
-
-  TEventSinkDetachThread = class(TThread)
-  private
-    FEventSink: TLazBleManagerEventSink;
-    FDone: TEvent;
-  protected
-    procedure Execute; override;
-  public
-    constructor Create(const AEventSink: TLazBleManagerEventSink;
-      const ADone: TEvent);
   end;
 
   TLazBleCentralManagerTest = class(TTestCase)
@@ -119,31 +95,10 @@ type
     procedure ShutdownRetainsBackendUntilManagerIsDestroyed;
     procedure ScanPublishesResultsAndCompletion;
     procedure SessionPublishesStateChanges;
-    procedure DetachWaitsForInFlightEventDelivery;
+    procedure SinkRejectsOffMainDelivery;
   end;
 
 implementation
-
-constructor TBlockingScanObserver.Create;
-begin
-  inherited Create;
-  FEntered := TEvent.Create(nil, True, False, '');
-  FRelease := TEvent.Create(nil, True, False, '');
-end;
-
-destructor TBlockingScanObserver.Destroy;
-begin
-  FRelease.Free;
-  FEntered.Free;
-  inherited Destroy;
-end;
-
-procedure TBlockingScanObserver.ScanResult(Sender: TObject;
-  const ADeviceId, ADeviceName: string; const ARssi: SmallInt);
-begin
-  FEntered.SetEvent;
-  FRelease.WaitFor(INFINITE);
-end;
 
 constructor TEventSinkDeliveryThread.Create(
   const AEventSink: ILazBleBackendEventSink;
@@ -158,21 +113,6 @@ end;
 procedure TEventSinkDeliveryThread.Execute;
 begin
   FEventSink.HandleBackendEvent(FBackendEvent);
-end;
-
-constructor TEventSinkDetachThread.Create(
-  const AEventSink: TLazBleManagerEventSink; const ADone: TEvent);
-begin
-  inherited Create(True);
-  FreeOnTerminate := False;
-  FEventSink := AEventSink;
-  FDone := ADone;
-end;
-
-procedure TEventSinkDetachThread.Execute;
-begin
-  FEventSink.Detach;
-  FDone.SetEvent;
 end;
 
 constructor TTrackedFakeLazBleBackend.Create(
@@ -198,11 +138,11 @@ begin
 end;
 
 procedure TCentralObserver.ScanCompleted(Sender: TObject;
-  const ASucceeded: Boolean; const AErrorCode: Integer;
+  const AOutcome: TLazBleBackendEventKind; const AErrorCode: Integer;
   const AErrorMessage: string);
 begin
   Inc(FScanCompletedCount);
-  FScanSucceeded := ASucceeded;
+  FScanSucceeded := AOutcome = lbekOperationSucceeded;
 end;
 
 procedure TCentralObserver.SessionStateChanged(Sender: TObject;
@@ -484,64 +424,17 @@ begin
   end;
 end;
 
-procedure TLazBleCentralManagerTest.DetachWaitsForInFlightEventDelivery;
-var
-  BackendEvent: TLazBleBackendEvent;
-  DeliveryThread: TEventSinkDeliveryThread;
-  DetachDone: TEvent;
-  DetachThread: TEventSinkDetachThread;
-  EventSink: ILazBleBackendEventSink;
-  EventSinkObject: TLazBleManagerEventSink;
-  Observer: TBlockingScanObserver;
-  ScanId: TBleOperationId;
+procedure TLazBleCentralManagerTest.SinkRejectsOffMainDelivery;
+var Event: TLazBleBackendEvent; Worker: TEventSinkDeliveryThread;
+  Sink: ILazBleBackendEventSink;
 begin
-  DeliveryThread := nil;
-  DetachDone := TEvent.Create(nil, True, False, '');
-  DetachThread := nil;
-  Observer := TBlockingScanObserver.Create;
-  EventSinkObject := TLazBleManagerEventSink.Create(FManager);
-  EventSink := EventSinkObject;
+  Sink := TLazBleManagerEventSink.Create(FManager);
+  Event := Default(TLazBleBackendEvent);
+  Worker := TEventSinkDeliveryThread.Create(Sink, Event);
   try
-    FManager.OnScanResult := @Observer.ScanResult;
-    ScanId := FManager.StartScan('', 1000);
-    BackendEvent := Default(TLazBleBackendEvent);
-    BackendEvent.Kind := lbekScanResult;
-    BackendEvent.OperationId := ScanId;
-    BackendEvent.DeviceId := 'device-1';
-
-    DeliveryThread := TEventSinkDeliveryThread.Create(EventSink,
-      BackendEvent);
-    DeliveryThread.Start;
-    AssertEquals(Ord(wrSignaled), Ord(Observer.Entered.WaitFor(1000)));
-
-    DetachThread := TEventSinkDetachThread.Create(EventSinkObject,
-      DetachDone);
-    DetachThread.Start;
-    AssertEquals(Ord(wrTimeout), Ord(DetachDone.WaitFor(50)));
-
-    Observer.ReleaseEvent.SetEvent;
-    AssertEquals(Ord(wrSignaled), Ord(DetachDone.WaitFor(1000)));
-    DeliveryThread.WaitFor;
-    DetachThread.WaitFor;
-    AssertNull(DeliveryThread.FatalException);
-    AssertNull(DetachThread.FatalException);
-  finally
-    Observer.ReleaseEvent.SetEvent;
-    if Assigned(DeliveryThread) then
-    begin
-      DeliveryThread.WaitFor;
-      DeliveryThread.Free;
-    end;
-    if Assigned(DetachThread) then
-    begin
-      DetachThread.WaitFor;
-      DetachThread.Free;
-    end;
-    FManager.OnScanResult := nil;
-    EventSink := nil;
-    Observer.Free;
-    DetachDone.Free;
-  end;
+    Worker.Start; Worker.WaitFor;
+    AssertTrue('Custom backend must marshal to main', Worker.FatalException is EInvalidOperation);
+  finally Worker.Free; end;
 end;
 
 procedure TLazBleCentralManagerTest.SessionPublishesStateChanges;

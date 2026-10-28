@@ -128,17 +128,15 @@ begin
   Deadline := GetTickCount64 + ATimeoutMs;
   while (Operation.State = lbopPending) and
     (GetTickCount64 < Deadline) do
-    Sleep(10);
-  if Operation.State = lbopPending then
-    Operation.Timeout;
+    CheckSynchronize(10);
 
   Result := Operation.State = lbopSucceeded;
   if not Result then
   begin
     if Operation.ErrorMessage <> '' then
       WriteLn(StdErr, Operation.ErrorMessage)
-    else if Operation.State = lbopTimedOut then
-      WriteLn(StdErr, 'NUS write timed out.')
+    else if Operation.State = lbopPending then
+      WriteLn(StdErr, 'Wait timed out; NUS write may still be running.')
     else
       WriteLn(StdErr, 'NUS write failed.');
   end;

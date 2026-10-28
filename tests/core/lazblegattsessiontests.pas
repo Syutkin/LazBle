@@ -45,13 +45,13 @@ type
     procedure SetUp; override;
     procedure TearDown; override;
   published
-    procedure ReadCompletesWithCopiedValue;
+    procedure ReadPublishesManagedValue;
     procedure WritePreservesModeAndPayload;
     procedure SubscribeDeliversNotifications;
     procedure SubscribeFailureMarksTokenFailed;
     procedure UnsubscribeIsIdempotent;
     procedure DisconnectInvalidatesSubscriptionAndIgnoresOldNotification;
-    procedure DiscoveryPublishesAnIndependentGattSnapshot;
+    procedure DiscoveryPublishesUpstreamGattRecords;
     procedure CompletedOperationOutlivesSession;
     procedure InvalidatedSubscriptionOutlivesSession;
   end;
@@ -73,12 +73,10 @@ begin
   BackendEvent.Services[0].Data := [$10, $20];
   SetLength(BackendEvent.Services[0].Characteristics, 1);
   BackendEvent.Services[0].Characteristics[0].Uuid := 'characteristic-1';
-  BackendEvent.Services[0].Characteristics[0].Properties := [
-    lbgcpRead,
-    lbgcpNotify
-  ];
+  BackendEvent.Services[0].Characteristics[0].CanRead := True;
+BackendEvent.Services[0].Characteristics[0].CanNotify := True;
   SetLength(BackendEvent.Services[0].Characteristics[0].Descriptors, 1);
-  BackendEvent.Services[0].Characteristics[0].Descriptors[0].Uuid :=
+  BackendEvent.Services[0].Characteristics[0].Descriptors[0] :=
     'descriptor-1';
   AssertTrue(FBackendObject.EmitProgress(BackendEvent));
 end;
@@ -138,7 +136,7 @@ begin
   EmitServicesDiscovered(DiscoveryId);
 end;
 
-procedure TLazBleGattSessionTest.DiscoveryPublishesAnIndependentGattSnapshot;
+procedure TLazBleGattSessionTest.DiscoveryPublishesUpstreamGattRecords;
 var
   Characteristic: TLazBleGattCharacteristic;
   Services: TLazBleGattServices;
@@ -146,30 +144,34 @@ begin
   Services := FSession.Services;
 
   AssertEquals(1, Length(Services));
-  AssertEquals('service-1', Services[0].Uuid);
+  AssertEquals('service-1', UTF8Encode(Services[0].Uuid));
   AssertEquals(2, Length(Services[0].Data));
   AssertEquals(1, Length(Services[0].Characteristics));
-  AssertTrue(lbgcpRead in Services[0].Characteristics[0].Properties);
-  AssertTrue(lbgcpNotify in Services[0].Characteristics[0].Properties);
+  AssertTrue(Services[0].Characteristics[0].CanRead);
+  AssertTrue(Services[0].Characteristics[0].CanNotify);
   AssertEquals('descriptor-1',
-    Services[0].Characteristics[0].Descriptors[0].Uuid);
+    UTF8Encode(Services[0].Characteristics[0].Descriptors[0]));
   AssertTrue(FSession.HasService('SERVICE-1'));
   AssertFalse(FSession.HasService('missing-service'));
   AssertTrue(FSession.TryGetCharacteristic('SERVICE-1',
     'CHARACTERISTIC-1', Characteristic));
-  AssertTrue(lbgcpNotify in Characteristic.Properties);
+  AssertTrue(Characteristic.CanNotify);
   AssertFalse(FSession.TryGetCharacteristic('service-1',
     'missing-characteristic', Characteristic));
 
+  Services := Copy(Services);
+  Services[0].Data := Copy(Services[0].Data);
+  Services[0].Characteristics := Copy(Services[0].Characteristics);
+  Services[0].Characteristics[0].Descriptors := Copy(Services[0].Characteristics[0].Descriptors);
   Services[0].Uuid := 'changed';
   Services[0].Data[0] := $FF;
-  Services[0].Characteristics[0].Descriptors[0].Uuid := 'changed';
+  Services[0].Characteristics[0].Descriptors[0] := 'changed';
   Services := FSession.Services;
 
-  AssertEquals('service-1', Services[0].Uuid);
+  AssertEquals('service-1', UTF8Encode(Services[0].Uuid));
   AssertEquals($10, Integer(Services[0].Data[0]));
   AssertEquals('descriptor-1',
-    Services[0].Characteristics[0].Descriptors[0].Uuid);
+    UTF8Encode(Services[0].Characteristics[0].Descriptors[0]));
 end;
 
 procedure TLazBleGattSessionTest.TearDown;
@@ -181,7 +183,7 @@ begin
   FBackendObject := nil;
 end;
 
-procedure TLazBleGattSessionTest.ReadCompletesWithCopiedValue;
+procedure TLazBleGattSessionTest.ReadPublishesManagedValue;
 var
   Operation: IBleGattOperation;
   OperationId: TBleOperationId;
@@ -198,7 +200,7 @@ begin
   AssertEquals(Ord(lbopSucceeded), Ord(Operation.State));
   AssertEquals(2, Length(Operation.Value));
   AssertEquals($20, Integer(Operation.Value[1]));
-  Value := Operation.Value;
+  Value := Copy(Operation.Value);
   Value[1] := $FF;
   AssertEquals($20, Integer(Operation.Value[1]));
 end;

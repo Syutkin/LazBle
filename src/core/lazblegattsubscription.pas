@@ -4,27 +4,18 @@ unit LazBleGattSubscription;
 
 interface
 
-uses
-  SysUtils,
-  LazBleTypes,
-  LazBleOperation,
-  LazBleGattOperation;
+uses SysUtils, LazBleTypes, LazBleOperation, LazBleGattOperation;
 
 type
-  TLazBleSubscriptionState = (
-    lbsubPending,
-    lbsubActive,
-    lbsubUnsubscribing,
-    lbsubInactive,
-    lbsubFailed
-  );
-
+  TLazBleSubscriptionState = (lbsubPending, lbsubActive, lbsubUnsubscribing,
+    lbsubInactive, lbsubFailed);
   TLazBleDataEvent = procedure(Sender: TObject; const AValue: TBytes) of object;
   TLazBleSubscriptionStateChangedEvent = procedure(Sender: TObject;
     const AState: TLazBleSubscriptionState) of object;
 
-  { A notification subscription. It becomes Active after the backend accepts
-    it and becomes inactive when the session is lost or it is removed. }
+  { Main-thread notification token. Early values are dropped, not replayed.
+    Unsubscribe retires delivery immediately and awaits actual native cleanup,
+    including a Notify that is still pending. Its cleanup cannot be cancelled. }
   IBleSubscription = interface
     ['{E0A9178B-250E-490D-9CD3-514A13367F44}']
     function GetState: TLazBleSubscriptionState;
@@ -33,35 +24,33 @@ type
     function GetOnData: TLazBleDataEvent;
     procedure SetOnData(const AHandler: TLazBleDataEvent);
     function GetOnStateChanged: TLazBleSubscriptionStateChangedEvent;
-    procedure SetOnStateChanged(
-      const AHandler: TLazBleSubscriptionStateChangedEvent);
-    { Stop notifications; the returned operation reports completion. }
+    procedure SetOnStateChanged(const AHandler: TLazBleSubscriptionStateChangedEvent);
     function Unsubscribe: IBleGattOperation;
     property State: TLazBleSubscriptionState read GetState;
     property ErrorCode: Integer read GetErrorCode;
     property ErrorMessage: string read GetErrorMessage;
-    { Called for notification payloads while the subscription is active. }
+    { Payload and its nested data are read-only for the receiver. }
     property OnData: TLazBleDataEvent read GetOnData write SetOnData;
     property OnStateChanged: TLazBleSubscriptionStateChangedEvent
       read GetOnStateChanged write SetOnStateChanged;
   end;
 
   TBleSubscription = class;
-  TLazBleUnsubscribe = function(
-    const ASubscription: TBleSubscription): IBleGattOperation of object;
+  TLazBleUnsubscribe = function(const ASubscription: TBleSubscription):
+    IBleGattOperation of object;
 
   TBleSubscription = class(TInterfacedObject, IBleSubscription)
   private
-    FLock: TRTLCriticalSection;
-    FCallbackLock: TRTLCriticalSection;
     FOperationId: TBleOperationId;
     FSubscriptionId: TBleSubscriptionId;
     FGeneration: QWord;
     FState: TLazBleSubscriptionState;
+    FClosing: Boolean;
     FErrorCode: Integer;
     FErrorMessage: string;
     FUnsubscribe: TLazBleUnsubscribe;
-    FUnsubscribeOperation: IBleGattOperation;
+    FUnsubscribeOperation, FNativeUnsubscribeOperation: IBleGattOperation;
+    FUnsubscribeObject: TBleGattOperation;
     FOnData: TLazBleDataEvent;
     FOnStateChanged: TLazBleSubscriptionStateChangedEvent;
     function GetState: TLazBleSubscriptionState;
@@ -70,16 +59,20 @@ type
     function GetOnData: TLazBleDataEvent;
     procedure SetOnData(const AHandler: TLazBleDataEvent);
     function GetOnStateChanged: TLazBleSubscriptionStateChangedEvent;
-    procedure SetOnStateChanged(
-      const AHandler: TLazBleSubscriptionStateChangedEvent);
+    procedure SetOnStateChanged(const AHandler: TLazBleSubscriptionStateChangedEvent);
     procedure SetState(const AState: TLazBleSubscriptionState);
+    procedure StartNativeUnsubscribe;
     procedure UnsubscribeCompleted(Sender: TObject);
+    procedure FinishUnsubscribe(const AState: TLazBleOperationState;
+      const AErrorCode: Integer = 0; const AErrorMessage: string = '');
   protected
     constructor Create(const AOperationId: TBleOperationId;
       const AGeneration: QWord; const AUnsubscribe: TLazBleUnsubscribe);
-    procedure BeginUnsubscribe(const AOperation: IBleGattOperation);
     procedure HandleBackendEvent(const AEvent: TLazBleBackendEvent);
-    procedure Invalidate;
+    procedure Invalidate(const AForce: Boolean = False);
+    procedure DetachCallbacks;
+    function CleanupPending: Boolean;
+    procedure BeginShutdown;
     procedure DetachOwner;
     function GetOperationId: TBleOperationId;
     function GetSubscriptionId: TBleSubscriptionId;
@@ -98,24 +91,27 @@ type
 implementation
 
 type
-  TBleGattOperationAccess = class(TBleGattOperation)
+  TUnsubscribeOperation = class(TBleGattOperation)
   public
-    constructor CreateTerminal(const AState: TLazBleOperationState;
-      const AErrorMessage: string);
+    constructor Create;
+    procedure Finish(AState: TLazBleOperationState; ACode: Integer; const Text: string);
   end;
 
-constructor TBleGattOperationAccess.CreateTerminal(
-  const AState: TLazBleOperationState; const AErrorMessage: string);
+constructor TUnsubscribeOperation.Create;
 begin
-  inherited CreateCompleted(lbckUnsubscribe, AState, AErrorMessage);
+  inherited CreatePending(lbckUnsubscribe);
+end;
+
+procedure TUnsubscribeOperation.Finish(AState: TLazBleOperationState;
+  ACode: Integer; const Text: string);
+begin
+  Complete(AState, ACode, Text);
 end;
 
 constructor TBleSubscription.Create(const AOperationId: TBleOperationId;
   const AGeneration: QWord; const AUnsubscribe: TLazBleUnsubscribe);
 begin
   inherited Create;
-  InitCriticalSection(FLock);
-  InitCriticalSection(FCallbackLock);
   FOperationId := AOperationId;
   FGeneration := AGeneration;
   FUnsubscribe := AUnsubscribe;
@@ -125,295 +121,179 @@ begin
     FErrorCode := LazBleErrorInvalidState;
     FErrorMessage := 'BLE subscription could not be started';
   end
-  else
-    FState := lbsubPending;
+  else FState := lbsubPending;
 end;
 
 destructor TBleSubscription.Destroy;
 begin
-  if Assigned(FUnsubscribeOperation) then
-    FUnsubscribeOperation.OnCompleted := nil;
-  EnterCriticalSection(FCallbackLock);
-  try
-    FOnData := nil;
-    FOnStateChanged := nil;
-  finally
-    LeaveCriticalSection(FCallbackLock);
-  end;
-  EnterCriticalSection(FLock);
-  try
-    FUnsubscribe := nil;
-    FUnsubscribeOperation := nil;
-  finally
-    LeaveCriticalSection(FLock);
-  end;
-  DoneCriticalSection(FCallbackLock);
-  DoneCriticalSection(FLock);
+  if FNativeUnsubscribeOperation <> nil then FNativeUnsubscribeOperation.OnCompleted := nil;
   inherited Destroy;
 end;
 
 function TBleSubscription.GetState: TLazBleSubscriptionState;
-begin
-  EnterCriticalSection(FLock);
-  try
-    Result := FState;
-  finally
-    LeaveCriticalSection(FLock);
-  end;
-end;
-
+begin LazBleRequireMainThread; Result := FState; end;
 function TBleSubscription.GetErrorCode: Integer;
-begin
-  EnterCriticalSection(FLock);
-  try
-    Result := FErrorCode;
-  finally
-    LeaveCriticalSection(FLock);
-  end;
-end;
-
+begin LazBleRequireMainThread; Result := FErrorCode; end;
 function TBleSubscription.GetErrorMessage: string;
-begin
-  EnterCriticalSection(FLock);
-  try
-    Result := FErrorMessage;
-  finally
-    LeaveCriticalSection(FLock);
-  end;
-end;
-
+begin LazBleRequireMainThread; Result := FErrorMessage; end;
 function TBleSubscription.GetOnData: TLazBleDataEvent;
-begin
-  EnterCriticalSection(FCallbackLock);
-  try
-    Result := FOnData;
-  finally
-    LeaveCriticalSection(FCallbackLock);
-  end;
-end;
-
+begin LazBleRequireMainThread; Result := FOnData; end;
 procedure TBleSubscription.SetOnData(const AHandler: TLazBleDataEvent);
-begin
-  EnterCriticalSection(FCallbackLock);
-  try
-    FOnData := AHandler;
-  finally
-    LeaveCriticalSection(FCallbackLock);
-  end;
-end;
+begin LazBleRequireMainThread; FOnData := AHandler; end;
+function TBleSubscription.GetOnStateChanged: TLazBleSubscriptionStateChangedEvent;
+begin LazBleRequireMainThread; Result := FOnStateChanged; end;
+procedure TBleSubscription.SetOnStateChanged(const AHandler: TLazBleSubscriptionStateChangedEvent);
+begin LazBleRequireMainThread; FOnStateChanged := AHandler; end;
 
-function TBleSubscription.GetOnStateChanged:
-  TLazBleSubscriptionStateChangedEvent;
+procedure TBleSubscription.SetState(const AState: TLazBleSubscriptionState);
 begin
-  EnterCriticalSection(FCallbackLock);
-  try
-    Result := FOnStateChanged;
-  finally
-    LeaveCriticalSection(FCallbackLock);
-  end;
-end;
-
-procedure TBleSubscription.SetOnStateChanged(
-  const AHandler: TLazBleSubscriptionStateChangedEvent);
-begin
-  EnterCriticalSection(FCallbackLock);
-  try
-    FOnStateChanged := AHandler;
-  finally
-    LeaveCriticalSection(FCallbackLock);
-  end;
-end;
-
-procedure TBleSubscription.SetState(
-  const AState: TLazBleSubscriptionState);
-var
-  Handler: TLazBleSubscriptionStateChangedEvent;
-begin
-  EnterCriticalSection(FLock);
-  try
-    if FState = AState then
-      Exit;
-    FState := AState;
-  finally
-    LeaveCriticalSection(FLock);
-  end;
-  EnterCriticalSection(FCallbackLock);
-  try
-    Handler := FOnStateChanged;
-  finally
-    LeaveCriticalSection(FCallbackLock);
-  end;
-  if Assigned(Handler) then
-    Handler(Self, AState);
+  LazBleRequireMainThread;
+  if FState = AState then Exit;
+  FState := AState;
+  if Assigned(FOnStateChanged) then FOnStateChanged(Self, AState);
 end;
 
 function TBleSubscription.Unsubscribe: IBleGattOperation;
 var
-  Handler: TLazBleUnsubscribe;
-  CurrentState: TLazBleSubscriptionState;
+  WasPending: Boolean;
 begin
-  EnterCriticalSection(FLock);
-  try
-    Result := FUnsubscribeOperation;
-    if Assigned(Result) then
-      Exit;
-    Handler := FUnsubscribe;
-    CurrentState := FState;
-  finally
-    LeaveCriticalSection(FLock);
-  end;
-
-  if CurrentState = lbsubInactive then
-    Result := TBleGattOperationAccess.CreateTerminal(lbopSucceeded, '')
-  else if CurrentState = lbsubFailed then
-    Result := TBleGattOperationAccess.CreateTerminal(lbopFailed,
-      'BLE subscription is not active')
-  else if Assigned(Handler) then
-    Result := Handler(Self)
+  LazBleRequireMainThread;
+  if FUnsubscribeOperation <> nil then Exit(FUnsubscribeOperation);
+  WasPending := FState = lbsubPending;
+  FUnsubscribeObject := TUnsubscribeOperation.Create;
+  FUnsubscribeOperation := FUnsubscribeObject;
+  Result := FUnsubscribeOperation;
+  case FState of
+    lbsubInactive: FinishUnsubscribe(lbopSucceeded);
+    lbsubFailed: FinishUnsubscribe(lbopFailed, FErrorCode, FErrorMessage);
   else
-    Result := TBleGattOperationAccess.CreateTerminal(lbopFailed,
-      'BLE subscription is detached');
-
-  EnterCriticalSection(FLock);
-  try
-    if not Assigned(FUnsubscribeOperation) then
-      FUnsubscribeOperation := Result
-    else
-      Result := FUnsubscribeOperation;
-  finally
-    LeaveCriticalSection(FLock);
+    begin
+      { Set state before invoking any handler, so no value can escape after
+        Unsubscribe, even if native Notify is already in flight. }
+      SetState(lbsubUnsubscribing);
+      if WasPending then
+      begin
+        if Assigned(FUnsubscribe) then
+          FUnsubscribe(Self) { asks the session to cancel queued Notify }
+        else FinishUnsubscribe(lbopFailed, LazBleErrorInvalidState, 'Subscription is detached');
+      end
+      else StartNativeUnsubscribe;
+    end;
   end;
 end;
 
-procedure TBleSubscription.BeginUnsubscribe(
-  const AOperation: IBleGattOperation);
+procedure TBleSubscription.StartNativeUnsubscribe;
 begin
-  EnterCriticalSection(FLock);
-  try
-    FUnsubscribeOperation := AOperation;
-  finally
-    LeaveCriticalSection(FLock);
+  if FNativeUnsubscribeOperation <> nil then Exit;
+  if not Assigned(FUnsubscribe) then
+  begin
+    FinishUnsubscribe(lbopFailed, LazBleErrorInvalidState, 'Subscription is detached');
+    Exit;
   end;
-  SetState(lbsubUnsubscribing);
-  AOperation.OnCompleted := @UnsubscribeCompleted;
+  FNativeUnsubscribeOperation := FUnsubscribe(Self);
+  if FNativeUnsubscribeOperation = nil then
+    FinishUnsubscribe(lbopFailed, LazBleErrorInvalidState, 'No native subscription token')
+  else FNativeUnsubscribeOperation.OnCompleted := @UnsubscribeCompleted;
+end;
+
+procedure TBleSubscription.FinishUnsubscribe(const AState: TLazBleOperationState;
+  const AErrorCode: Integer; const AErrorMessage: string);
+begin
+  FErrorCode := AErrorCode;
+  FErrorMessage := AErrorMessage;
+  if AState = lbopFailed then SetState(lbsubFailed) else SetState(lbsubInactive);
+  TUnsubscribeOperation(FUnsubscribeObject).Finish(AState, AErrorCode, AErrorMessage);
 end;
 
 procedure TBleSubscription.UnsubscribeCompleted(Sender: TObject);
 var
   Operation: IBleGattOperation;
 begin
-  EnterCriticalSection(FLock);
-  try
-    Operation := FUnsubscribeOperation;
-  finally
-    LeaveCriticalSection(FLock);
-  end;
-  if not Assigned(Operation) then
-    Exit;
+  LazBleRequireMainThread;
+  Operation := FNativeUnsubscribeOperation;
+  if Operation = nil then Exit;
   Operation.OnCompleted := nil;
-  if Operation.State = lbopFailed then
-    SetState(lbsubFailed)
-  else
-    SetState(lbsubInactive);
+  FinishUnsubscribe(Operation.State, Operation.ErrorCode, Operation.ErrorMessage);
 end;
 
-procedure TBleSubscription.HandleBackendEvent(
-  const AEvent: TLazBleBackendEvent);
-var
-  DataHandler: TLazBleDataEvent;
-  Value: TBytes;
+procedure TBleSubscription.HandleBackendEvent(const AEvent: TLazBleBackendEvent);
 begin
-  if (AEvent.Generation <> 0) and (AEvent.Generation <> FGeneration) then
-    Exit;
-
-  if (AEvent.OperationId = FOperationId) and
-    (State in [lbsubPending, lbsubActive]) then
+  LazBleRequireMainThread;
+  if (AEvent.Generation <> 0) and (AEvent.Generation <> FGeneration) then Exit;
+  if FClosing then Exit;
+  if (AEvent.OperationId = FOperationId) then
     case AEvent.Kind of
       lbekSubscribed:
         begin
-          EnterCriticalSection(FLock);
-          try
-            FSubscriptionId := AEvent.SubscriptionId;
-          finally
-            LeaveCriticalSection(FLock);
-          end;
-          SetState(lbsubActive);
+          FSubscriptionId := AEvent.SubscriptionId;
+          if FState = lbsubPending then SetState(lbsubActive);
         end;
-      lbekOperationFailed,
-      lbekOperationCancelled:
+      lbekOperationSucceeded:
+        if FState = lbsubUnsubscribing then StartNativeUnsubscribe;
+      lbekOperationFailed, lbekOperationCancelled:
+        if FState = lbsubUnsubscribing then
         begin
-          EnterCriticalSection(FLock);
-          try
-            FErrorCode := AEvent.ErrorCode;
-            FErrorMessage := AEvent.ErrorMessage;
-            if FErrorMessage = '' then
-              if AEvent.Kind = lbekOperationCancelled then
-                FErrorMessage := 'BLE subscription was cancelled'
-              else
-                FErrorMessage := 'BLE subscription failed';
-          finally
-            LeaveCriticalSection(FLock);
-          end;
+          if FSubscriptionId <> InvalidBleSubscriptionId then StartNativeUnsubscribe
+          else FinishUnsubscribe(lbopSucceeded);
+        end
+        else if FState in [lbsubPending, lbsubActive] then
+        begin
+          FErrorCode := AEvent.ErrorCode;
+          FErrorMessage := AEvent.ErrorMessage;
+          if FErrorMessage = '' then FErrorMessage := 'BLE subscription did not complete';
           SetState(lbsubFailed);
         end;
     end;
-
-  if (State = lbsubActive) and (AEvent.Kind = lbekNotification) and
-    (AEvent.SubscriptionId = GetSubscriptionId) then
-  begin
-    Value := Copy(AEvent.Value);
-    EnterCriticalSection(FCallbackLock);
-    try
-      DataHandler := FOnData;
-    finally
-      LeaveCriticalSection(FCallbackLock);
-    end;
-    if Assigned(DataHandler) then
-      DataHandler(Self, Value);
-  end;
+  if (FState = lbsubActive) and (AEvent.Kind = lbekNotification) and
+    (AEvent.SubscriptionId = FSubscriptionId) and Assigned(FOnData) then
+    FOnData(Self, AEvent.Value);
 end;
 
-procedure TBleSubscription.Invalidate;
+function TBleSubscription.CleanupPending: Boolean;
 begin
-  EnterCriticalSection(FCallbackLock);
-  try
-    FOnData := nil;
-  finally
-    LeaveCriticalSection(FCallbackLock);
-  end;
+  Result := (FUnsubscribeOperation <> nil) and (FUnsubscribeOperation.State = lbopPending);
+end;
+
+procedure TBleSubscription.DetachCallbacks;
+begin
+  FOnData := nil; FOnStateChanged := nil;
+  if FUnsubscribeOperation <> nil then FUnsubscribeOperation.OnCompleted := nil;
+  if FNativeUnsubscribeOperation <> nil then FNativeUnsubscribeOperation.OnCompleted := nil;
+end;
+
+procedure TBleSubscription.Invalidate(const AForce: Boolean);
+begin
+  LazBleRequireMainThread;
+  FOnData := nil;
   DetachOwner;
-  SetState(lbsubInactive);
-  SetOnStateChanged(nil);
+  if CleanupPending and (AForce or (FNativeUnsubscribeOperation = nil)) then
+  begin
+    if FNativeUnsubscribeOperation <> nil then FNativeUnsubscribeOperation.OnCompleted := nil;
+    if FClosing then FinishUnsubscribe(lbopCancelled, 0, 'Unsubscribe interrupted by shutdown')
+    else FinishUnsubscribe(lbopCancelled, LazBleErrorDeviceDisconnected,
+      'Disconnected before unsubscribe was submitted');
+  end;
+  { A submitted Unsubscribe keeps its callback and token context alive until
+    its real terminal result. No value delivery survives the connection. }
+  if FState <> lbsubFailed then SetState(lbsubInactive);
+  FOnStateChanged := nil;
+end;
+
+procedure TBleSubscription.BeginShutdown;
+begin
+  LazBleRequireMainThread;
+  FClosing := True;
+  FOnData := nil;
+  FOnStateChanged := nil;
 end;
 
 procedure TBleSubscription.DetachOwner;
-begin
-  EnterCriticalSection(FLock);
-  try
-    FUnsubscribe := nil;
-  finally
-    LeaveCriticalSection(FLock);
-  end;
-end;
-
+begin LazBleRequireMainThread; FUnsubscribe := nil; end;
 function TBleSubscription.GetOperationId: TBleOperationId;
-begin
-  Result := FOperationId;
-end;
-
+begin Result := FOperationId; end;
 function TBleSubscription.GetSubscriptionId: TBleSubscriptionId;
-begin
-  EnterCriticalSection(FLock);
-  try
-    Result := FSubscriptionId;
-  finally
-    LeaveCriticalSection(FLock);
-  end;
-end;
-
+begin Result := FSubscriptionId; end;
 function TBleSubscription.GetGeneration: QWord;
-begin
-  Result := FGeneration;
-end;
+begin Result := FGeneration; end;
 
 end.

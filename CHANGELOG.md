@@ -21,8 +21,23 @@
 - Require matching native libraries before startup, including for fake-backend
   test executables. Remove obsolete fppkg metadata; use the Lazarus wrapper or
   direct FPC source/library paths.
-- Replace injected C-driver tests with upstream PLAIN integration. Core, sync,
-  reconnect and LCL contracts remain under migration in stages 3–4.
+- Adopt upstream GATT records/capability booleans and UnicodeString descriptors;
+  remove the conversion layer and automatic deep copies. Snapshots are read-only.
+- Make core, profiles, and custom backend delivery main-thread-only; remove their
+  redundant locks and marshal reconnect timer actions once through RTL Queue.
+- Remove `IBleOperation.Timeout` / `lbopTimedOut`. Cancellation preserves real
+  command outcomes, including native error 0/empty text and old-generation GATT
+  results after connection loss. Remove cancellation rollback Disconnect calls.
+- Retire Unsubscribe delivery immediately and chain pending Notify cleanup without
+  early success. Cleanup is not cancellable; a failed unsubscribe disconnects
+  its session and preserves reconnect policy.
+- Preserve accepted command results during shutdown and propagate cleanup failure
+  with an explicit ShutdownFailed flag. Support the next async request from a
+  completion callback and detach pending-operation callbacks on owner teardown.
+- Move the TLazBleSync main-loop/deadline update forward from stage 4 because
+  removing Timeout requires updating its wait semantics now.
+- Replace injected C-driver tests with upstream PLAIN integration. LCL/Entime
+  dispatch, lifecycle, deployment, and release migration remain for stages 4–5.
 
 ### Fixed
 

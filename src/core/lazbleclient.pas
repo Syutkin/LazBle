@@ -38,8 +38,6 @@ type
     FDisconnectSession: TLazBleDisconnectSessionEvent;
     FSession: TBleGattSession;
     FProfiles: TList;
-    FStateLock: TRTLCriticalSection;
-    FCallbackLock: TRTLCriticalSection;
     FState: TLazBleClientState;
     FAttachingProfiles: Boolean;
     FEvaluatingProfiles: Boolean;
@@ -114,7 +112,7 @@ type
     function SubscribeAsync(const AServiceUuid,
       ACharacteristicUuid: string): IBleSubscription;
     property DeviceId: string read GetDeviceId;
-    { Discovered services for the current connection. }
+    { Read-only upstream service records for the current connection. }
     property Services: TLazBleGattServices read GetServices;
     property State: TLazBleClientState read GetState;
     { Retry after an unplanned disconnect when enabled. }
@@ -172,45 +170,53 @@ end;
 procedure TBleOperationAccess.Finish(const AState: TLazBleOperationState;
   const AErrorCode: Integer; const AErrorMessage: string);
 begin
+  LazBleRequireMainThread;
   Complete(AState, AErrorCode, AErrorMessage);
 end;
 
 function TBleGattProfileAccess.IsBound: Boolean;
 begin
+  LazBleRequireMainThread;
   Result := Bound;
 end;
 
 procedure TBleGattProfileAccess.AttachInternal;
 begin
+  LazBleRequireMainThread;
   Attach;
 end;
 
 procedure TBleGattProfileAccess.DetachInternal;
 begin
+  LazBleRequireMainThread;
   Detach;
 end;
 
 procedure TBleGattProfileAccess.AddHandler(
   const AHandler: TLazBleGattProfileStateChangedEvent);
 begin
+  LazBleRequireMainThread;
   AddStateChangedHandler(AHandler);
 end;
 
 procedure TBleGattProfileAccess.RemoveHandler(
   const AHandler: TLazBleGattProfileStateChangedEvent);
 begin
+  LazBleRequireMainThread;
   RemoveStateChangedHandler(AHandler);
 end;
 
 procedure TBleGattSessionAccess.AddHandler(
   const AHandler: TLazBleSessionStateChangedEvent);
 begin
+  LazBleRequireMainThread;
   AddStateChangedHandler(AHandler);
 end;
 
 procedure TBleGattSessionAccess.RemoveHandler(
   const AHandler: TLazBleSessionStateChangedEvent);
 begin
+  LazBleRequireMainThread;
   RemoveStateChangedHandler(AHandler);
 end;
 
@@ -228,8 +234,6 @@ begin
     raise EArgumentNilException.Create('ADisconnectSession');
   if not Assigned(AReconnectTimer) then
     raise EArgumentNilException.Create('AReconnectTimer');
-  InitCriticalSection(FStateLock);
-  InitCriticalSection(FCallbackLock);
   FConnectSession := AConnectSession;
   FDisconnectSession := ADisconnectSession;
   FSession := ASession;
@@ -255,6 +259,16 @@ begin
     FSessionConnectOperation.OnCompleted := nil;
   if Assigned(FSessionDisconnectOperation) then
     FSessionDisconnectOperation.OnCompleted := nil;
+  if Assigned(FConnectOperation) then
+  begin
+    FConnectOperation.OnCompleted := nil;
+    TBleOperationAccess(FConnectOperationObject).Finish(lbopCancelled);
+  end;
+  if Assigned(FDisconnectOperation) then
+  begin
+    FDisconnectOperation.OnCompleted := nil;
+    TBleOperationAccess(FDisconnectOperationObject).Finish(lbopCancelled);
+  end;
   FConnectOperation := nil;
   FConnectOperationObject := nil;
   FDisconnectOperation := nil;
@@ -276,49 +290,37 @@ begin
   FSession := nil;
   FConnectSession := nil;
   FDisconnectSession := nil;
-  DoneCriticalSection(FCallbackLock);
-  DoneCriticalSection(FStateLock);
   inherited Destroy;
 end;
 
 function TBleClient.GetState: TLazBleClientState;
 begin
-  EnterCriticalSection(FStateLock);
-  try
-    Result := FState;
-  finally
-    LeaveCriticalSection(FStateLock);
-  end;
+  LazBleRequireMainThread;
+  Result := FState;
 end;
 
 function TBleClient.GetOnStateChanged: TLazBleClientStateChangedEvent;
 begin
-  EnterCriticalSection(FCallbackLock);
-  try
-    Result := FOnStateChanged;
-  finally
-    LeaveCriticalSection(FCallbackLock);
-  end;
+  LazBleRequireMainThread;
+  Result := FOnStateChanged;
 end;
 
 procedure TBleClient.SetOnStateChanged(
   const AHandler: TLazBleClientStateChangedEvent);
 begin
-  EnterCriticalSection(FCallbackLock);
-  try
-    FOnStateChanged := AHandler;
-  finally
-    LeaveCriticalSection(FCallbackLock);
-  end;
+  LazBleRequireMainThread;
+  FOnStateChanged := AHandler;
 end;
 
 function TBleClient.GetAutoReconnect: Boolean;
 begin
+  LazBleRequireMainThread;
   Result := FReconnectController.Enabled;
 end;
 
 procedure TBleClient.SetAutoReconnect(const AValue: Boolean);
 begin
+  LazBleRequireMainThread;
   if AValue then
     FReconnectController.Enable
   else
@@ -332,12 +334,14 @@ end;
 
 function TBleClient.GetReconnectOptions: TLazBleReconnectOptions;
 begin
+  LazBleRequireMainThread;
   Result := FReconnectController.Options;
 end;
 
 procedure TBleClient.SetReconnectOptions(
   const AValue: TLazBleReconnectOptions);
 begin
+  LazBleRequireMainThread;
   if FReconnectCycleActive then
     raise EInvalidOperation.Create(
       'Reconnect options cannot be changed during a reconnect cycle');
@@ -346,16 +350,19 @@ end;
 
 function TBleClient.GetReconnectAttempt: Cardinal;
 begin
+  LazBleRequireMainThread;
   Result := FReconnectController.Attempt;
 end;
 
 function TBleClient.GetReconnectDelayMs: Cardinal;
 begin
+  LazBleRequireMainThread;
   Result := FReconnectController.DelayMs;
 end;
 
 function TBleClient.GetDeviceId: string;
 begin
+  LazBleRequireMainThread;
   if Assigned(FSession) then
     Result := FSession.DeviceId
   else
@@ -364,6 +371,7 @@ end;
 
 function TBleClient.GetGeneration: QWord;
 begin
+  LazBleRequireMainThread;
   if Assigned(FSession) then
     Result := FSession.Generation
   else
@@ -372,6 +380,7 @@ end;
 
 function TBleClient.GetServices: TLazBleGattServices;
 begin
+  LazBleRequireMainThread;
   if Assigned(FSession) then
     Result := FSession.Services
   else
@@ -380,11 +389,13 @@ end;
 
 function TBleClient.GetProfileCount: Integer;
 begin
+  LazBleRequireMainThread;
   Result := FProfiles.Count;
 end;
 
 function TBleClient.GetProfile(const AIndex: Integer): TBleGattProfile;
 begin
+  LazBleRequireMainThread;
   Result := TBleClientProfileEntry(FProfiles[AIndex]).Profile;
 end;
 
@@ -392,20 +403,11 @@ procedure TBleClient.SetState(const AState: TLazBleClientState);
 var
   Handler: TLazBleClientStateChangedEvent;
 begin
-  EnterCriticalSection(FStateLock);
-  try
-    if FState = AState then
-      Exit;
-    FState := AState;
-  finally
-    LeaveCriticalSection(FStateLock);
-  end;
-  EnterCriticalSection(FCallbackLock);
-  try
-    Handler := FOnStateChanged;
-  finally
-    LeaveCriticalSection(FCallbackLock);
-  end;
+  LazBleRequireMainThread;
+  if FState = AState then
+    Exit;
+  FState := AState;
+  Handler := FOnStateChanged;
   if Assigned(Handler) then
     Handler(Self, AState);
 end;
@@ -416,6 +418,7 @@ var
   Entry: TBleClientProfileEntry;
   Index: Integer;
 begin
+  LazBleRequireMainThread;
   if not Assigned(AProfile) then
     raise EArgumentNilException.Create('AProfile');
   if State <> lbcstDisconnected then
@@ -443,6 +446,7 @@ procedure TBleClient.AttachProfiles;
 var
   Index: Integer;
 begin
+  LazBleRequireMainThread;
   SetState(lbcstAttachingProfiles);
   FAttachingProfiles := True;
   try
@@ -459,6 +463,7 @@ procedure TBleClient.DetachProfiles;
 var
   Index: Integer;
 begin
+  LazBleRequireMainThread;
   for Index := FProfiles.Count - 1 downto 0 do
     TBleGattProfileAccess(
       TBleClientProfileEntry(FProfiles[Index]).Profile).DetachInternal;
@@ -471,7 +476,8 @@ var
   Index: Integer;
   ReconnectAfterProfileFailure: Boolean;
 begin
-  if FAttachingProfiles or FEvaluatingProfiles or
+  LazBleRequireMainThread;
+  if FShuttingDown or FAttachingProfiles or FEvaluatingProfiles or
     not (State in [lbcstAttachingProfiles, lbcstReady]) then
     Exit;
   FEvaluatingProfiles := True;
@@ -531,6 +537,7 @@ end;
 procedure TBleClient.ProfileStateChanged(Sender: TObject;
   const AState: TLazBleGattProfileState);
 begin
+  LazBleRequireMainThread;
   EvaluateProfiles;
 end;
 
@@ -538,13 +545,22 @@ procedure TBleClient.SessionConnectCompleted(Sender: TObject);
 var
   Operation: IBleOperation;
 begin
+  LazBleRequireMainThread;
   if not Supports(Sender, IBleOperation, Operation) then
     Exit;
+  if FShuttingDown then
+  begin
+    if Assigned(FConnectOperation) then
+      TBleOperationAccess(FConnectOperationObject).Finish(lbopCancelled);
+    Exit;
+  end;
   if Operation.State = lbopSucceeded then
     AttachProfiles
   else
   begin
-    SetState(lbcstError);
+    if (Operation.State = lbopCancelled) and (FSession.State = lbssDisconnected) then
+      SetState(lbcstDisconnected)
+    else SetState(lbcstError);
     if Assigned(FConnectOperation) then
       if Operation.State = lbopCancelled then
         TBleOperationAccess(FConnectOperationObject).Finish(lbopCancelled)
@@ -560,6 +576,7 @@ procedure TBleClient.SessionDisconnectCompleted(Sender: TObject);
 var
   Operation: IBleOperation;
 begin
+  LazBleRequireMainThread;
   if not Supports(Sender, IBleOperation, Operation) then
     Exit;
   if Operation.State = lbopSucceeded then
@@ -567,6 +584,14 @@ begin
     SetState(lbcstDisconnected);
     if Assigned(FDisconnectOperation) then
       TBleOperationAccess(FDisconnectOperationObject).Finish(lbopSucceeded);
+  end
+  else if Operation.State = lbopCancelled then
+  begin
+    if Assigned(FDisconnectOperation) then
+      TBleOperationAccess(FDisconnectOperationObject).Finish(lbopCancelled);
+    if FShuttingDown then Exit;
+    if FSession.State = lbssConnected then AttachProfiles
+    else SetState(lbcstDisconnected);
   end
   else
   begin
@@ -584,8 +609,15 @@ procedure TBleClient.SessionStateChanged(Sender: TObject;
 var
   ShouldReconnect: Boolean;
 begin
+  LazBleRequireMainThread;
   if Sender <> FSession then
     Exit;
+  if AState = lbssDisconnecting then
+  begin
+    if (State = lbcstReady) and FReconnectController.Enabled and
+      not FManualDisconnect and not FShuttingDown then FReconnectCycleActive := True;
+    SetState(lbcstDisconnecting);
+  end;
   if AState = lbssDisconnected then
   begin
     ShouldReconnect := not FManualDisconnect and not FShuttingDown and
@@ -597,7 +629,7 @@ begin
     SetState(lbcstDisconnected);
     if Assigned(FConnectOperation) and
       (FConnectOperation.State = lbopPending) then
-      if FConnectOperation.CancelRequested then
+      if FSession.LastOperationCancelled or FShuttingDown then
         TBleOperationAccess(FConnectOperationObject).Finish(lbopCancelled)
       else
         TBleOperationAccess(FConnectOperationObject).Finish(lbopFailed, 0,
@@ -612,6 +644,7 @@ end;
 
 procedure TBleClient.ScheduleReconnect;
 begin
+  LazBleRequireMainThread;
   if FManualDisconnect or FShuttingDown or
     not FReconnectController.Enabled then
   begin
@@ -634,6 +667,7 @@ end;
 
 procedure TBleClient.ReconnectDelayElapsed;
 begin
+  LazBleRequireMainThread;
   if not FReconnectCycleActive or FManualDisconnect or FShuttingDown then
     Exit;
   StartConnect(False);
@@ -641,6 +675,7 @@ end;
 
 procedure TBleClient.DisconnectForReconnect;
 begin
+  LazBleRequireMainThread;
   DetachProfiles;
   FSessionDisconnectOperation := FDisconnectSession(FSession);
   FSessionDisconnectOperation.OnCompleted := @SessionDisconnectCompleted;
@@ -648,28 +683,22 @@ end;
 
 procedure TBleClient.OperationCancelled(Sender: TObject);
 begin
-  if Sender = FConnectOperationObject then
-  begin
-    if Assigned(FSessionConnectOperation) and
-      (FSessionConnectOperation.State = lbopPending) then
-      FSessionConnectOperation.Cancel
-    else
-    begin
-      DetachProfiles;
-      FDisconnectSession(FSession);
-      TBleOperationAccess(FConnectOperationObject).Finish(lbopCancelled);
-    end;
-  end
-  else if Sender = FDisconnectOperationObject then
-    TBleOperationAccess(FDisconnectOperationObject).Finish(lbopCancelled);
+  LazBleRequireMainThread;
+  if (Sender = FConnectOperationObject) and Assigned(FSessionConnectOperation) and
+    (FSessionConnectOperation.State = lbopPending) then FSessionConnectOperation.Cancel;
+  { Disconnect has already retired profiles/reconnect intent. Like Unsubscribe,
+    this explicit cleanup continues; CancelRequested never restores a partial
+    connection or requires another state machine to undo local teardown. }
 end;
 
 procedure TBleClient.CancelForShutdown;
 begin
+  LazBleRequireMainThread;
   FShuttingDown := True;
   FManualDisconnect := True;
   FReconnectCycleActive := False;
   FReconnectController.Disable;
+  DetachProfiles;
   if State = lbcstWaitingToReconnect then
     SetState(lbcstDisconnected);
   if Assigned(FConnectOperation) and
@@ -682,6 +711,7 @@ end;
 
 function TBleClient.ConnectAsync: IBleOperation;
 begin
+  LazBleRequireMainThread;
   Result := StartConnect(True);
 end;
 
@@ -689,6 +719,7 @@ function TBleClient.StartConnect(const AManual: Boolean): IBleOperation;
 var
   Operation: TBleOperationAccess;
 begin
+  LazBleRequireMainThread;
   if Assigned(FConnectOperation) and
     (FConnectOperation.State = lbopPending) then
     Exit(FConnectOperation);
@@ -730,6 +761,7 @@ function TBleClient.DisconnectAsync: IBleOperation;
 var
   Operation: TBleOperationAccess;
 begin
+  LazBleRequireMainThread;
   FManualDisconnect := True;
   FReconnectCycleActive := False;
   FReconnectController.Reset;
@@ -759,6 +791,7 @@ end;
 function TBleClient.ReadAsync(const AServiceUuid,
   ACharacteristicUuid: string): IBleGattOperation;
 begin
+  LazBleRequireMainThread;
   Result := FSession.ReadAsync(AServiceUuid, ACharacteristicUuid);
 end;
 
@@ -766,6 +799,7 @@ function TBleClient.WriteAsync(const AServiceUuid,
   ACharacteristicUuid: string; const AValue: TBytes;
   const AWriteMode: TLazBleWriteMode): IBleGattOperation;
 begin
+  LazBleRequireMainThread;
   Result := FSession.WriteAsync(AServiceUuid, ACharacteristicUuid, AValue,
     AWriteMode);
 end;
@@ -773,6 +807,7 @@ end;
 function TBleClient.SubscribeAsync(const AServiceUuid,
   ACharacteristicUuid: string): IBleSubscription;
 begin
+  LazBleRequireMainThread;
   Result := FSession.SubscribeAsync(AServiceUuid, ACharacteristicUuid);
 end;
 

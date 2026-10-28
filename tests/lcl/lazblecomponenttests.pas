@@ -31,6 +31,7 @@ type
     FFinished: TEvent;
   protected
     procedure Execute; override;
+    procedure DeliverOnMain;
   public
     constructor Create(const ABackend: TFakeLazBleBackend;
       const AOperationId: TBleOperationId; const ADeviceInfo: TBleDeviceInfo;
@@ -52,6 +53,7 @@ type
     FFinished: TEvent;
   protected
     procedure Execute; override;
+    procedure DeliverOnMain;
   public
     constructor Create(const ABackend: TFakeLazBleBackend;
       const AOperationId: TBleOperationId; const AAvailable,
@@ -155,6 +157,12 @@ begin
 end;
 
 procedure TComponentScanEmissionThread.Execute;
+begin
+  TThread.Queue(Self, @DeliverOnMain);
+  FFinished.SetEvent;
+end;
+
+procedure TComponentScanEmissionThread.DeliverOnMain;
 var
   BackendEvent: TLazBleBackendEvent;
 begin
@@ -207,6 +215,12 @@ begin
 end;
 
 procedure TComponentAvailabilityEmissionThread.Execute;
+begin
+  TThread.Queue(Self, @DeliverOnMain);
+  FFinished.SetEvent;
+end;
+
+procedure TComponentAvailabilityEmissionThread.DeliverOnMain;
 var
   BackendEvent: TLazBleBackendEvent;
 begin
@@ -505,6 +519,7 @@ begin
   try
     Thread.Start;
     AssertEquals(Ord(wrSignaled), Ord(Thread.WaitUntilFinished(5000)));
+    CheckSynchronize; { custom backend first delivers queued command terminals }
     AssertTrue(FBackendObject.CompleteShutdown);
     CheckSynchronize;
 
@@ -630,6 +645,7 @@ begin
   try
     Thread.Start;
     WaitForEmission(Thread);
+    CheckSynchronize; { custom backend first delivers queued command terminals }
     AssertTrue(FBackendObject.CompleteShutdown);
     CheckSynchronize;
 

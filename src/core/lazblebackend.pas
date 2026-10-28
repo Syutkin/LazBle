@@ -13,13 +13,19 @@ type
     procedure HandleBackendEvent(const AEvent: TLazBleBackendEvent);
   end;
 
-  { Backend contract. Submit returns an operation ID; progress and terminal
-    events are delivered through the installed sink. A custom backend must
-    implement every method, including GetBackendName. }
+  { Main-thread API and sink delivery, including custom/fake backends. Submit
+    and BeginShutdown must return before any corresponding event is delivered.
+    Exactly one terminal event is required for each accepted command. Cancel
+    requests best effort; started commands report their actual outcome. Shutdown
+    drains commands before its terminal event (ShutdownFailed reports cleanup
+    failure, including native code 0 and empty text), then delivers no more events. Backends
+    copy write buffers at Submit. Snapshots/payloads are read-only managed data.
+    Async callers pump the main loop/CheckSynchronize, never wait inside a sink
+    callback, and defer owner destruction from callbacks with ForceQueue. }
   ILazBleBackend = interface
     ['{80466D51-799E-42D1-95F0-CBD15178B223}']
     { Identity supplied by this backend implementation. The getter must not
-      open a native library or start BLE work; return an empty string if the
+      start BLE work; return an empty string if the
       name is not yet known. }
     function GetBackendName: string;
     { The sink may be detached during shutdown; do not deliver events after
