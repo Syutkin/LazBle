@@ -3,6 +3,7 @@ program LazBleLclDemo;
 {$mode objfpc}{$H+}
 
 uses
+  {$IFDEF UNIX}cthreads,{$ENDIF}
   Interfaces,
   Forms,
   LazBleLclDemoForm;

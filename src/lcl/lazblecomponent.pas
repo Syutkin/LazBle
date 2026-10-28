@@ -13,7 +13,6 @@ uses
   LazBleClient,
   LazBleOperation,
   LazBleGattProfile,
-  LazBleLclDispatch,
   LazBleLclScan;
 
 const
@@ -55,14 +54,13 @@ type
       write SetMaximumAttempts default DefaultLazBleReconnectMaximumAttempts;
   end;
 
-  { LCL owner of one LazBle facade. It dispatches availability and scan
-    notifications to the main thread; reading properties does not start BLE. }
+  { Main-thread owner of one facade. Await ShutdownAsync before destruction.
+    Reading properties does not start BLE operations. }
   TLazBleComponent = class(TComponent)
   private
     FBle: TLazBle;
     FScan: TLazBleLclScan;
     FClients: TList;
-    FAvailabilityDispatch: TLazBleLclDispatch;
     FAvailabilityOperation: IBleAvailabilityOperation;
     FAvailability: TBleAvailability;
     FShutdownOperation: IBleOperation;
@@ -98,8 +96,6 @@ type
     procedure ScanCompleted(Sender: TObject;
       const AState: TLazBleLclScanState);
     procedure AvailabilityCompleted(Sender: TObject);
-    procedure AvailabilityDispatchMessage(Sender: TObject;
-      const AMessage: TLazBleLclDispatchMessage);
     procedure SetAvailability(const AAvailability: TBleAvailability);
   protected
     function CreateFacade: TLazBle; virtual;
@@ -118,6 +114,9 @@ type
     procedure RefreshAvailability;
     { Stop scan, availability work, and owned clients. }
     procedure Shutdown;
+    { Await this operation before freeing the component/form. A failed result
+      still marks completed cleanup; preserve its diagnostic. Never wait in a callback. }
+    function ShutdownAsync: IBleOperation;
     { Create a component-owned client for a unique device ID. }
     function CreateClient(const ADeviceId: string): TLazBleLclClient;
     function FindClient(const ADeviceId: string): TLazBleLclClient;
@@ -131,8 +130,8 @@ type
     { Backend metadata from the latest availability result. Fields may be
       empty before a check, during a repeat check, or after load failure. }
     property BackendInfo: TLazBleBackendInfo read GetBackendInfo;
-    { Thread-safe core snapshot; available without RefreshAvailability and
-      without loading native BLE. Read the LCL component on its owning thread;
+    { Main-thread snapshot; available without RefreshAvailability. Native
+      dependencies are required at process startup. Read on the owning thread;
       read this property again after availability changes for current values. }
     property DiagnosticInfo: TLazBleDiagnosticInfo read GetDiagnosticInfo;
     property ClientCount: Integer read GetClientCount;
@@ -163,7 +162,8 @@ type
     FDeviceId: string;
     FDeviceName: string;
     FCoreClient: TBleClient;
-    FDispatch: TLazBleLclDispatch;
+    FGeneration: QWord;
+    FDetaching: Boolean;
     FConnectOperation: IBleOperation;
     FDisconnectOperation: IBleOperation;
     FLastErrorCode: Integer;
@@ -171,6 +171,7 @@ type
     FAutoReconnect: Boolean;
     FReconnectOptions: TLazBleReconnectSettings;
     FOnConfigureClient: TNotifyEvent;
+    FOnUnconfigureClient: TNotifyEvent;
     FOnDeviceChanged: TNotifyEvent;
     FOnStateChanged: TLazBleClientStateChangedEvent;
     FOnConnected: TNotifyEvent;
@@ -194,8 +195,7 @@ type
       const AState: TLazBleClientState);
     procedure ConnectCompleted(Sender: TObject);
     procedure DisconnectCompleted(Sender: TObject);
-    procedure DispatchMessage(Sender: TObject;
-      const AMessage: TLazBleLclDispatchMessage);
+    procedure CompleteOperation(Sender: TObject; const AConnecting: Boolean);
     procedure NotifyChanged;
     procedure RootComponentShuttingDown(const ARoot: TLazBleComponent);
     procedure RootComponentDestroying(const ARoot: TLazBleComponent);
@@ -235,6 +235,10 @@ type
     { Add profiles here when the underlying client is created. }
     property OnConfigureClient: TNotifyEvent read FOnConfigureClient
       write FOnConfigureClient;
+    { Release borrowed profile/client references here, before the core client
+      is detached or destroyed. Do not start client operations in this callback. }
+    property OnUnconfigureClient: TNotifyEvent read FOnUnconfigureClient
+      write FOnUnconfigureClient;
     property OnDeviceChanged: TNotifyEvent read FOnDeviceChanged
       write FOnDeviceChanged;
     property OnStateChanged: TLazBleClientStateChangedEvent
@@ -319,104 +323,6 @@ begin
     Handler(Self);
 end;
 
-type
-  TLazBleLclAvailabilityMessage = class(TLazBleLclDispatchMessage)
-  private
-    FOperationState: TLazBleOperationState;
-    FAvailability: TBleAvailability;
-    FErrorCode: Integer;
-    FErrorMessage: string;
-  public
-    constructor Create(const AOperationState: TLazBleOperationState;
-      const AAvailability: TBleAvailability; const AErrorCode: Integer;
-      const AErrorMessage: string);
-    function Clone: TLazBleLclDispatchMessage; override;
-    property OperationState: TLazBleOperationState read FOperationState;
-    property Availability: TBleAvailability read FAvailability;
-    property ErrorCode: Integer read FErrorCode;
-    property ErrorMessage: string read FErrorMessage;
-  end;
-
-  TLazBleLclClientOperationKind = (
-    lblcokConnect,
-    lblcokDisconnect
-  );
-
-  TLazBleLclClientStateMessage = class(TLazBleLclDispatchMessage)
-  private
-    FState: TLazBleClientState;
-  public
-    constructor Create(const AState: TLazBleClientState);
-    function Clone: TLazBleLclDispatchMessage; override;
-    property State: TLazBleClientState read FState;
-  end;
-
-  TLazBleLclClientCompletedMessage = class(TLazBleLclDispatchMessage)
-  private
-    FKind: TLazBleLclClientOperationKind;
-    FState: TLazBleOperationState;
-    FErrorCode: Integer;
-    FErrorMessage: string;
-  public
-    constructor Create(const AKind: TLazBleLclClientOperationKind;
-      const AState: TLazBleOperationState; const AErrorCode: Integer;
-      const AErrorMessage: string);
-    function Clone: TLazBleLclDispatchMessage; override;
-    property Kind: TLazBleLclClientOperationKind read FKind;
-    property State: TLazBleOperationState read FState;
-    property ErrorCode: Integer read FErrorCode;
-    property ErrorMessage: string read FErrorMessage;
-  end;
-
-constructor TLazBleLclAvailabilityMessage.Create(
-  const AOperationState: TLazBleOperationState;
-  const AAvailability: TBleAvailability; const AErrorCode: Integer;
-  const AErrorMessage: string);
-begin
-  inherited Create;
-  FOperationState := AOperationState;
-  FAvailability := AAvailability;
-  FErrorCode := AErrorCode;
-  FErrorMessage := AErrorMessage;
-end;
-
-function TLazBleLclAvailabilityMessage.Clone: TLazBleLclDispatchMessage;
-begin
-  Result := TLazBleLclAvailabilityMessage.Create(FOperationState,
-    FAvailability, FErrorCode, FErrorMessage);
-end;
-
-constructor TLazBleLclClientStateMessage.Create(
-  const AState: TLazBleClientState);
-begin
-  inherited Create;
-  FState := AState;
-end;
-
-function TLazBleLclClientStateMessage.Clone: TLazBleLclDispatchMessage;
-begin
-  Result := TLazBleLclClientStateMessage.Create(FState);
-end;
-
-constructor TLazBleLclClientCompletedMessage.Create(
-  const AKind: TLazBleLclClientOperationKind;
-  const AState: TLazBleOperationState; const AErrorCode: Integer;
-  const AErrorMessage: string);
-begin
-  inherited Create;
-  FKind := AKind;
-  FState := AState;
-  FErrorCode := AErrorCode;
-  FErrorMessage := AErrorMessage;
-end;
-
-function TLazBleLclClientCompletedMessage.Clone:
-  TLazBleLclDispatchMessage;
-begin
-  Result := TLazBleLclClientCompletedMessage.Create(FKind, FState,
-    FErrorCode, FErrorMessage);
-end;
-
 constructor TLazBleComponent.Create(AOwner: TComponent);
 begin
   inherited Create(AOwner);
@@ -437,11 +343,19 @@ end;
 destructor TLazBleComponent.Destroy;
 var
   Index: Integer;
+  Client: TLazBleLclClient;
+  Snapshot: array of TLazBleLclClient;
 begin
   Shutdown;
   if Assigned(FClients) then
-    for Index := FClients.Count - 1 downto 0 do
-      TLazBleLclClient(FClients[Index]).RootComponentDestroying(Self);
+  begin
+    Snapshot := nil;
+    SetLength(Snapshot, FClients.Count);
+    for Index := 0 to FClients.Count - 1 do
+      Snapshot[Index] := TLazBleLclClient(FClients[Index]);
+    for Client in Snapshot do
+      if FClients.IndexOf(Client) >= 0 then Client.RootComponentDestroying(Self);
+  end;
   if Assigned(FClients) then
     FClients.Clear;
   if Assigned(FScan) then
@@ -452,8 +366,6 @@ begin
   end;
   FScan.Free;
   FScan := nil;
-  FAvailabilityDispatch.Free;
-  FAvailabilityDispatch := nil;
   FAvailabilityOperation := nil;
   FShutdownOperation := nil;
   FBle.Free;
@@ -473,8 +385,6 @@ begin
   FClients := TList.Create;
   FBle := ABle;
   FAvailability := lbaUnknown;
-  FAvailabilityDispatch := TLazBleLclDispatch.Create(
-    @AvailabilityDispatchMessage);
   FScan := TLazBleLclScan.Create(FBle);
   FScan.OnStateChanged := @ScanStateChanged;
   FScan.OnResult := @ScanResult;
@@ -483,6 +393,7 @@ end;
 
 procedure TLazBleComponent.EnsureOperational;
 begin
+  LazBleRequireMainThread;
   if FShutdownStarted then
     raise EInvalidOperation.Create('LazBle component is shut down');
 end;
@@ -517,19 +428,26 @@ begin
   FLastErrorCode := 0;
   FLastErrorMessage := '';
   SetAvailability(lbaChecking);
+  if FShutdownStarted or Assigned(FAvailabilityOperation) then Exit;
   FAvailabilityOperation := FBle.CheckAvailabilityAsync(FAdapterId);
   FAvailabilityOperation.OnCompleted := @AvailabilityCompleted;
 end;
 
 procedure TLazBleComponent.Shutdown;
+begin
+  ShutdownAsync;
+end;
+
+function TLazBleComponent.ShutdownAsync: IBleOperation;
 var
   Index: Integer;
+  Client: TLazBleLclClient;
+  Snapshot: array of TLazBleLclClient;
 begin
+  LazBleRequireMainThread;
   if FShutdownStarted then
-    Exit;
+    Exit(FShutdownOperation);
   FShutdownStarted := True;
-  if Assigned(FAvailabilityDispatch) then
-    FAvailabilityDispatch.Detach;
   if Assigned(FAvailabilityOperation) then
     FAvailabilityOperation.OnCompleted := nil;
   FAvailabilityOperation := nil;
@@ -542,10 +460,17 @@ begin
     FScan.Shutdown;
   end;
   if Assigned(FClients) then
-    for Index := FClients.Count - 1 downto 0 do
-      TLazBleLclClient(FClients[Index]).RootComponentShuttingDown(Self);
+  begin
+    Snapshot := nil;
+    SetLength(Snapshot, FClients.Count);
+    for Index := 0 to FClients.Count - 1 do
+      Snapshot[Index] := TLazBleLclClient(FClients[Index]);
+    for Client in Snapshot do
+      if FClients.IndexOf(Client) >= 0 then Client.RootComponentShuttingDown(Self);
+  end;
   if Assigned(FBle) then
     FShutdownOperation := FBle.ShutdownAsync;
+  Result := FShutdownOperation;
 end;
 
 function TLazBleComponent.CreateClient(
@@ -690,6 +615,7 @@ var
   Handler: TLazBleLclScanStateChangedEvent;
 begin
   NotifyClientsChanged;
+  if FShutdownStarted or (FScan.State <> AState) then Exit;
   Handler := FOnScanStateChanged;
   if Assigned(Handler) then
     Handler(Self, AState);
@@ -711,7 +637,7 @@ var
   CompletedHandler: TLazBleLclScanCompletedEvent;
   ErrorHandler: TLazBleLclErrorEvent;
 begin
-  if AState in [lblssTimedOut, lblssFailed] then
+  if AState = lblssFailed then
   begin
     FLastErrorCode := FScan.ErrorCode;
     FLastErrorMessage := FScan.ErrorMessage;
@@ -720,6 +646,7 @@ begin
       ErrorHandler(Self, FLastErrorCode, FLastErrorMessage);
   end;
 
+  if FShutdownStarted or (FScan.State <> AState) then Exit;
   CompletedHandler := FOnScanCompleted;
   if Assigned(CompletedHandler) then
     CompletedHandler(Self, AState);
@@ -727,43 +654,28 @@ end;
 
 procedure TLazBleComponent.AvailabilityCompleted(Sender: TObject);
 var
-  Message: TLazBleLclAvailabilityMessage;
-  Operation: TBleAvailabilityOperation;
-begin
-  if not (Sender is TBleAvailabilityOperation) then
-    Exit;
-  Operation := TBleAvailabilityOperation(Sender);
-  Message := TLazBleLclAvailabilityMessage.Create(Operation.State,
-    Operation.Availability, Operation.ErrorCode, Operation.ErrorMessage);
-  try
-    FAvailabilityDispatch.Queue(Message);
-  finally
-    Message.Free;
-  end;
-end;
-
-procedure TLazBleComponent.AvailabilityDispatchMessage(Sender: TObject;
-  const AMessage: TLazBleLclDispatchMessage);
-var
-  AvailabilityMessage: TLazBleLclAvailabilityMessage;
+  Operation: IBleAvailabilityOperation;
   ErrorHandler: TLazBleLclErrorEvent;
 begin
-  if not (AMessage is TLazBleLclAvailabilityMessage) then
-    Exit;
-  AvailabilityMessage := TLazBleLclAvailabilityMessage(AMessage);
+  LazBleRequireMainThread;
+  if FShutdownStarted or not Assigned(FAvailabilityOperation) or
+    (FAvailabilityOperation <> (Sender as IBleAvailabilityOperation)) then Exit;
+  Operation := FAvailabilityOperation;
   FAvailabilityOperation := nil;
-  if AvailabilityMessage.OperationState = lbopSucceeded then
-    SetAvailability(AvailabilityMessage.Availability)
-  else if AvailabilityMessage.OperationState = lbopCancelled then
+  Operation.OnCompleted := nil;
+  if Operation.State = lbopSucceeded then
+    SetAvailability(Operation.Availability)
+  else if Operation.State = lbopCancelled then
     SetAvailability(lbaUnknown)
   else
   begin
-    FLastErrorCode := AvailabilityMessage.ErrorCode;
-    FLastErrorMessage := AvailabilityMessage.ErrorMessage;
+    FLastErrorCode := Operation.ErrorCode;
+    FLastErrorMessage := Operation.ErrorMessage;
     SetAvailability(lbaUnavailable);
+    if FShutdownStarted or Assigned(FAvailabilityOperation) then Exit;
     ErrorHandler := FOnError;
     if Assigned(ErrorHandler) then
-      ErrorHandler(Self, FLastErrorCode, FLastErrorMessage);
+      ErrorHandler(Self, Operation.ErrorCode, Operation.ErrorMessage);
   end;
 end;
 
@@ -776,6 +688,7 @@ begin
     Exit;
   FAvailability := AAvailability;
   NotifyClientsChanged;
+  if FShutdownStarted or (FAvailability <> AAvailability) then Exit;
   Handler := FOnAvailabilityChanged;
   if Assigned(Handler) then
     Handler(Self, FAvailability);
@@ -786,14 +699,12 @@ begin
   inherited Create(AOwner);
   FReconnectOptions := TLazBleReconnectSettings.Create;
   FReconnectOptions.FOnChange := @ReconnectSettingsChanged;
-  FDispatch := TLazBleLclDispatch.Create(@DispatchMessage);
 end;
 
 destructor TLazBleLclClient.Destroy;
 var
   OldCoreClient: TBleClient;
 begin
-  FDispatch.Detach;
   FReconnectOptions.FOnChange := nil;
   OldCoreClient := FCoreClient;
   DetachCoreClient;
@@ -806,8 +717,6 @@ begin
     FLazBle.RemoveFreeNotification(Self);
   end;
   FLazBle := nil;
-  FDispatch.Free;
-  FDispatch := nil;
   FReconnectOptions.Free;
   FReconnectOptions := nil;
   inherited Destroy;
@@ -924,6 +833,9 @@ procedure TLazBleLclClient.EnsureCoreClient;
 var
   Handler: TNotifyEvent;
 begin
+  LazBleRequireMainThread;
+  if FDetaching then raise EInvalidOperation.Create(
+    'Client operations are not allowed during unconfiguration');
   if Assigned(FCoreClient) then
     Exit;
   if not Assigned(FLazBle) then
@@ -951,12 +863,14 @@ procedure TLazBleLclClient.RemoveReplaceableCoreClient;
 var
   OldCoreClient: TBleClient;
 begin
+  if FDetaching then raise EInvalidOperation.Create(
+    'Client cannot be replaced during unconfiguration');
   if not Assigned(FCoreClient) then
     Exit;
   if not (FCoreClient.State in [lbcstDisconnected, lbcstError]) then
     raise EInvalidOperation.Create(
       'BLE device can only be changed while disconnected or in error');
-  FDispatch.NextGeneration;
+  Inc(FGeneration);
   OldCoreClient := FCoreClient;
   DetachCoreClient;
   if Assigned(FLazBle) then
@@ -964,7 +878,20 @@ begin
 end;
 
 procedure TLazBleLclClient.DetachCoreClient;
+var
+  Handler: TNotifyEvent;
 begin
+  Inc(FGeneration);
+  if Assigned(FCoreClient) then
+  begin
+    FDetaching := True;
+    try
+      Handler := FOnUnconfigureClient;
+      if Assigned(Handler) then Handler(Self);
+    finally
+      FDetaching := False;
+    end;
+  end;
   if Assigned(FConnectOperation) then
     FConnectOperation.OnCompleted := nil;
   if Assigned(FDisconnectOperation) then
@@ -982,7 +909,7 @@ begin
   inherited Notification(AComponent, Operation);
   if (Operation = opRemove) and (AComponent = FLazBle) then
   begin
-    FDispatch.NextGeneration;
+    Inc(FGeneration);
     if Assigned(FConnectOperation) then
       FConnectOperation.OnCompleted := nil;
     if Assigned(FDisconnectOperation) then
@@ -1008,6 +935,9 @@ begin
 end;
 
 procedure TLazBleLclClient.Connect;
+var
+  Operation: IBleOperation;
+  Generation: QWord;
 begin
   if Assigned(FConnectOperation) and
     (FConnectOperation.State = lbopPending) then
@@ -1018,15 +948,26 @@ begin
   if Assigned(FCoreClient) and (FCoreClient.State = lbcstError) then
     RemoveReplaceableCoreClient;
   EnsureCoreClient;
+  if not Assigned(FCoreClient) or not Assigned(FLazBle) or
+    FLazBle.FShutdownStarted then Exit;
   FLastErrorCode := 0;
   FLastErrorMessage := '';
-  FDispatch.NextGeneration;
-  FConnectOperation := FCoreClient.ConnectAsync;
-  FConnectOperation.OnCompleted := @ConnectCompleted;
+  Inc(FGeneration);
+  Generation := FGeneration;
+  Operation := FCoreClient.ConnectAsync;
+  if Generation <> FGeneration then Exit;
+  FConnectOperation := Operation;
+  Operation.OnCompleted := @ConnectCompleted;
 end;
 
 procedure TLazBleLclClient.Disconnect;
+var
+  Operation: IBleOperation;
+  Generation: QWord;
 begin
+  LazBleRequireMainThread;
+  if FDetaching then raise EInvalidOperation.Create(
+    'Client operations are not allowed during unconfiguration');
   if not Assigned(FCoreClient) then
     Exit;
   if Assigned(FDisconnectOperation) and
@@ -1040,101 +981,70 @@ begin
   FConnectOperation := nil;
   FLastErrorCode := 0;
   FLastErrorMessage := '';
-  FDispatch.NextGeneration;
-  FDisconnectOperation := FCoreClient.DisconnectAsync;
-  FDisconnectOperation.OnCompleted := @DisconnectCompleted;
+  Inc(FGeneration);
+  Generation := FGeneration;
+  Operation := FCoreClient.DisconnectAsync;
+  if Generation <> FGeneration then Exit;
+  FDisconnectOperation := Operation;
+  Operation.OnCompleted := @DisconnectCompleted;
 end;
 
 procedure TLazBleLclClient.CoreStateChanged(Sender: TObject;
   const AState: TLazBleClientState);
 var
-  Message: TLazBleLclClientStateMessage;
+  StateHandler: TLazBleClientStateChangedEvent;
+  Generation: QWord;
 begin
-  Message := TLazBleLclClientStateMessage.Create(AState);
-  try
-    FDispatch.Queue(Message);
-  finally
-    Message.Free;
-  end;
+  LazBleRequireMainThread;
+  if (Sender <> FCoreClient) or not Assigned(FLazBle) or
+    FLazBle.FShutdownStarted then Exit;
+  Generation := FGeneration;
+  StateHandler := FOnStateChanged;
+  if Assigned(StateHandler) then StateHandler(Self, AState);
+  if (Generation = FGeneration) and (Sender = FCoreClient) and
+    (GetState = AState) then NotifyChanged;
 end;
 
 procedure TLazBleLclClient.ConnectCompleted(Sender: TObject);
-var
-  Message: TLazBleLclClientCompletedMessage;
-  Operation: TBleOperation;
 begin
-  if not (Sender is TBleOperation) then
-    Exit;
-  Operation := TBleOperation(Sender);
-  Message := TLazBleLclClientCompletedMessage.Create(lblcokConnect,
-    Operation.State, Operation.ErrorCode, Operation.ErrorMessage);
-  try
-    FDispatch.Queue(Message);
-  finally
-    Message.Free;
-  end;
+  CompleteOperation(Sender, True);
 end;
 
 procedure TLazBleLclClient.DisconnectCompleted(Sender: TObject);
-var
-  Message: TLazBleLclClientCompletedMessage;
-  Operation: TBleOperation;
 begin
-  if not (Sender is TBleOperation) then
-    Exit;
-  Operation := TBleOperation(Sender);
-  Message := TLazBleLclClientCompletedMessage.Create(lblcokDisconnect,
-    Operation.State, Operation.ErrorCode, Operation.ErrorMessage);
-  try
-    FDispatch.Queue(Message);
-  finally
-    Message.Free;
-  end;
+  CompleteOperation(Sender, False);
 end;
 
-procedure TLazBleLclClient.DispatchMessage(Sender: TObject;
-  const AMessage: TLazBleLclDispatchMessage);
+procedure TLazBleLclClient.CompleteOperation(Sender: TObject;
+  const AConnecting: Boolean);
 var
-  CompletedHandler: TNotifyEvent;
-  CompletedMessage: TLazBleLclClientCompletedMessage;
+  Operation: IBleOperation;
+  Handler: TNotifyEvent;
   ErrorHandler: TLazBleLclErrorEvent;
-  StateHandler: TLazBleClientStateChangedEvent;
+  Generation: QWord;
 begin
-  if AMessage is TLazBleLclClientStateMessage then
+  LazBleRequireMainThread;
+  if not Assigned(FLazBle) or FLazBle.FShutdownStarted then Exit;
+  if AConnecting then Operation := FConnectOperation
+  else Operation := FDisconnectOperation;
+  if not Assigned(Operation) or (Operation <> (Sender as IBleOperation)) then Exit;
+  if AConnecting then FConnectOperation := nil else FDisconnectOperation := nil;
+  Operation.OnCompleted := nil;
+  Generation := FGeneration;
+  if Operation.State = lbopSucceeded then
   begin
-    StateHandler := FOnStateChanged;
-    if Assigned(StateHandler) then
-      StateHandler(Self, TLazBleLclClientStateMessage(AMessage).State);
-    NotifyChanged;
-    Exit;
-  end;
-  if not (AMessage is TLazBleLclClientCompletedMessage) then
-    Exit;
-
-  CompletedMessage := TLazBleLclClientCompletedMessage(AMessage);
-  if CompletedMessage.Kind = lblcokConnect then
-    FConnectOperation := nil
-  else
-    FDisconnectOperation := nil;
-
-  if CompletedMessage.State = lbopSucceeded then
-  begin
-    if CompletedMessage.Kind = lblcokConnect then
-      CompletedHandler := FOnConnected
-    else
-      CompletedHandler := FOnDisconnected;
-    if Assigned(CompletedHandler) then
-      CompletedHandler(Self);
+    if AConnecting then Handler := FOnConnected else Handler := FOnDisconnected;
+    if Assigned(Handler) then Handler(Self);
   end
-  else if CompletedMessage.State in [lbopFailed] then
+  else if Operation.State = lbopFailed then
   begin
-    FLastErrorCode := CompletedMessage.ErrorCode;
-    FLastErrorMessage := CompletedMessage.ErrorMessage;
+    FLastErrorCode := Operation.ErrorCode;
+    FLastErrorMessage := Operation.ErrorMessage;
     ErrorHandler := FOnError;
     if Assigned(ErrorHandler) then
-      ErrorHandler(Self, FLastErrorCode, FLastErrorMessage);
+      ErrorHandler(Self, Operation.ErrorCode, Operation.ErrorMessage);
   end;
-  NotifyChanged;
+  if Generation = FGeneration then NotifyChanged;
 end;
 
 procedure TLazBleLclClient.AddChangedHandler(
@@ -1175,11 +1085,22 @@ procedure TLazBleLclClient.NotifyChanged;
 var
   Handler: TLazBleLclClientChangedEvent;
   Handlers: array of TLazBleLclClientChangedEvent;
+  Current: TLazBleLclClientChangedEvent;
+  Present: Boolean;
 begin
   Handlers := Copy(FChangedHandlers);
   for Handler in Handlers do
-    if Assigned(Handler) then
-      Handler(Self);
+  begin
+    Present := False;
+    for Current in FChangedHandlers do
+      if (TMethod(Current).Code = TMethod(Handler).Code) and
+        (TMethod(Current).Data = TMethod(Handler).Data) then
+      begin
+        Present := True;
+        Break;
+      end;
+    if Present then Handler(Self);
+  end;
 end;
 
 procedure TLazBleLclClient.RootComponentDestroying(
@@ -1187,7 +1108,7 @@ procedure TLazBleLclClient.RootComponentDestroying(
 begin
   if FLazBle <> ARoot then
     Exit;
-  FDispatch.NextGeneration;
+  Inc(FGeneration);
   DetachCoreClient;
   ARoot.RemoveFreeNotification(Self);
   FLazBle := nil;
@@ -1199,7 +1120,6 @@ procedure TLazBleLclClient.RootComponentShuttingDown(
 begin
   if FLazBle <> ARoot then
     Exit;
-  FDispatch.Detach;
   DetachCoreClient;
 end;
 

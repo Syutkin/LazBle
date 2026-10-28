@@ -7,17 +7,18 @@ dependencies to the core units. `lazblelcldesign.lpk` is an IDE-only package
 that places the components on the Lazarus component palette; applications do
 not depend on it.
 
-Current source version: **1.2.0**.
+Current source version: **2.0.0 (unreleased)**.
 
 The default backend now uses the public API of
 [SimpleDelphiBLE 1.3.0](https://github.com/simpleble/simpledelphible/releases/tag/v1.3.0).
 The matching native libraries are required at link time and before program
 startup. The former SimpleBlePascal driver and lazy loader have been removed.
 
-Migration is in progress: stages 1–3 are implemented. Core/profiles now use
-the main-thread contract and upstream GATT records. Reconnect and `TLazBleSync`
-work with the new backend. LCL/Entime dispatch, lifecycle, deployment, and release
-work remain for stages 4–5. This unreleased migration contains breaking API changes.
+Migration stages 1–4 are implemented: core/profiles, LCL main-thread delivery,
+explicit asynchronous GUI shutdown, interactive console pumping, and production
+deployment. Hardware/clean-system validation, Windows BLE runtime, IDE restart,
+and release CI remain for stage 5. This unreleased migration contains breaking
+API changes.
 
 ## Architecture
 
@@ -50,6 +51,7 @@ application.
 
 ```pascal
 uses
+  Classes,
   LazBleTypes,
   LazBleOperation,
   LazBleClient,
@@ -72,6 +74,8 @@ begin
 
     { Before releasing Ble, finish application work and await this operation. }
     Operation := Ble.ShutdownAsync;
+    { Console only: keep pumping until cleanup actually finishes. }
+    while Operation.State = lbopPending do CheckSynchronize(10);
   finally
     Ble.Free;
   end;
@@ -126,11 +130,30 @@ attached again after service discovery.
 and nested `ReconnectOptions` properties. Loading them from an `.lfm` does not
 create a core client or start a BLE operation.
 
-Call `TLazBleComponent.Shutdown` when the LCL BLE subsystem is no longer
-needed. It is non-blocking, idempotent, cancels scan and client operations,
-stops pending reconnect, and suppresses queued LCL callbacks. Shutdown is
-terminal: new scans, clients, connections, and profile operations are rejected.
-The component destructor starts the same shutdown automatically.
+Call `TLazBleComponent.ShutdownAsync` when the LCL BLE subsystem is no longer
+needed. It returns the same operation on repeated calls, stops application
+callbacks/reconnect, and drains native work without blocking the GUI. Await its
+terminal result before freeing the component or form, including a failed cleanup
+result. `Shutdown` remains a convenience for starting this operation; destruction
+is not a substitute for awaiting it. A blocking legacy destructor fallback has
+no bounded completion guarantee.
+
+Use `OnCloseQuery` to defer form closure, keep the operation in a field, and
+schedule `Close` with `Application.QueueAsyncCall` from its completion callback.
+Remove queued form calls in the destructor. See the LCL demo for a complete
+example. Never free a BLE owner inside its own callback or pump a nested BLE wait
+inside a GUI/callback handler.
+
+LCL events now run directly on the main thread. The dispatcher and its cloned
+messages are removed. A callback may start the next async operation immediately;
+stale remaining notifications are suppressed after a reentrant state/owner change.
+`lblssTimedOut` is removed: reaching a scan duration normally completes the scan,
+and native errors are reported as Failed.
+
+`OnConfigureClient` transfers profiles to the newly created core client.
+`OnUnconfigureClient` runs while that client/profiles are still alive, before
+replacement, root shutdown, or detachment. Release borrowed references and clear
+profile callbacks there; do not start BLE work or free the owner in this handler.
 
 `TLazBleComponent.RefreshAvailability` starts the explicit check. Its
 read-only `Availability` property transitions through `lbaChecking`, and the
@@ -258,8 +281,15 @@ Destruction before awaited shutdown is a blocking fallback that abandons pending
 logical operations and detaches callbacks; it does not promise their native
 outcomes.
 
-LCL still contains its older dispatch/clone layer pending stage 4. Interactive
-console examples that block in ReadLn also need a main-loop update in that stage.
+Interactive console examples use a line reader that services CheckSynchronize
+while waiting for input, including partial lines and redirected input. Callback
+output shares the main thread and needs no output lock. `TLazBleSync` is for
+console callers, not GUI handlers.
+
+DiagnosticInfo exposes LazBleVersion, BindingName/BindingVersion,
+BackendName, NativeVersion, AdapterId, Availability, and ErrorMessage. The old
+MinimumNativeVersion, LoadWarning, WarningMessage and BackendWarning fields are
+removed; the OS loader handles the linked dependency before program startup.
 
 ## Custom profiles
 
@@ -334,7 +364,9 @@ lazbuild --ws=qt6 /path/to/lazble.lpk
 ```
 
 A standalone FPC build can instead use `-Fu` and `-Fi` for the official source
-and `-Fl` for the matching native libraries. Deploy the native pair according to
+and `-Fl` for the matching native libraries. When old libraries exist in other
+search paths, pass linker `-k-L/path/to/the/pinned/native-directory` as well.
+Deploy the native pair according to
 its platform loader requirements. The old `fpmake.pp` / `manifest.xml` packaging
 has been removed: upstream does not supply a compatible fppkg package, and LazBle
 does not maintain a second binding/package wrapper for it.
@@ -348,8 +380,10 @@ bash scripts/run-simpledelphible-stage3.sh /path/to/simpleble-v1.3.0
 The script builds upstream PLAIN, runs core/profile regressions and native backend
 integration against PLAIN (without Bluetooth hardware), and builds the Lazarus
 runtime packages. The native tests intentionally reject a production backend.
-The existing LCL suite can be built with `lazbuild --ws=qt6`; its executable now
-also needs the matching production native pair next to it on Linux.
+Run `bash scripts/run-simpledelphible-stage4.sh` for LCL, design-package,
+examples, console input, Entime close and production deployment checks. It deploys
+the production pair to LCL test and example executable directories. A plain
+`lazbuild --ws=qt6` build does not copy runtime libraries; deploy them explicitly.
 
 ## License
 

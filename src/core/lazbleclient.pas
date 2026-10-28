@@ -753,6 +753,13 @@ begin
     Exit;
   end;
   SetState(lbcstConnecting);
+  { A main-thread state handler may disconnect/shut down before submission. }
+  if FShuttingDown or (State <> lbcstConnecting) or Operation.CancelRequested then
+  begin
+    if State = lbcstConnecting then SetState(lbcstDisconnected);
+    Operation.Finish(lbopCancelled);
+    Exit;
+  end;
   FSessionConnectOperation := FConnectSession(DeviceId);
   FSessionConnectOperation.OnCompleted := @SessionConnectCompleted;
 end;

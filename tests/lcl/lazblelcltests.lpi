@@ -20,59 +20,59 @@
         <IsPartOfProject Value="True"/>
       </Unit0>
       <Unit1>
-        <Filename Value="lazblelcldispatchtests.pas"/>
-        <IsPartOfProject Value="True"/>
-        <UnitName Value="LazBleLclDispatchTests"/>
-      </Unit1>
-      <Unit2>
         <Filename Value="lazblelclscantests.pas"/>
         <IsPartOfProject Value="True"/>
         <UnitName Value="LazBleLclScanTests"/>
-      </Unit2>
-      <Unit3>
+      </Unit1>
+      <Unit2>
         <Filename Value="..\support\fakelazblebackend.pas"/>
         <IsPartOfProject Value="True"/>
         <UnitName Value="FakeLazBleBackend"/>
-      </Unit3>
-      <Unit4>
+      </Unit2>
+      <Unit3>
         <Filename Value="lazblecomponenttests.pas"/>
         <IsPartOfProject Value="True"/>
         <UnitName Value="LazBleComponentTests"/>
-      </Unit4>
-      <Unit5>
+      </Unit3>
+      <Unit4>
         <Filename Value="lazblelclclienttests.pas"/>
         <IsPartOfProject Value="True"/>
         <UnitName Value="LazBleLclClientTests"/>
-      </Unit5>
-      <Unit6>
+      </Unit4>
+      <Unit5>
         <Filename Value="lazblelclclientconnectiontests.pas"/>
         <IsPartOfProject Value="True"/>
         <UnitName Value="LazBleLclClientConnectionTests"/>
-      </Unit6>
-      <Unit7>
+      </Unit5>
+      <Unit6>
         <Filename Value="lazblecomponentclienttests.pas"/>
         <IsPartOfProject Value="True"/>
         <UnitName Value="LazBleComponentClientTests"/>
-      </Unit7>
-      <Unit8>
+      </Unit6>
+      <Unit7>
         <Filename Value="lazblelclclientreconnecttests.pas"/>
         <IsPartOfProject Value="True"/>
         <UnitName Value="LazBleLclClientReconnectTests"/>
-      </Unit8>
-      <Unit9>
+      </Unit7>
+      <Unit8>
         <Filename Value="lazbledeviceselectformtests.pas"/>
         <IsPartOfProject Value="True"/>
         <UnitName Value="LazBleDeviceSelectFormTests"/>
-      </Unit9>
-      <Unit10>
+      </Unit8>
+      <Unit9>
         <Filename Value="lazbledevicecontroltests.pas"/>
         <IsPartOfProject Value="True"/>
         <UnitName Value="LazBleDeviceControlTests"/>
-      </Unit10>
-      <Unit11>
+      </Unit9>
+      <Unit10>
         <Filename Value="lazblelcltranslationstests.pas"/>
         <IsPartOfProject Value="True"/>
         <UnitName Value="LazBleLclTranslationsTests"/>
+      </Unit10>
+      <Unit11>
+        <Filename Value="lazblelclcontracttests.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="LazBleLclContractTests"/>
       </Unit11>
     </Units>
     <RequiredPackages Count="1">

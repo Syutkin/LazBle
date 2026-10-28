@@ -81,6 +81,7 @@ var
   ErrorMessage: string;
   RequestedDeviceId: string;
   ScanTimeoutMs: Cardinal;
+  InputLine: string;
 begin
   ErrorMessage := CheckOptions('ha:d:t:', [
     'help', 'adapter:', 'device:', 'timeout:']);
@@ -136,7 +137,7 @@ begin
   end;
 
   WriteLn('Monitoring Battery Service notifications. Press Enter to stop.');
-  ReadLn;
+  ReadBleConsoleLine(InputLine);
   ShutdownBle;
   Terminate;
 end;
@@ -148,7 +149,7 @@ begin
   WriteLn;
   WriteLn('Scans for a BLE device, reads Battery Level (0x2A19), and');
   WriteLn('prints subsequent Battery Service notifications.');
-  WriteLn('Set SIMPLECBLE_LIBRARY_DIR if native libraries are elsewhere.');
+  WriteLn('Deploy the matching SimpleDelphiBLE native libraries beside the executable.');
 end;
 
 var

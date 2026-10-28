@@ -36,8 +36,15 @@
   completion callback and detach pending-operation callbacks on owner teardown.
 - Move the TLazBleSync main-loop/deadline update forward from stage 4 because
   removing Timeout requires updating its wait semantics now.
-- Replace injected C-driver tests with upstream PLAIN integration. LCL/Entime
-  dispatch, lifecycle, deployment, and release migration remain for stages 4–5.
+- Deliver LCL and timing transport callbacks directly on the main thread; remove
+  LazBleLclDispatch, its message clones, and the obsolete scan TimedOut state.
+- Add TLazBleComponent.ShutdownAsync and OnUnconfigureClient. Await cleanup before
+  freeing GUI owners and release borrowed profiles before core-client removal.
+  The LCL demo uses asynchronous CloseQuery; console input services callbacks.
+- Remove legacy loader diagnostics; expose BindingName = SimpleDelphiBLE and
+  BindingVersion = 1.3.0. Align package metadata with unreleased LazBle 2.0.0.
+- Replace injected C-driver tests with upstream PLAIN integration. Hardware,
+  Windows runtime, clean-system/IDE verification and release remain for stage 5.
 
 ### Fixed
 

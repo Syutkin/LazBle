@@ -137,7 +137,7 @@ begin
     ' [--adapter ID] [--timeout MILLISECONDS]');
   WriteLn;
   WriteLn('Scans for BLE devices and prints them ordered by strongest RSSI.');
-  WriteLn('Set SIMPLECBLE_LIBRARY_DIR if native libraries are elsewhere.');
+  WriteLn('Deploy the matching SimpleDelphiBLE native libraries beside the executable.');
 end;
 
 var

@@ -9,8 +9,7 @@ uses
   SysUtils,
   LazBleTypes,
   LazBleOperation,
-  LazBleFacade,
-  LazBleLclDispatch;
+  LazBleFacade;
 
 type
   ELazBleLclScanActive = class(Exception);
@@ -20,7 +19,6 @@ type
     lblssScanning,
     lblssSucceeded,
     lblssCancelled,
-    lblssTimedOut,
     lblssFailed
   );
 
@@ -35,8 +33,7 @@ type
   private
     FBle: TLazBle;
     FOperation: IBleScanOperation;
-    FDispatch: TLazBleLclDispatch;
-    FLock: TRTLCriticalSection;
+    FGeneration: QWord;
     FState: TLazBleLclScanState;
     FResults: TBleDeviceInfos;
     FErrorCode: Integer;
@@ -52,8 +49,6 @@ type
     procedure OperationResult(Sender: TObject; const ADeviceId,
       ADeviceName: string; const ARssi: SmallInt);
     procedure OperationCompleted(Sender: TObject);
-    procedure DispatchMessage(Sender: TObject;
-      const AMessage: TLazBleLclDispatchMessage);
     procedure DeliverResult(const ADeviceInfo: TBleDeviceInfo);
     procedure DeliverCompletion(const AOperationState: TLazBleOperationState;
       const AErrorCode: Integer; const AErrorMessage: string);
@@ -83,126 +78,67 @@ type
 
 implementation
 
-type
-  TLazBleLclScanResultMessage = class(TLazBleLclDispatchMessage)
-  private
-    FDeviceInfo: TBleDeviceInfo;
-  public
-    constructor Create(const ADeviceInfo: TBleDeviceInfo);
-    function Clone: TLazBleLclDispatchMessage; override;
-    property DeviceInfo: TBleDeviceInfo read FDeviceInfo;
-  end;
-
-  TLazBleLclScanCompletedMessage = class(TLazBleLclDispatchMessage)
-  private
-    FOperationState: TLazBleOperationState;
-    FErrorCode: Integer;
-    FErrorMessage: string;
-  public
-    constructor Create(const AOperationState: TLazBleOperationState;
-      const AErrorCode: Integer; const AErrorMessage: string);
-    function Clone: TLazBleLclDispatchMessage; override;
-    property OperationState: TLazBleOperationState read FOperationState;
-    property ErrorCode: Integer read FErrorCode;
-    property ErrorMessage: string read FErrorMessage;
-  end;
-
-constructor TLazBleLclScanResultMessage.Create(
-  const ADeviceInfo: TBleDeviceInfo);
-begin
-  inherited Create;
-  FDeviceInfo := ADeviceInfo;
-end;
-
-function TLazBleLclScanResultMessage.Clone: TLazBleLclDispatchMessage;
-begin
-  Result := TLazBleLclScanResultMessage.Create(FDeviceInfo);
-end;
-
-constructor TLazBleLclScanCompletedMessage.Create(
-  const AOperationState: TLazBleOperationState; const AErrorCode: Integer;
-  const AErrorMessage: string);
-begin
-  inherited Create;
-  FOperationState := AOperationState;
-  FErrorCode := AErrorCode;
-  FErrorMessage := AErrorMessage;
-end;
-
-function TLazBleLclScanCompletedMessage.Clone: TLazBleLclDispatchMessage;
-begin
-  Result := TLazBleLclScanCompletedMessage.Create(FOperationState,
-    FErrorCode, FErrorMessage);
-end;
-
 constructor TLazBleLclScan.Create(const ABle: TLazBle);
 begin
   inherited Create;
   if not Assigned(ABle) then
     raise EArgumentNilException.Create('ABle');
-  InitCriticalSection(FLock);
   FBle := ABle;
   FState := lblssIdle;
-  FDispatch := TLazBleLclDispatch.Create(@DispatchMessage);
 end;
 
 destructor TLazBleLclScan.Destroy;
 begin
   Shutdown;
-  FDispatch.Free;
-  FDispatch := nil;
   FBle := nil;
-  DoneCriticalSection(FLock);
   inherited Destroy;
 end;
 
 procedure TLazBleLclScan.Start(const AAdapterId: string;
   const ATimeoutMs: Cardinal);
+var
+  Generation: QWord;
 begin
+  LazBleRequireMainThread;
   if FShutdown then
     raise EInvalidOperation.Create('BLE scan controller is shut down');
   if State = lblssScanning then
     raise ELazBleLclScanActive.Create('BLE scan is already active');
-  FDispatch.NextGeneration;
+  Inc(FGeneration);
   ClearResults;
-  EnterCriticalSection(FLock);
-  try
-    FErrorCode := 0;
-    FErrorMessage := '';
-    FState := lblssScanning;
-  finally
-    LeaveCriticalSection(FLock);
-  end;
+  FErrorCode := 0;
+  FErrorMessage := '';
+  FState := lblssScanning;
   FOperation := FBle.ScanAsync(AAdapterId, ATimeoutMs);
   FOperation.OnResult := @OperationResult;
+  Generation := FGeneration;
   NotifyStateChanged(lblssScanning);
+  if FShutdown or (Generation <> FGeneration) then Exit;
   FOperation.OnCompleted := @OperationCompleted;
 end;
 
 procedure TLazBleLclScan.Cancel;
 begin
+  LazBleRequireMainThread;
   if Assigned(FOperation) and (FOperation.State = lbopPending) then
     FOperation.Cancel;
 end;
 
 procedure TLazBleLclScan.ClearResults;
 begin
-  EnterCriticalSection(FLock);
-  try
-    SetLength(FResults, 0);
-  finally
-    LeaveCriticalSection(FLock);
-  end;
+  LazBleRequireMainThread;
+  SetLength(FResults, 0);
 end;
 
 procedure TLazBleLclScan.Shutdown;
 var
   Operation: IBleScanOperation;
 begin
+  LazBleRequireMainThread;
   if FShutdown then
     Exit;
   FShutdown := True;
-  FDispatch.Detach;
+  Inc(FGeneration);
   Operation := FOperation;
   FOperation := nil;
   if Assigned(Operation) then
@@ -212,100 +148,58 @@ begin
     if Operation.State = lbopPending then
       Operation.Cancel;
   end;
-  EnterCriticalSection(FLock);
-  try
-    if FState = lblssScanning then
-      FState := lblssCancelled;
-  finally
-    LeaveCriticalSection(FLock);
-  end;
+  if FState = lblssScanning then
+    FState := lblssCancelled;
 end;
 
 function TLazBleLclScan.GetState: TLazBleLclScanState;
 begin
-  EnterCriticalSection(FLock);
-  try
-    Result := FState;
-  finally
-    LeaveCriticalSection(FLock);
-  end;
+  LazBleRequireMainThread;
+  Result := FState;
 end;
 
 function TLazBleLclScan.GetResults: TBleDeviceInfos;
 begin
-  EnterCriticalSection(FLock);
-  try
-    Result := Copy(FResults);
-  finally
-    LeaveCriticalSection(FLock);
-  end;
+  LazBleRequireMainThread;
+  Result := FResults;
 end;
 
 function TLazBleLclScan.GetErrorCode: Integer;
 begin
-  EnterCriticalSection(FLock);
-  try
-    Result := FErrorCode;
-  finally
-    LeaveCriticalSection(FLock);
-  end;
+  LazBleRequireMainThread;
+  Result := FErrorCode;
 end;
 
 function TLazBleLclScan.GetErrorMessage: string;
 begin
-  EnterCriticalSection(FLock);
-  try
-    Result := FErrorMessage;
-  finally
-    LeaveCriticalSection(FLock);
-  end;
+  LazBleRequireMainThread;
+  Result := FErrorMessage;
 end;
 
 procedure TLazBleLclScan.OperationResult(Sender: TObject;
   const ADeviceId, ADeviceName: string; const ARssi: SmallInt);
 var
   DeviceInfo: TBleDeviceInfo;
-  Message: TLazBleLclScanResultMessage;
 begin
+  LazBleRequireMainThread;
+  if FShutdown or not Assigned(FOperation) or
+    (FOperation <> (Sender as IBleScanOperation)) then Exit;
   DeviceInfo := Default(TBleDeviceInfo);
   DeviceInfo.DeviceId := ADeviceId;
   DeviceInfo.DeviceName := ADeviceName;
   DeviceInfo.Rssi := ARssi;
-  Message := TLazBleLclScanResultMessage.Create(DeviceInfo);
-  try
-    FDispatch.Queue(Message);
-  finally
-    Message.Free;
-  end;
+  DeliverResult(DeviceInfo);
 end;
 
 procedure TLazBleLclScan.OperationCompleted(Sender: TObject);
 var
-  Message: TLazBleLclScanCompletedMessage;
-  Operation: TBleOperation;
+  Operation: IBleScanOperation;
 begin
-  if not (Sender is TBleOperation) then
-    Exit;
-  Operation := TBleOperation(Sender);
-  Message := TLazBleLclScanCompletedMessage.Create(Operation.State,
-    Operation.ErrorCode, Operation.ErrorMessage);
-  try
-    FDispatch.Queue(Message);
-  finally
-    Message.Free;
-  end;
-end;
-
-procedure TLazBleLclScan.DispatchMessage(Sender: TObject;
-  const AMessage: TLazBleLclDispatchMessage);
-begin
-  if AMessage is TLazBleLclScanResultMessage then
-    DeliverResult(TLazBleLclScanResultMessage(AMessage).DeviceInfo)
-  else if AMessage is TLazBleLclScanCompletedMessage then
-    DeliverCompletion(
-      TLazBleLclScanCompletedMessage(AMessage).OperationState,
-      TLazBleLclScanCompletedMessage(AMessage).ErrorCode,
-      TLazBleLclScanCompletedMessage(AMessage).ErrorMessage);
+  LazBleRequireMainThread;
+  if FShutdown or not Assigned(FOperation) or
+    (FOperation <> (Sender as IBleScanOperation)) then Exit;
+  Operation := FOperation;
+  DeliverCompletion(Operation.State, Operation.ErrorCode, Operation.ErrorMessage);
 end;
 
 procedure TLazBleLclScan.DeliverResult(const ADeviceInfo: TBleDeviceInfo);
@@ -315,25 +209,21 @@ var
   ResultIndex: Integer;
 begin
   ResultIndex := -1;
-  EnterCriticalSection(FLock);
-  try
-    if FState <> lblssScanning then
-      Exit;
-    for Index := 0 to High(FResults) do
-      if FResults[Index].DeviceId = ADeviceInfo.DeviceId then
-      begin
-        ResultIndex := Index;
-        Break;
-      end;
-    if ResultIndex < 0 then
+  if FState <> lblssScanning then
+    Exit;
+  for Index := 0 to High(FResults) do
+    if FResults[Index].DeviceId = ADeviceInfo.DeviceId then
     begin
-      ResultIndex := Length(FResults);
-      SetLength(FResults, ResultIndex + 1);
+      ResultIndex := Index;
+      Break;
     end;
-    FResults[ResultIndex] := ADeviceInfo;
-  finally
-    LeaveCriticalSection(FLock);
+  if ResultIndex < 0 then
+  begin
+    ResultIndex := Length(FResults);
+    SetLength(FResults, ResultIndex + 1);
   end;
+  FResults := Copy(FResults); { published snapshots remain unchanged }
+  FResults[ResultIndex] := ADeviceInfo;
 
   Handler := FOnResult;
   if Assigned(Handler) then
@@ -348,6 +238,7 @@ var
   CompletedHandler: TLazBleLclScanCompletedEvent;
   NewState: TLazBleLclScanState;
   Operation: IBleScanOperation;
+  Generation: QWord;
 begin
   if State <> lblssScanning then
     Exit;
@@ -369,15 +260,12 @@ begin
     Operation.OnCompleted := nil;
   end;
 
-  EnterCriticalSection(FLock);
-  try
-    FState := NewState;
-    FErrorCode := AErrorCode;
-    FErrorMessage := AErrorMessage;
-  finally
-    LeaveCriticalSection(FLock);
-  end;
+  FState := NewState;
+  FErrorCode := AErrorCode;
+  FErrorMessage := AErrorMessage;
+  Generation := FGeneration;
   NotifyStateChanged(NewState);
+  if FShutdown or (Generation <> FGeneration) then Exit;
 
   CompletedHandler := FOnCompleted;
   if Assigned(CompletedHandler) then

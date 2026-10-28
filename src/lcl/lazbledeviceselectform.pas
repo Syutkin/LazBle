@@ -98,7 +98,6 @@ resourcestring
   SBleDeviceSelectScanning = 'Scanning for Bluetooth devices...';
   SBleDeviceSelectSucceeded = 'Scan completed';
   SBleDeviceSelectCancelled = 'Scan cancelled';
-  SBleDeviceSelectTimedOut = 'Scan timed out';
   SBleDeviceSelectFailed = 'Scan failed';
   SBleDeviceSelectError = '%s: %s';
 
@@ -121,10 +120,10 @@ end;
 
 destructor TBleDeviceSelectForm.Destroy;
 begin
+  DetachScanHandlers;
   if FStartedScan and Assigned(FScan) and
     (FScan.State = lblssScanning) then
     FScan.Cancel;
-  DetachScanHandlers;
   FScan := nil;
   inherited Destroy;
 end;
@@ -319,10 +318,10 @@ begin
     lblssScanning: StatusLabel.Caption := SBleDeviceSelectScanning;
     lblssSucceeded: StatusLabel.Caption := SBleDeviceSelectSucceeded;
     lblssCancelled: StatusLabel.Caption := SBleDeviceSelectCancelled;
-    lblssTimedOut: StatusLabel.Caption := SBleDeviceSelectTimedOut;
+
     lblssFailed: StatusLabel.Caption := SBleDeviceSelectFailed;
   end;
-  if (State in [lblssTimedOut, lblssFailed]) and
+  if (State in [lblssFailed]) and
     (FScan.ErrorMessage <> '') then
     StatusLabel.Caption := Format(SBleDeviceSelectError,
       [StatusLabel.Caption, FScan.ErrorMessage]);

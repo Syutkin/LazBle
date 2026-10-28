@@ -62,10 +62,6 @@ msgstr "Stop"
 msgid "Scan completed"
 msgstr "Scan completed"
 
-#: lazbledeviceselectform.sbledeviceselecttimedout
-msgid "Scan timed out"
-msgstr "Scan timed out"
-
 #: lazbledeviceselectform.sbledeviceselecttitle
 msgid "Bluetooth devices"
 msgstr "Bluetooth devices"

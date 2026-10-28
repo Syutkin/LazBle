@@ -6,6 +6,7 @@ object LazBleDemoForm: TLazBleDemoForm
   Caption = 'LazBle LCL Demo'
   ClientHeight = 160
   ClientWidth = 620
+  OnCloseQuery = FormCloseQuery
   Position = poScreenCenter
   LCLVersion = '3.4.0.0'
   object BleDeviceControl: TLazBleDeviceControl

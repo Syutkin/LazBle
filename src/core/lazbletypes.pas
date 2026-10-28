@@ -61,9 +61,6 @@ type
     Version: string;
     { Adapter selected by the backend; empty if selection did not complete. }
     AdapterId: string;
-    { Loader warning for a native major version newer than the tested range.
-      Empty when no warning was raised or no library was loaded. }
-    LoadWarning: string;
   end;
 
   { A read-only snapshot. Static versions are available before any BLE work;
@@ -74,9 +71,8 @@ type
     { Version of the compiled LazBle package. }
     LazBleVersion: string;
     { Version of the compiled SimpleDelphiBLE distribution. }
+    BindingName: string;
     BindingVersion: string;
-    { Legacy field; empty with SimpleDelphiBLE's link-time dependency. }
-    MinimumNativeVersion: string;
     { Name supplied by ILazBleBackend, or 'unknown' if it returns empty. }
     BackendName: string;
     { Version reported by the loaded native backend after an availability
@@ -88,9 +84,6 @@ type
     Availability: TBleAvailability;
     { Error from the most recent availability check, if it failed. }
     ErrorMessage: string;
-    { Native loader warning from the most recent availability check; it does
-      not by itself make the backend unavailable. }
-    WarningMessage: string;
   end;
   TLazBleAvailabilityResultEvent = procedure(Sender: TObject;
     const AAvailability: TBleAvailability;
@@ -99,7 +92,7 @@ type
 const
   { Source version of the LazBle package, also available without a facade.
     Keep it aligned with the package metadata when making a release. }
-  LazBleVersion = '1.2.0';
+  LazBleVersion = '2.0.0';
   InvalidBleOperationId: TBleOperationId = 0;
   InvalidBleSubscriptionId: TBleSubscriptionId = 0;
   // Negative codes are reserved for lazble; SimpleBLE error ordinals are nonnegative.
@@ -189,8 +182,6 @@ type
     Generation: QWord;
     BackendName: string;
     BackendVersion: string;
-    { Loader warning carried with an availability result, if any. }
-    BackendWarning: string;
     AdapterId: string;
     DeviceId: string;
     DeviceName: string;

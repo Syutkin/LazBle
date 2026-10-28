@@ -24,7 +24,6 @@ type
     FClient: TBleClient;
     FLineEnding: string;
     FProfile: TNusProfile;
-    FOutputLock: TRTLCriticalSection;
     procedure NusDataReceived(Sender: TObject; const ADeviceId: string;
       const AValue: TBytes);
     function SendText(const AText: string; const ATimeoutMs: Cardinal): Boolean;
@@ -94,28 +93,21 @@ constructor TNusTerminalApplication.Create(AOwner: TComponent);
 begin
   inherited Create(AOwner);
   StopOnException := True;
-  InitCriticalSection(FOutputLock);
 end;
 
 destructor TNusTerminalApplication.Destroy;
 begin
   ShutdownBle;
-  DoneCriticalSection(FOutputLock);
   inherited Destroy;
 end;
 
 procedure TNusTerminalApplication.NusDataReceived(Sender: TObject;
   const ADeviceId: string; const AValue: TBytes);
 begin
-  EnterCriticalSection(FOutputLock);
-  try
-    WriteLn;
-    WriteLn('RX[', Length(AValue), '] ', BytesToHex(AValue),
-      ' |', BytesToDisplayText(AValue), '|');
-    Write('> ');
-  finally
-    LeaveCriticalSection(FOutputLock);
-  end;
+  WriteLn;
+  WriteLn('RX[', Length(AValue), '] ', BytesToHex(AValue),
+    ' |', BytesToDisplayText(AValue), '|');
+  Write('> ');
 end;
 
 function TNusTerminalApplication.SendText(const AText: string;
@@ -149,15 +141,8 @@ begin
   WriteLn('NUS terminal is ready.');
   WriteLn('Enter text to write its UTF-8 bytes to NUS RX, or /quit to stop.');
   repeat
-    EnterCriticalSection(FOutputLock);
-    try
-      Write('> ');
-    finally
-      LeaveCriticalSection(FOutputLock);
-    end;
-    ReadLn(InputLine);
-    if Eof(Input) and (InputLine = '') then
-      Break;
+    Write('> ');
+    if not ReadBleConsoleLine(InputLine) then Break;
     if SameText(Trim(InputLine), '/quit') then
       Break;
     if InputLine = '' then
@@ -271,7 +256,7 @@ begin
   WriteLn('Received notifications are printed as HEX and ASCII.');
   WriteLn('Input lines are sent as UTF-8 bytes with the selected line ending.');
   WriteLn('Line endings: none (default), lf (\n), or crlf (\r\n).');
-  WriteLn('Set SIMPLECBLE_LIBRARY_DIR if native libraries are elsewhere.');
+  WriteLn('Deploy the matching SimpleDelphiBLE native libraries beside the executable.');
 end;
 
 var

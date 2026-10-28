@@ -107,7 +107,7 @@ type
     procedure CancelRequestDoesNotHideSuccessfulScan;
     procedure AvailabilityCheckReturnsTypedResult;
     procedure AvailabilityCheckDoesNotOverlapScan;
-    procedure DiagnosticInfoIsAvailableBeforeNativeLoad;
+    procedure DiagnosticInfoDoesNotStartNativeWork;
     procedure ConnectCompletesAfterServiceDiscovery;
     procedure ConnectPreservesBackendError;
     procedure DiscoveryPreservesBackendError;
@@ -491,7 +491,6 @@ begin
   BackendEvent.Available := True;
   BackendEvent.BackendName := 'FakeBLE';
   BackendEvent.BackendVersion := '2.3.4';
-  BackendEvent.BackendWarning := 'ABI compatibility is not guaranteed';
   BackendEvent.AdapterId := 'hci-selected';
   AssertTrue(FBackendObject.EmitProgress(BackendEvent));
   AssertTrue(FBackendObject.CompleteOperation(OperationId,
@@ -506,14 +505,11 @@ begin
   AssertEquals('FakeBLE', Diagnostic.BackendName);
   AssertEquals('2.3.4', Diagnostic.NativeVersion);
   AssertEquals('hci-selected', Diagnostic.AdapterId);
-  AssertEquals('ABI compatibility is not guaranteed',
-    Diagnostic.WarningMessage);
   AssertEquals(Ord(lbaAvailable), Ord(Diagnostic.Availability));
 
   Operation := FBle.CheckAvailabilityAsync('hci-test');
   Diagnostic := FBle.DiagnosticInfo;
   AssertEquals('', Diagnostic.NativeVersion);
-  AssertEquals('', Diagnostic.WarningMessage);
   AssertEquals(Ord(lbaChecking), Ord(Diagnostic.Availability));
   OperationId := FBackendObject.OperationIds[1];
   BackendEvent.OperationId := OperationId;
@@ -548,7 +544,7 @@ begin
   AssertEquals(2, FBackendObject.CommandCount);
 end;
 
-procedure TLazBleClientTest.DiagnosticInfoIsAvailableBeforeNativeLoad;
+procedure TLazBleClientTest.DiagnosticInfoDoesNotStartNativeWork;
 var
   About: TLazBleAbout;
   Client: TLazBle;
@@ -556,12 +552,12 @@ var
 begin
   About := LazBleGetAbout;
   AssertEquals('LazBle', About.Name);
-  AssertEquals('1.2.0', About.Version);
+  AssertEquals('2.0.0', About.Version);
 
   Diagnostic := FBle.DiagnosticInfo;
   AssertEquals(About.Version, Diagnostic.LazBleVersion);
   AssertEquals('1.3.0', Diagnostic.BindingVersion);
-  AssertEquals('', Diagnostic.MinimumNativeVersion);
+  AssertEquals('SimpleDelphiBLE', Diagnostic.BindingName);
   AssertEquals('FakeBLE', Diagnostic.BackendName);
   AssertEquals('', Diagnostic.NativeVersion);
   AssertEquals(Ord(lbaUnknown), Ord(Diagnostic.Availability));

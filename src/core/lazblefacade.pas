@@ -364,14 +364,13 @@ begin
   LazBleRequireMainThread;
   Result := Default(TLazBleDiagnosticInfo);
   Result.LazBleVersion := LazBleVersion;
+  Result.BindingName := 'SimpleDelphiBLE';
   Result.BindingVersion := '1.3.0';
-  Result.MinimumNativeVersion := '';
   Result.BackendName := FBackendName;
   if FBackendInfo.Name <> '' then
     Result.BackendName := FBackendInfo.Name;
   Result.NativeVersion := FBackendInfo.Version;
   Result.AdapterId := FBackendInfo.AdapterId;
-  Result.WarningMessage := FBackendInfo.LoadWarning;
   Result.Availability := FAvailability;
   Result.ErrorMessage := FAvailabilityError;
 end;
