@@ -64,6 +64,7 @@ type
     procedure ShutdownFromSubscribeCompletion;
     procedure NativeFacadeReconnectUsesMainThreadTimer;
     procedure NativeSyncPumpsMainThreadEvents;
+    procedure IdleFacadeShutdownIsStableAfterRelease;
   end;
 
 implementation
@@ -566,13 +567,35 @@ var Sync: TLazBleSync; Devices: TBleDeviceInfos; Client: TBleClient; Error: stri
 begin
   Shutdown; Sync := TLazBleSync.Create;
   try
-    AssertTrue(Error,Sync.Scan('',100,Devices,Error)); AssertTrue(Length(Devices)>0);
+    { A fresh PLAIN process needs time for the first advertisement. Do not rely
+      on peripherals cached by another test in the same process. }
+    AssertTrue(Error,Sync.Scan('',1000,Devices,Error));
+    AssertTrue('A fresh scan discovers the PLAIN peripheral', Length(Devices)>0);
     Client := Sync.CreateClient(Device);
     AssertTrue(Error,Sync.Connect(Client,8000,Error));
     AssertTrue(Length(Client.Services)>0);
     AssertTrue(Error,Sync.Disconnect(Client,8000,Error));
     AssertTrue(Error,Sync.Shutdown(8000,Error));
   finally Sync.Free; end;
+end;
+
+procedure TLazBleSimpleBleBackendTest.IdleFacadeShutdownIsStableAfterRelease;
+var Ble: TLazBle; Operation: IBleOperation; Deadline: QWord;
+begin
+  Ble := TLazBle.Create;
+  try
+    Operation := Ble.ShutdownAsync;
+    AssertTrue('Shutdown is idempotent', Operation = Ble.ShutdownAsync);
+    Deadline := GetTickCount64 + 8000;
+    while (Operation.State = lbopPending) and (GetTickCount64 < Deadline) do
+      CheckSynchronize(5);
+    AssertEquals(Operation.ErrorMessage, Ord(lbopSucceeded), Ord(Operation.State));
+  finally
+    Ble.Free;
+  end;
+  Operation.Cancel;
+  AssertEquals('Released facade cannot change a completed shutdown',
+    Ord(lbopSucceeded), Ord(Operation.State));
 end;
 
 initialization
