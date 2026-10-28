@@ -282,11 +282,9 @@ and empty error text can represent a failure. Named negative error codes in
 `LazBleTypes` identify LazBle errors. Custom backends set `ShutdownFailed` on
 failed `lbekShutdownCompleted` events independently of their error code/message.
 
-`LazBleGetAbout` returns static package information. `DiagnosticInfo` contains
-LazBleVersion, BindingName/BindingVersion, BackendName, NativeVersion, AdapterId,
-Availability, and ErrorMessage. Reading it starts no BLE work. NativeVersion and
-AdapterId are populated by an availability check; BindingName/BindingVersion
-describe the compiled SimpleDelphiBLE dependency.
+`TLazBle.Info` provides static package Name, Version, and About text.
+`DiagnosticInfo` reports the backend, native version, adapter, availability,
+and latest availability-check error. Reading it starts no BLE work.
 
 ## LCL integration
 

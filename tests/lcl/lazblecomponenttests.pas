@@ -15,6 +15,7 @@ uses
   LazBleTypes,
   LazBleBackend,
   LazBleFacade,
+  LazBleOperation,
   LazBleLclScan,
   LazBleComponent,
   FakeLazBleBackend;
@@ -96,6 +97,8 @@ type
     FErrorMessage: string;
     FLastCallbackThreadId: TThreadID;
     FAvailabilityChanges: array of TBleAvailability;
+    FShutdownOnChecking: Boolean;
+    FRefreshOnUnavailable: Boolean;
     procedure ScanResult(Sender: TObject; const ADeviceId,
       ADeviceName: string; const ARssi: SmallInt);
     procedure ScanStateChanged(Sender: TObject;
@@ -122,6 +125,10 @@ type
     procedure ClearScanResultsClearsSnapshot;
     procedure RefreshAvailabilityPublishesMainThreadResult;
     procedure AvailabilityFailureUpdatesError;
+    procedure AvailabilityTracksDirectFacadeCheck;
+    procedure RejectedAvailabilityPublishesCurrentDiagnostic;
+    procedure AvailabilityHandlerCanShutdownOnChecking;
+    procedure AvailabilityHandlerCanRefreshAfterFailure;
     procedure ShutdownSuppressesPendingAvailabilityCallback;
     procedure ShutdownCancelsScanAndSuppressesCallbacks;
     procedure ShutdownIsIdempotentAndRejectsNewWork;
@@ -296,6 +303,8 @@ begin
   FErrorMessage := '';
   FLastCallbackThreadId := Default(TThreadID);
   SetLength(FAvailabilityChanges, 0);
+  FShutdownOnChecking := False;
+  FRefreshOnUnavailable := False;
 end;
 
 procedure TLazBleComponentTest.TearDown;
@@ -349,10 +358,23 @@ procedure TLazBleComponentTest.AvailabilityChanged(Sender: TObject;
 var
   Index: Integer;
 begin
+  AssertEquals(Ord(AAvailability), Ord(FComponent.Availability));
+  AssertEquals(Ord(AAvailability), Ord(FComponent.DiagnosticInfo.Availability));
+  AssertEquals(Ord(AAvailability), Ord(FComponent.Facade.DiagnosticInfo.Availability));
   Index := Length(FAvailabilityChanges);
   SetLength(FAvailabilityChanges, Index + 1);
   FAvailabilityChanges[Index] := AAvailability;
   FLastCallbackThreadId := GetCurrentThreadId;
+  if FShutdownOnChecking and (AAvailability = lbaChecking) then
+  begin
+    FShutdownOnChecking := False;
+    FComponent.Shutdown;
+  end;
+  if FRefreshOnUnavailable and (AAvailability = lbaUnavailable) then
+  begin
+    FRefreshOnUnavailable := False;
+    FComponent.RefreshAvailability;
+  end;
 end;
 
 procedure TLazBleComponentTest.FindComponentClass(Reader: TReader;
@@ -465,10 +487,9 @@ begin
     AssertEquals(Ord(lbaAvailable), Ord(FComponent.Availability));
     AssertEquals(2, Length(FAvailabilityChanges));
     AssertEquals(Ord(lbaAvailable), Ord(FAvailabilityChanges[1]));
-    AssertEquals('FakeBLE', FComponent.BackendInfo.Name);
-    AssertEquals('2.3.4', FComponent.BackendInfo.Version);
-    AssertEquals('hci-selected', FComponent.BackendInfo.AdapterId);
+    AssertEquals('FakeBLE', FComponent.DiagnosticInfo.BackendName);
     AssertEquals('2.3.4', FComponent.DiagnosticInfo.NativeVersion);
+    AssertEquals('hci-selected', FComponent.DiagnosticInfo.AdapterId);
     AssertEquals(Int64(MainThreadID), Int64(FLastCallbackThreadId));
   finally
     Thread.WaitFor;
@@ -502,6 +523,101 @@ begin
   end;
 end;
 
+procedure TLazBleComponentTest.AvailabilityTracksDirectFacadeCheck;
+var
+  Event: TLazBleBackendEvent;
+  Operation: IBleAvailabilityOperation;
+begin
+  Operation := FComponent.Facade.CheckAvailabilityAsync('');
+  AssertEquals(Ord(lbaChecking), Ord(FComponent.Availability));
+  AssertEquals(Ord(lbaChecking), Ord(FComponent.DiagnosticInfo.Availability));
+
+  Event := Default(TLazBleBackendEvent);
+  Event.Kind := lbekAvailabilityResult;
+  Event.OperationId := FBackendObject.OperationIds[0];
+  Event.Available := True;
+  AssertTrue(FBackendObject.EmitProgress(Event));
+  AssertEquals(Ord(lbaChecking), Ord(FComponent.Availability));
+  AssertEquals(Ord(lbaChecking), Ord(FComponent.DiagnosticInfo.Availability));
+  AssertTrue(FBackendObject.CompleteOperation(Event.OperationId,
+    lbekOperationSucceeded));
+  AssertEquals(Ord(lbopSucceeded), Ord(Operation.State));
+  AssertEquals(Ord(lbaAvailable), Ord(FComponent.Availability));
+  AssertEquals(Ord(lbaAvailable), Ord(FComponent.DiagnosticInfo.Availability));
+
+  FComponent.Shutdown;
+  AssertEquals(Ord(lbaUnavailable), Ord(FComponent.Availability));
+  AssertEquals(Ord(lbaUnavailable), Ord(FComponent.DiagnosticInfo.Availability));
+  AssertTrue(FBackendObject.CompleteShutdown);
+  AssertEquals(Ord(lbaUnavailable), Ord(FComponent.Facade.DiagnosticInfo.Availability));
+end;
+
+procedure TLazBleComponentTest.RejectedAvailabilityPublishesCurrentDiagnostic;
+begin
+  FComponent.StartScan;
+  FComponent.RefreshAvailability;
+
+  AssertEquals(1, Length(FAvailabilityChanges));
+  AssertEquals(Ord(lbaUnavailable), Ord(FAvailabilityChanges[0]));
+  AssertEquals(Ord(lbaUnavailable), Ord(FComponent.Availability));
+  AssertEquals(1, FErrorCount);
+  AssertEquals('Could not start BLE availability check',
+    FComponent.DiagnosticInfo.AvailabilityErrorMessage);
+  AssertEquals(FComponent.DiagnosticInfo.AvailabilityErrorMessage,
+    FComponent.LastErrorMessage);
+  AssertEquals(1, FBackendObject.CommandCount);
+end;
+
+procedure TLazBleComponentTest.AvailabilityHandlerCanShutdownOnChecking;
+var
+  Event: TLazBleBackendEvent;
+begin
+  FShutdownOnChecking := True;
+  FComponent.RefreshAvailability;
+
+  AssertEquals(1, FBackendObject.CommandCount);
+  AssertEquals(1, Length(FAvailabilityChanges));
+  AssertTrue(FBackendObject.CancellationWasRequested(FBackendObject.OperationIds[0]));
+  AssertEquals(Ord(lbaUnavailable), Ord(FComponent.Availability));
+  AssertEquals(Ord(lbaUnavailable), Ord(FComponent.DiagnosticInfo.Availability));
+
+  Event := Default(TLazBleBackendEvent);
+  Event.Kind := lbekAvailabilityResult;
+  Event.OperationId := FBackendObject.OperationIds[0];
+  Event.Available := True;
+  AssertTrue(FBackendObject.EmitProgress(Event));
+  AssertTrue(FBackendObject.CompleteOperation(Event.OperationId,
+    lbekOperationSucceeded));
+  AssertTrue(FBackendObject.CompleteShutdown);
+  AssertEquals(Ord(lbaUnavailable), Ord(FComponent.Availability));
+  AssertEquals(Ord(lbaUnavailable), Ord(FComponent.DiagnosticInfo.Availability));
+  AssertEquals(1, Length(FAvailabilityChanges));
+  AssertEquals(0, FErrorCount);
+end;
+
+procedure TLazBleComponentTest.AvailabilityHandlerCanRefreshAfterFailure;
+begin
+  FComponent.RefreshAvailability;
+  FRefreshOnUnavailable := True;
+  AssertTrue(FBackendObject.CompleteOperation(FBackendObject.OperationIds[0],
+    lbekOperationFailed, 71, 'availability failed'));
+
+  AssertEquals(2, FBackendObject.CommandCount);
+  AssertEquals(3, Length(FAvailabilityChanges));
+  AssertEquals(Ord(lbaUnavailable), Ord(FAvailabilityChanges[1]));
+  AssertEquals(Ord(lbaChecking), Ord(FAvailabilityChanges[2]));
+  AssertEquals(Ord(lbaChecking), Ord(FComponent.Availability));
+  AssertEquals('', FComponent.DiagnosticInfo.AvailabilityErrorMessage);
+  AssertEquals('', FComponent.LastErrorMessage);
+  AssertEquals(0, FErrorCount);
+
+  AssertTrue(FBackendObject.CompleteOperation(FBackendObject.OperationIds[1],
+    lbekOperationCancelled));
+  AssertEquals(4, Length(FAvailabilityChanges));
+  AssertEquals(Ord(lbaUnknown), Ord(FComponent.Availability));
+  AssertEquals(Ord(lbaUnknown), Ord(FComponent.DiagnosticInfo.Availability));
+end;
+
 procedure TLazBleComponentTest.ShutdownSuppressesPendingAvailabilityCallback;
 var
   OperationId: TBleOperationId;
@@ -513,6 +629,9 @@ begin
 
   FComponent.Shutdown;
 
+  AssertEquals(Ord(lbaUnavailable), Ord(FComponent.Availability));
+  AssertEquals(Ord(lbaUnavailable), Ord(FComponent.DiagnosticInfo.Availability));
+  AssertEquals(Ord(lbaUnavailable), Ord(FComponent.Facade.DiagnosticInfo.Availability));
   AssertTrue(FBackendObject.CancellationWasRequested(OperationId));
   Thread := TComponentAvailabilityEmissionThread.Create(FBackendObject,
     OperationId, True, True, lbekOperationCancelled);
@@ -524,6 +643,7 @@ begin
     CheckSynchronize;
 
     AssertEquals(Ord(lbaUnavailable), Ord(FComponent.Availability));
+    AssertEquals(Ord(lbaUnavailable), Ord(FComponent.DiagnosticInfo.Availability));
     AssertEquals(1, Length(FAvailabilityChanges));
     AssertEquals(0, FErrorCount);
   finally

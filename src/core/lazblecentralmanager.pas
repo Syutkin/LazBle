@@ -27,6 +27,8 @@ type
   TLazBleAvailabilityCompletedEvent = procedure(Sender: TObject;
     const AOutcome: TLazBleBackendEventKind; const AErrorCode: Integer;
     const AErrorMessage: string) of object;
+  TLazBleAvailabilityResultEvent = procedure(Sender: TObject;
+    const AEvent: TLazBleBackendEvent) of object;
 
   TBleCentralManager = class;
 
@@ -75,7 +77,7 @@ type
     function StartScan(const AAdapterId: string;
       const ATimeoutMs: Cardinal): TBleOperationId;
     procedure CancelScan;
-    { Query adapter availability; OnAvailabilityResult carries backend info. }
+    { Query adapter availability; OnAvailabilityResult forwards its backend event. }
     function CheckAvailability(const AAdapterId: string): TBleOperationId;
     procedure CancelAvailabilityCheck;
     { Create a session managed by this central manager. }
@@ -326,7 +328,6 @@ end;
 procedure TBleCentralManager.HandleBackendEvent(
   const AEvent: TLazBleBackendEvent);
 var
-  BackendInfo: TLazBleBackendInfo;
   Index: Integer;
 begin
   LazBleRequireMainThread;
@@ -340,16 +341,7 @@ begin
   if (AEvent.Kind = lbekAvailabilityResult) and
     (AEvent.OperationId = FAvailabilityOperationId) and
     Assigned(FOnAvailabilityResult) then
-  begin
-    BackendInfo := Default(TLazBleBackendInfo);
-    BackendInfo.Name := AEvent.BackendName;
-    BackendInfo.Version := AEvent.BackendVersion;
-    BackendInfo.AdapterId := AEvent.AdapterId;
-    if AEvent.Available then
-      FOnAvailabilityResult(Self, lbaAvailable, BackendInfo)
-    else
-      FOnAvailabilityResult(Self, lbaUnavailable, BackendInfo);
-  end;
+    FOnAvailabilityResult(Self, AEvent);
 
   if (FState = lbcsShuttingDown) and
     (AEvent.Kind = lbekShutdownCompleted) and

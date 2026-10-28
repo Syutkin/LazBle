@@ -1,6 +1,6 @@
 unit LazBleFacade;
 
-{$mode objfpc}{$H+}
+{$mode objfpc}{$H+}{$J-}
 
 interface
 
@@ -34,11 +34,8 @@ type
     FShutdownOperation: IBleOperation;
     FShutdownOperationObject: TBleOperation;
     FReconnectTimerFactory: ILazBleReconnectTimerFactory;
-    FBackendInfo: TLazBleBackendInfo;
+    FDiagnosticInfo: TLazBleDiagnosticInfo;
     FBackendName: string;
-    FAvailability: TBleAvailability;
-    FAvailabilityError: string;
-    function GetBackendInfo: TLazBleBackendInfo;
     function GetDiagnosticInfo: TLazBleDiagnosticInfo;
     procedure OperationCancelled(Sender: TObject);
     procedure ScanResult(Sender: TObject; const ADeviceId,
@@ -46,8 +43,7 @@ type
     procedure ScanCompleted(Sender: TObject; const AOutcome: TLazBleBackendEventKind;
       const AErrorCode: Integer; const AErrorMessage: string);
     procedure AvailabilityResult(Sender: TObject;
-      const AAvailability: TBleAvailability;
-      const ABackendInfo: TLazBleBackendInfo);
+      const AEvent: TLazBleBackendEvent);
     procedure AvailabilityCompleted(Sender: TObject;
       const AOutcome: TLazBleBackendEventKind; const AErrorCode: Integer;
       const AErrorMessage: string);
@@ -67,6 +63,13 @@ type
     constructor Create(const ABackend: ILazBleBackend;
       const AReconnectTimerFactory: ILazBleReconnectTimerFactory); overload;
   public
+    { Static package information; no instance or BLE work is required.
+      Keep Version aligned with core/LCL/design package metadata. }
+    const Info: TLazBleInfo = (
+      Name: 'LazBle';
+      Version: '2.0.0';
+      About: 'Asynchronous BLE and GATT client library for Free Pascal'
+    );
     constructor Create; overload;
     constructor Create(const ABackend: ILazBleBackend); overload;
     destructor Destroy; override;
@@ -88,12 +91,9 @@ type
     { Reading DiagnosticInfo never opens the native library or starts BLE.
       BackendName comes from ILazBleBackend.GetBackendName before a check,
       then from the backend's availability result when provided.
-      Example: Info := Ble.DiagnosticInfo; after CheckAvailabilityAsync
-      completes, Info.NativeVersion is the reported native version or ''. }
+      Example: Diagnostic := Ble.DiagnosticInfo; after CheckAvailabilityAsync
+      completes, Diagnostic.NativeVersion is the reported native version or ''. }
     property DiagnosticInfo: TLazBleDiagnosticInfo read GetDiagnosticInfo;
-    { Availability-result metadata retained for compatibility. Version is
-      native backend version, not the LazBle or Pascal binding version. }
-    property BackendInfo: TLazBleBackendInfo read GetBackendInfo;
   end;
 
 implementation
@@ -284,8 +284,9 @@ begin
   BackendName := ABackend.GetBackendName;
   if BackendName <> '' then
     FBackendName := BackendName;
-  FBackendInfo := Default(TLazBleBackendInfo);
-  FAvailability := lbaUnknown;
+  FDiagnosticInfo := Default(TLazBleDiagnosticInfo);
+  FDiagnosticInfo.BackendName := FBackendName;
+  FDiagnosticInfo.Availability := lbaUnknown;
   FReconnectTimerFactory := AReconnectTimerFactory;
   FOperations := TList.Create;
   FClients := TList.Create;
@@ -353,26 +354,10 @@ begin
   inherited Destroy;
 end;
 
-function TLazBle.GetBackendInfo: TLazBleBackendInfo;
-begin
-  LazBleRequireMainThread;
-  Result := FBackendInfo;
-end;
-
 function TLazBle.GetDiagnosticInfo: TLazBleDiagnosticInfo;
 begin
   LazBleRequireMainThread;
-  Result := Default(TLazBleDiagnosticInfo);
-  Result.LazBleVersion := LazBleVersion;
-  Result.BindingName := 'SimpleDelphiBLE';
-  Result.BindingVersion := '1.3.0';
-  Result.BackendName := FBackendName;
-  if FBackendInfo.Name <> '' then
-    Result.BackendName := FBackendInfo.Name;
-  Result.NativeVersion := FBackendInfo.Version;
-  Result.AdapterId := FBackendInfo.AdapterId;
-  Result.Availability := FAvailability;
-  Result.ErrorMessage := FAvailabilityError;
+  Result := FDiagnosticInfo;
 end;
 
 procedure TLazBle.OperationCancelled(Sender: TObject);
@@ -424,17 +409,25 @@ begin
 end;
 
 procedure TLazBle.AvailabilityResult(Sender: TObject;
-  const AAvailability: TBleAvailability;
-  const ABackendInfo: TLazBleBackendInfo);
+  const AEvent: TLazBleBackendEvent);
+var
+  Availability: TBleAvailability;
 begin
   LazBleRequireMainThread;
-  FBackendInfo := ABackendInfo;
-  FAvailability := AAvailability;
-  FAvailabilityError := '';
+  if AEvent.Available then
+    Availability := lbaAvailable
+  else
+    Availability := lbaUnavailable;
   if Assigned(FActiveAvailability) and
     (FActiveAvailability.State = lbopPending) then
     TBleAvailabilityOperationAccess(
-      FActiveAvailabilityObject).StoreAvailability(AAvailability);
+      FActiveAvailabilityObject).StoreAvailability(Availability);
+  FDiagnosticInfo.BackendName := FBackendName;
+  if AEvent.BackendName <> '' then
+    FDiagnosticInfo.BackendName := AEvent.BackendName;
+  FDiagnosticInfo.NativeVersion := AEvent.BackendVersion;
+  FDiagnosticInfo.AdapterId := AEvent.AdapterId;
+  FDiagnosticInfo.AvailabilityErrorMessage := '';
 end;
 
 procedure TLazBle.AvailabilityCompleted(Sender: TObject;
@@ -453,20 +446,25 @@ begin
     Exit;
   if AOutcome = lbekOperationCancelled then
   begin
-    FAvailability := lbaUnknown;
-    FAvailabilityError := '';
+    FDiagnosticInfo.Availability := lbaUnknown;
+    FDiagnosticInfo.AvailabilityErrorMessage := '';
   end
   else if (AOutcome = lbekOperationSucceeded) and
     (Operation.Availability in [lbaAvailable, lbaUnavailable]) then
-    FAvailabilityError := ''
+  begin
+    FDiagnosticInfo.Availability := Operation.Availability;
+    FDiagnosticInfo.AvailabilityErrorMessage := '';
+  end
   else
   begin
-    FAvailability := lbaUnavailable;
+    FDiagnosticInfo.Availability := lbaUnavailable;
     if AOutcome = lbekOperationSucceeded then
-      FAvailabilityError := 'BLE backend did not report availability'
+      FDiagnosticInfo.AvailabilityErrorMessage := 'BLE backend did not report availability'
     else
-      FAvailabilityError := AErrorMessage;
+      FDiagnosticInfo.AvailabilityErrorMessage := AErrorMessage;
   end;
+  if Assigned(FShutdownOperation) then
+    FDiagnosticInfo.Availability := lbaUnavailable;
   if AOutcome = lbekOperationCancelled then
     TBleAvailabilityOperationAccess(OperationObject).Finish(lbopCancelled)
   else if (AOutcome = lbekOperationSucceeded) and
@@ -603,12 +601,21 @@ var
   Operation: TBleAvailabilityOperationAccess;
 begin
   LazBleRequireMainThread;
+  if Assigned(FShutdownOperation) then
+  begin
+    Operation := TBleAvailabilityOperationAccess.CreateInternal(nil);
+    Result := Operation;
+    Operation.Finish(lbopFailed, LazBleErrorInvalidState, 'LazBle is shut down');
+    Exit;
+  end;
   if Assigned(FActiveAvailability) and
     (FActiveAvailability.State = lbopPending) then
     Exit(FActiveAvailability);
-  FBackendInfo := Default(TLazBleBackendInfo);
-  FAvailability := lbaChecking;
-  FAvailabilityError := '';
+  FDiagnosticInfo.BackendName := FBackendName;
+  FDiagnosticInfo.NativeVersion := '';
+  FDiagnosticInfo.AdapterId := '';
+  FDiagnosticInfo.Availability := lbaChecking;
+  FDiagnosticInfo.AvailabilityErrorMessage := '';
   Operation := TBleAvailabilityOperationAccess.CreateInternal(
     @OperationCancelled);
   Result := Operation;
@@ -618,8 +625,8 @@ begin
   begin
     FActiveAvailability := nil;
     FActiveAvailabilityObject := nil;
-    FAvailability := lbaUnavailable;
-    FAvailabilityError := 'Could not start BLE availability check';
+    FDiagnosticInfo.Availability := lbaUnavailable;
+    FDiagnosticInfo.AvailabilityErrorMessage := 'Could not start BLE availability check';
     Operation.Finish(lbopFailed, 0,
       'Could not start BLE availability check');
   end;
@@ -775,6 +782,7 @@ begin
   Operation := TBleOperationAccess.CreateInternal(nil);
   FShutdownOperation := Operation;
   FShutdownOperationObject := Operation;
+  FDiagnosticInfo.Availability := lbaUnavailable;
   CancelPendingOperations;
   if FManager.State = lbcsShutdown then
     Operation.Finish(lbopSucceeded)

@@ -62,7 +62,6 @@ type
     FScan: TLazBleLclScan;
     FClients: TList;
     FAvailabilityOperation: IBleAvailabilityOperation;
-    FAvailability: TBleAvailability;
     FShutdownOperation: IBleOperation;
     FShutdownStarted: Boolean;
     FAdapterId: string;
@@ -80,7 +79,7 @@ type
     function GetScanResults: TBleDeviceInfos;
     function GetLastErrorCode: Integer;
     function GetLastErrorMessage: string;
-    function GetBackendInfo: TLazBleBackendInfo;
+    function GetAvailability: TBleAvailability;
     function GetDiagnosticInfo: TLazBleDiagnosticInfo;
     function GetClientCount: Integer;
     function GetClient(const AIndex: Integer): TLazBleLclClient;
@@ -96,7 +95,7 @@ type
     procedure ScanCompleted(Sender: TObject;
       const AState: TLazBleLclScanState);
     procedure AvailabilityCompleted(Sender: TObject);
-    procedure SetAvailability(const AAvailability: TBleAvailability);
+    procedure NotifyAvailabilityChanged;
   protected
     function CreateFacade: TLazBle; virtual;
   public
@@ -110,7 +109,9 @@ type
     procedure CancelScan;
     procedure ClearScanResults;
     { Starts or repeats the asynchronous check for AdapterId. Results arrive
-      through OnAvailabilityChanged and, on failure, OnError. }
+      through OnAvailabilityChanged and, on failure, OnError. Handlers see the
+      updated diagnostic snapshot. Immediate rejection reports unavailable
+      directly without a checking notification. }
     procedure RefreshAvailability;
     { Stop scan, availability work, and owned clients. }
     procedure Shutdown;
@@ -122,14 +123,12 @@ type
     function FindClient(const ADeviceId: string): TLazBleLclClient;
     procedure RemoveClient(const AClient: TLazBleLclClient);
     property ScanState: TLazBleLclScanState read GetScanState;
-    property Availability: TBleAvailability read FAvailability;
+    { The same state as DiagnosticInfo.Availability on the owning facade. }
+    property Availability: TBleAvailability read GetAvailability;
     property ScanResults: TBleDeviceInfos read GetScanResults;
     property ScanController: TLazBleLclScan read FScan;
     property LastErrorCode: Integer read GetLastErrorCode;
     property LastErrorMessage: string read GetLastErrorMessage;
-    { Backend metadata from the latest availability result. Fields may be
-      empty before a check, during a repeat check, or after load failure. }
-    property BackendInfo: TLazBleBackendInfo read GetBackendInfo;
     { Main-thread snapshot; available without RefreshAvailability. Native
       dependencies are required at process startup. Read on the owning thread;
       read this property again after availability changes for current values. }
@@ -384,7 +383,6 @@ procedure TLazBleComponent.Initialize(const ABle: TLazBle);
 begin
   FClients := TList.Create;
   FBle := ABle;
-  FAvailability := lbaUnknown;
   FScan := TLazBleLclScan.Create(FBle);
   FScan.OnStateChanged := @ScanStateChanged;
   FScan.OnResult := @ScanResult;
@@ -417,6 +415,8 @@ begin
 end;
 
 procedure TLazBleComponent.RefreshAvailability;
+var
+  Operation: IBleAvailabilityOperation;
 begin
   EnsureOperational;
   if Assigned(FAvailabilityOperation) and
@@ -427,10 +427,12 @@ begin
   FAvailabilityOperation := nil;
   FLastErrorCode := 0;
   FLastErrorMessage := '';
-  SetAvailability(lbaChecking);
-  if FShutdownStarted or Assigned(FAvailabilityOperation) then Exit;
   FAvailabilityOperation := FBle.CheckAvailabilityAsync(FAdapterId);
-  FAvailabilityOperation.OnCompleted := @AvailabilityCompleted;
+  Operation := FAvailabilityOperation;
+  if Operation.State = lbopPending then
+    NotifyAvailabilityChanged;
+  if FShutdownStarted or (FAvailabilityOperation <> Operation) then Exit;
+  Operation.OnCompleted := @AvailabilityCompleted;
 end;
 
 procedure TLazBleComponent.Shutdown;
@@ -451,7 +453,6 @@ begin
   if Assigned(FAvailabilityOperation) then
     FAvailabilityOperation.OnCompleted := nil;
   FAvailabilityOperation := nil;
-  FAvailability := lbaUnavailable;
   if Assigned(FScan) then
   begin
     FScan.OnStateChanged := nil;
@@ -538,12 +539,9 @@ begin
   Result := FLastErrorMessage;
 end;
 
-function TLazBleComponent.GetBackendInfo: TLazBleBackendInfo;
+function TLazBleComponent.GetAvailability: TBleAvailability;
 begin
-  if Assigned(FBle) then
-    Result := FBle.BackendInfo
-  else
-    Result := Default(TLazBleBackendInfo);
+  Result := GetDiagnosticInfo.Availability;
 end;
 
 function TLazBleComponent.GetDiagnosticInfo: TLazBleDiagnosticInfo;
@@ -663,15 +661,14 @@ begin
   Operation := FAvailabilityOperation;
   FAvailabilityOperation := nil;
   Operation.OnCompleted := nil;
-  if Operation.State = lbopSucceeded then
-    SetAvailability(Operation.Availability)
-  else if Operation.State = lbopCancelled then
-    SetAvailability(lbaUnknown)
-  else
+  if Operation.State = lbopFailed then
   begin
     FLastErrorCode := Operation.ErrorCode;
     FLastErrorMessage := Operation.ErrorMessage;
-    SetAvailability(lbaUnavailable);
+  end;
+  NotifyAvailabilityChanged;
+  if Operation.State = lbopFailed then
+  begin
     if FShutdownStarted or Assigned(FAvailabilityOperation) then Exit;
     ErrorHandler := FOnError;
     if Assigned(ErrorHandler) then
@@ -679,19 +676,17 @@ begin
   end;
 end;
 
-procedure TLazBleComponent.SetAvailability(
-  const AAvailability: TBleAvailability);
+procedure TLazBleComponent.NotifyAvailabilityChanged;
 var
   Handler: TBleAvailabilityEvent;
+  CurrentAvailability: TBleAvailability;
 begin
-  if FAvailability = AAvailability then
-    Exit;
-  FAvailability := AAvailability;
+  CurrentAvailability := GetAvailability;
   NotifyClientsChanged;
-  if FShutdownStarted or (FAvailability <> AAvailability) then Exit;
+  if FShutdownStarted or (GetAvailability <> CurrentAvailability) then Exit;
   Handler := FOnAvailabilityChanged;
   if Assigned(Handler) then
-    Handler(Self, FAvailability);
+    Handler(Self, CurrentAvailability);
 end;
 
 constructor TLazBleLclClient.Create(AOwner: TComponent);

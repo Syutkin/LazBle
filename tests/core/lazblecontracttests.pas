@@ -46,6 +46,7 @@ type
     procedure ReadCancelKeepsNativeFailureZero;
     procedure AvailabilityCancelDoesNotHideFailureZero;
     procedure AvailabilityCancelCanStillSucceed;
+    procedure ShutdownKeepsAvailabilityUnavailable;
     procedure ShutdownPreservesCleanupFailureZero;
     procedure ShutdownFailureDoesNotDependOnCodeOrText;
     procedure PendingUnsubscribeWaitsForCancelledNotify;
@@ -211,7 +212,7 @@ begin
   FFake.CompleteOperation(LastId,lbekOperationFailed,0,'native check failed');
   AssertEquals(Ord(lbopFailed),Ord(Op.State)); AssertEquals(0,Op.ErrorCode);
   AssertEquals(Ord(lbaUnavailable),Ord(FBle.DiagnosticInfo.Availability));
-  AssertEquals('native check failed',FBle.DiagnosticInfo.ErrorMessage);
+  AssertEquals('native check failed',FBle.DiagnosticInfo.AvailabilityErrorMessage);
 end;
 
 procedure TLazBleContractTest.AvailabilityCancelCanStillSucceed;
@@ -223,6 +224,68 @@ begin
   FFake.CompleteOperation(LastId,lbekOperationSucceeded);
   AssertEquals(Ord(lbopSucceeded),Ord(Op.State));
   AssertEquals(Ord(lbaAvailable),Ord(Op.Availability));
+end;
+
+procedure TLazBleContractTest.ShutdownKeepsAvailabilityUnavailable;
+var
+  Backend: ILazBleBackend;
+  Fake: TFakeLazBleBackend;
+  Ble: TLazBle;
+  AvailabilityOp, RejectedCheck: IBleAvailabilityOperation;
+  Shutdown: IBleOperation;
+  Event: TLazBleBackendEvent;
+  Outcome: TLazBleBackendEventKind;
+begin
+  for Outcome in [lbekOperationSucceeded, lbekOperationFailed,
+    lbekOperationCancelled] do
+  begin
+    Fake := TFakeLazBleBackend.Create;
+    Backend := Fake;
+    Ble := TLazBle.Create(Backend);
+    try
+      AvailabilityOp := Ble.CheckAvailabilityAsync('');
+      Shutdown := Ble.ShutdownAsync;
+      AssertEquals(Ord(lbaUnavailable), Ord(Ble.DiagnosticInfo.Availability));
+      Event := Default(TLazBleBackendEvent);
+      Event.Kind := lbekAvailabilityResult;
+      Event.OperationId := Fake.OperationIds[0];
+      Event.Available := True;
+      AssertTrue(Fake.EmitProgress(Event));
+      AssertEquals(Ord(lbaUnavailable), Ord(Ble.DiagnosticInfo.Availability));
+      AssertTrue(Fake.CompleteOperation(Event.OperationId, Outcome,
+        0, 'late check outcome'));
+      case Outcome of
+        lbekOperationSucceeded:
+          begin
+            AssertEquals(Ord(lbopSucceeded), Ord(AvailabilityOp.State));
+            AssertEquals(Ord(lbaAvailable), Ord(AvailabilityOp.Availability));
+          end;
+        lbekOperationFailed:
+          begin
+            AssertEquals(Ord(lbopFailed), Ord(AvailabilityOp.State));
+            AssertEquals('late check outcome', AvailabilityOp.ErrorMessage);
+          end;
+        lbekOperationCancelled:
+          AssertEquals(Ord(lbopCancelled), Ord(AvailabilityOp.State));
+      end;
+      AssertEquals(Ord(lbaUnavailable), Ord(Ble.DiagnosticInfo.Availability));
+      if Outcome = lbekOperationFailed then
+        AssertEquals('late check outcome', Ble.DiagnosticInfo.AvailabilityErrorMessage)
+      else
+        AssertEquals('', Ble.DiagnosticInfo.AvailabilityErrorMessage);
+      AssertTrue(Fake.CompleteShutdown);
+      AssertEquals(Ord(lbopSucceeded), Ord(Shutdown.State));
+      AssertEquals(Ord(lbaUnavailable), Ord(Ble.DiagnosticInfo.Availability));
+      RejectedCheck := Ble.CheckAvailabilityAsync('');
+      AssertEquals(Ord(lbopFailed), Ord(RejectedCheck.State));
+      AssertEquals(LazBleErrorInvalidState, RejectedCheck.ErrorCode);
+      AssertEquals(Ord(lbaUnavailable), Ord(Ble.DiagnosticInfo.Availability));
+      AssertEquals(1, Fake.CommandCount);
+    finally
+      Ble.Free;
+      Backend := nil;
+    end;
+  end;
 end;
 
 procedure TLazBleContractTest.ShutdownPreservesCleanupFailureZero;

@@ -107,7 +107,7 @@ type
     procedure CancelRequestDoesNotHideSuccessfulScan;
     procedure AvailabilityCheckReturnsTypedResult;
     procedure AvailabilityCheckDoesNotOverlapScan;
-    procedure DiagnosticInfoDoesNotStartNativeWork;
+    procedure InfoAndDiagnosticsDoNotStartNativeWork;
     procedure ConnectCompletesAfterServiceDiscovery;
     procedure ConnectPreservesBackendError;
     procedure DiscoveryPreservesBackendError;
@@ -489,7 +489,7 @@ begin
   BackendEvent.Kind := lbekAvailabilityResult;
   BackendEvent.OperationId := OperationId;
   BackendEvent.Available := True;
-  BackendEvent.BackendName := 'FakeBLE';
+  BackendEvent.BackendName := 'ReportedBLE';
   BackendEvent.BackendVersion := '2.3.4';
   BackendEvent.AdapterId := 'hci-selected';
   AssertTrue(FBackendObject.EmitProgress(BackendEvent));
@@ -498,27 +498,32 @@ begin
 
   AssertEquals(Ord(lbopSucceeded), Ord(Operation.State));
   AssertEquals(Ord(lbaAvailable), Ord(Operation.Availability));
-  AssertEquals('FakeBLE', FBle.BackendInfo.Name);
-  AssertEquals('2.3.4', FBle.BackendInfo.Version);
-  AssertEquals('hci-selected', FBle.BackendInfo.AdapterId);
   Diagnostic := FBle.DiagnosticInfo;
-  AssertEquals('FakeBLE', Diagnostic.BackendName);
+  AssertEquals('ReportedBLE', Diagnostic.BackendName);
   AssertEquals('2.3.4', Diagnostic.NativeVersion);
   AssertEquals('hci-selected', Diagnostic.AdapterId);
   AssertEquals(Ord(lbaAvailable), Ord(Diagnostic.Availability));
 
   Operation := FBle.CheckAvailabilityAsync('hci-test');
+  AssertEquals('ReportedBLE', Diagnostic.BackendName);
+  AssertEquals('2.3.4', Diagnostic.NativeVersion);
+  AssertEquals(Ord(lbaAvailable), Ord(Diagnostic.Availability));
   Diagnostic := FBle.DiagnosticInfo;
+  AssertEquals('FakeBLE', Diagnostic.BackendName);
   AssertEquals('', Diagnostic.NativeVersion);
+  AssertEquals('', Diagnostic.AdapterId);
+  AssertEquals('', Diagnostic.AvailabilityErrorMessage);
   AssertEquals(Ord(lbaChecking), Ord(Diagnostic.Availability));
   OperationId := FBackendObject.OperationIds[1];
   BackendEvent.OperationId := OperationId;
   BackendEvent.Available := False;
+  BackendEvent.BackendName := '';
   AssertTrue(FBackendObject.EmitProgress(BackendEvent));
   AssertTrue(FBackendObject.CompleteOperation(OperationId,
     lbekOperationSucceeded));
   AssertEquals(Ord(lbopSucceeded), Ord(Operation.State));
   AssertEquals(Ord(lbaUnavailable), Ord(Operation.Availability));
+  AssertEquals('FakeBLE', FBle.DiagnosticInfo.BackendName);
   AssertEquals(Ord(lbaUnavailable), Ord(FBle.DiagnosticInfo.Availability));
 end;
 
@@ -537,30 +542,27 @@ begin
   AssertTrue(FBackendObject.CompleteOperation(AvailabilityOperationId,
     lbekOperationFailed, 7, 'availability failed'));
   AssertEquals(Ord(lbopFailed), Ord(AvailabilityOperation.State));
-  AssertEquals('availability failed', FBle.DiagnosticInfo.ErrorMessage);
+  AssertEquals('availability failed', FBle.DiagnosticInfo.AvailabilityErrorMessage);
 
   ScanOperation := FBle.ScanAsync('', 1000);
   AssertEquals(Ord(lbopPending), Ord(ScanOperation.State));
   AssertEquals(2, FBackendObject.CommandCount);
 end;
 
-procedure TLazBleClientTest.DiagnosticInfoDoesNotStartNativeWork;
+procedure TLazBleClientTest.InfoAndDiagnosticsDoNotStartNativeWork;
 var
-  About: TLazBleAbout;
   Client: TLazBle;
   Diagnostic: TLazBleDiagnosticInfo;
 begin
-  About := LazBleGetAbout;
-  AssertEquals('LazBle', About.Name);
-  AssertEquals('2.0.0', About.Version);
+  AssertEquals('LazBle', TLazBle.Info.Name);
+  AssertEquals('2.0.0', TLazBle.Info.Version);
+  AssertTrue(TLazBle.Info.About <> '');
 
   Diagnostic := FBle.DiagnosticInfo;
-  AssertEquals(About.Version, Diagnostic.LazBleVersion);
-  AssertEquals('1.3.0', Diagnostic.BindingVersion);
-  AssertEquals('SimpleDelphiBLE', Diagnostic.BindingName);
   AssertEquals('FakeBLE', Diagnostic.BackendName);
   AssertEquals('', Diagnostic.NativeVersion);
   AssertEquals(Ord(lbaUnknown), Ord(Diagnostic.Availability));
+  AssertEquals(0, FBackendObject.CommandCount);
 
   Client := TLazBle.Create;
   try

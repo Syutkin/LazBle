@@ -43,36 +43,19 @@ type
 
   { Static information about the compiled LazBle package. None of these
     fields describes the selected backend or a loaded native library. }
-  TLazBleAbout = record
+  TLazBleInfo = record
     Name: string;
     { Version of the compiled LazBle source, independent of native BLE. }
     Version: string;
     { Human-readable package purpose; not a runtime capability report. }
-    Description: string;
+    About: string;
   end;
 
-  { Information returned by an availability check. Version is the version
-    reported by the loaded native backend, not the LazBle package version.
-    Empty fields mean the value could not yet be obtained. }
-  TLazBleBackendInfo = record
-    { Name reported by the backend in its availability result. }
-    Name: string;
-    { Native version reported by the backend, if it could obtain one. }
-    Version: string;
-    { Adapter selected by the backend; empty if selection did not complete. }
-    AdapterId: string;
-  end;
-
-  { A read-only snapshot. Static versions are available before any BLE work;
-    NativeVersion and AdapterId are filled by an availability check. Empty
-    NativeVersion means no native version was obtained. Reading this record
-    never loads native libraries or starts an operation. }
+  { A read-only snapshot. NativeVersion and AdapterId are filled by an
+    availability check. Empty NativeVersion means no native version was
+    obtained. Reading this record never loads native libraries or starts
+    an operation. }
   TLazBleDiagnosticInfo = record
-    { Version of the compiled LazBle package. }
-    LazBleVersion: string;
-    { Version of the compiled SimpleDelphiBLE distribution. }
-    BindingName: string;
-    BindingVersion: string;
     { Name supplied by ILazBleBackend, or 'unknown' if it returns empty. }
     BackendName: string;
     { Version reported by the loaded native backend after an availability
@@ -80,19 +63,14 @@ type
     NativeVersion: string;
     { Selected adapter identifier, empty until reported by the backend. }
     AdapterId: string;
-    { Last availability state; lbaUnknown before the first check. }
+    { lbaUnknown before a check, lbaChecking until completion, and
+      lbaUnavailable once shutdown starts. }
     Availability: TBleAvailability;
     { Error from the most recent availability check, if it failed. }
-    ErrorMessage: string;
+    AvailabilityErrorMessage: string;
   end;
-  TLazBleAvailabilityResultEvent = procedure(Sender: TObject;
-    const AAvailability: TBleAvailability;
-    const ABackendInfo: TLazBleBackendInfo) of object;
 
 const
-  { Source version of the LazBle package, also available without a facade.
-    Keep it aligned with the package metadata when making a release. }
-  LazBleVersion = '2.0.0';
   InvalidBleOperationId: TBleOperationId = 0;
   InvalidBleSubscriptionId: TBleSubscriptionId = 0;
   // Negative codes are reserved for lazble; SimpleBLE error ordinals are nonnegative.
@@ -199,21 +177,10 @@ type
 
 function LazBleBackendEventIsTerminal(
   const AEvent: TLazBleBackendEvent): Boolean;
-{ Returns static package information without constructing a backend or
-  loading a native library. Example: Info := LazBleGetAbout;
-  Info.Version is the LazBle version, not the SimpleCBLE version. }
-function LazBleGetAbout: TLazBleAbout;
 { Main-thread contract shared by core, profiles, and custom backends. }
 procedure LazBleRequireMainThread;
 
 implementation
-
-function LazBleGetAbout: TLazBleAbout;
-begin
-  Result.Name := 'LazBle';
-  Result.Version := LazBleVersion;
-  Result.Description := 'Asynchronous BLE and GATT client library for Free Pascal';
-end;
 
 class function TLazBleReconnectOptions.Create(const AInitialDelayMs,
   AMaximumDelayMs, AMaximumAttempts: Cardinal): TLazBleReconnectOptions;

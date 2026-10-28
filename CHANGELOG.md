@@ -2,78 +2,53 @@
 
 ## [2.0.0] - 2026-10-28
 
-LazBle **2.0.0** uses SimpleDelphiBLE 1.3.0 and introduces breaking API and
-dependency changes. See the [release notes](docs/releases/2.0.0.md) for upgrade steps.
+LazBle **2.0.0** moves from SimpleBlePascal to SimpleDelphiBLE 1.3.0.
+See the [release notes](docs/releases/2.0.0.md) for upgrading from 1.0.0.
 
 ### Added
 
-- `LazBleGetAbout` and `DiagnosticInfo` for package, binding, backend, native
-  version, adapter, and availability information. Reading diagnostics does not
-  start BLE operations. Custom backends provide identity through
-  `ILazBleBackend.GetBackendName`.
-- Named negative LazBle error codes, distinct from native error ordinals.
-- `TLazBleBackendEvent.ShutdownFailed` so custom backends can report cleanup
-  failure independently of the error code and message.
-- `TLazBleComponent.ShutdownAsync` to observe asynchronous cleanup, and
-  `TLazBleLclClient.OnUnconfigureClient` to release borrowed client/profile
-  references before detachment or removal.
+- `TLazBle.Info` for static package information and `DiagnosticInfo` for
+  backend identity, native version, adapter, availability, and check errors.
+- `TLazBleComponent.ShutdownAsync` and `TLazBleLclClient.OnUnconfigureClient`
+  for asynchronous cleanup and releasing borrowed client/profile references.
+- Additional named LazBle error codes, `ILazBleBackend.GetBackendName`, and
+  `TLazBleBackendEvent.ShutdownFailed` for custom backends.
 
 ### Changed
 
-- Use the public SimpleDelphiBLE **1.3.0** API and its matching native libraries.
-  Upstream owns adapters and peripherals; its main-thread events drive the
-  backend, while one command worker performs blocking BLE calls.
-- Require main-thread access to the API, state, handler registration, and object
-  lifetime, including for custom backends. Reconnect actions and LCL callbacks
-  run on that thread; LCL no longer queues a second delivery of each event.
+- Compile official SimpleDelphiBLE sources from the local `simpledelphible/`
+  directory. Native libraries are required at link time and process startup.
+  Package paths cover Linux x86_64, Windows x86_64, and macOS Intel/Apple Silicon.
+- Run all API access and callbacks on the main thread, including custom
+  backends and reconnection. Console applications must service `CheckSynchronize`.
 - Use upstream GATT records, boolean characteristic capabilities, and UUID
-  strings for descriptors. Managed GATT/data snapshots are read-only by
-  contract, without automatic deep copies; submitted write buffers are copied.
-- Treat cancellation as a request. Queued work can be skipped, but started
-  native calls retain their actual success/failure and effects. Cancelling
-  connection or profile attachment does not trigger a rollback Disconnect.
-- Deliver notifications only after subscription readiness. Unsubscribe closes
-  local delivery immediately and waits for pending Notify cleanup; native
-  failure leaves the token inactive and disconnects the affected session.
-  Explicit Disconnect and Unsubscribe cleanup continue after cancellation.
-- Require completed `ShutdownAsync` before freeing active facade/LCL owners.
-  Shutdown drains accepted work and stops the worker before completion; cleanup
-  failure is returned to the caller. A new default backend can be used after
-  the previous owner has completed cleanup and been released.
-- Make `TLazBleSync` pump `CheckSynchronize`. Its deadline limits waiting and
-  does not cancel the operation or replace its eventual result.
-- Keep console example callbacks running while waiting for input. The LCL demo
-  defers form closure until asynchronous shutdown completes.
-- Require native libraries at link time and process startup, including for
-  executables using a fake/custom backend. Compile the official SimpleDelphiBLE
-  sources directly from a locally downloaded distribution in `simpledelphible/`,
-  which is entirely ignored by Git. Configure target-specific native link paths
-  without an auxiliary binding package, including macOS Intel and Apple Silicon.
-- Align core, LCL, and design package versions with LazBle 2.0.0.
+  strings for descriptors. Managed snapshots are read-only; write buffers
+  are copied on submission.
+- Preserve the actual outcome and effects of started operations after a
+  cancellation request. Synchronous wait deadlines only limit waiting.
+- Deliver notifications after subscription readiness. Failed Unsubscribe
+  leaves the token inactive and disconnects the affected session; cleanup
+  continues after cancellation.
+- Complete `ShutdownAsync` before releasing active core or LCL owners.
+  Shutdown drains work and reports cleanup failures.
 
 ### Removed
 
-- Dependency on SimpleBlePascal, the internal C-driver abstraction, custom
-  native loader and `SIMPLECBLE_LIBRARY_DIR` lookup, and separate event worker.
+- SimpleBlePascal dependency, custom native loader, and
+  `SIMPLECBLE_LIBRARY_DIR` lookup.
 - `IBleOperation.Timeout`, `lbopTimedOut`, and `lblssTimedOut`. Scan duration
   remains supported and normally completes the scan successfully.
-- Legacy loader diagnostics: `MinimumNativeVersion`, `LoadWarning`,
-  `WarningMessage`, and `BackendWarning`. Use `BindingName`/`BindingVersion`
-  and the native version reported by an availability check.
-- `LazBleLclDispatch` and its cloned event messages.
-- Obsolete fppkg metadata (`fpmake.pp` and `manifest.xml`).
+- `BackendInfo` and `TLazBleBackendInfo`; use `DiagnosticInfo`.
+- `LazBleCopyGattServices`, the characteristic property enum, and
+  `LazBleLclDispatch`.
+- fppkg metadata (`fpmake.pp` and `manifest.xml`).
 
 ### Fixed
 
-- Preserve backend/native error codes and messages through session operations
-  and shutdown, including failures with code 0 and empty text.
-- Cancel pending session operations safely when cancellation removes entries
-  from the operation list.
-- Keep accepted GATT command results after connection loss/reconnect without
-  applying an old unsubscribe failure to a new session.
-- Handle reentrant async actions and client/handler removal during callbacks.
-  A Disconnect or shutdown from the Connecting handler prevents a Connect
-  that has not yet been submitted.
+- Preserve native errors, including failures with code 0 or empty text, and
+  accepted GATT results across connection loss and shutdown.
+- Handle cancellation, new asynchronous actions, and client removal safely
+  from callbacks.
 
 ## [1.0.0] - 2026-08-12
 
