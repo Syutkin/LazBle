@@ -294,7 +294,7 @@ begin
   FErrorCount := 0;
   FErrorCode := 0;
   FErrorMessage := '';
-  FLastCallbackThreadId := 0;
+  FLastCallbackThreadId := Default(TThreadID);
   SetLength(FAvailabilityChanges, 0);
 end;
 

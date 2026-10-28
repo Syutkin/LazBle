@@ -148,7 +148,7 @@ begin
   SetLength(FStateChanges, 0);
   FCompletionCount := 0;
   FCompletedState := lblssIdle;
-  FLastCallbackThreadId := 0;
+  FLastCallbackThreadId := Default(TThreadID);
 end;
 
 procedure TLazBleLclScanTest.TearDown;
