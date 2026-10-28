@@ -2,6 +2,9 @@
 
 ## [2.0.0] - 2026-10-28
 
+Migration to the official SimpleDelphiBLE 1.3.0 bindings, main-thread API and
+callbacks, and observable LCL shutdown completion.
+
 See the [release notes](docs/releases/2.0.0.md) for upgrading from 1.0.0.
 
 ### Added
