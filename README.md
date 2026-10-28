@@ -9,11 +9,15 @@ not depend on it.
 
 Current source version: **1.2.0**.
 
-LazBle requires the
-[SimpleBlePascal](https://github.com/Syutkin/Pascal-Bindings-For-SimpleBLE-Library)
-1.2.0 bindings for the SimpleCBLE 1.2.0 ABI. The Pascal package is a compile-time
-dependency; the native SimpleCBLE library is loaded dynamically only when a
-BLE operation starts.
+The default backend now uses the public API of
+[SimpleDelphiBLE 1.3.0](https://github.com/simpleble/simpledelphible/releases/tag/v1.3.0).
+The matching native libraries are required at link time and before program
+startup. The former SimpleBlePascal driver and lazy loader have been removed.
+
+Migration is in progress: stage 2 (native backend) is implemented. Core contract
+changes, reconnect timers, the blocking console facade, and LCL/Entime lifecycle
+changes remain for stages 3–4. In particular, `TLazBleSync` still uses its old
+waiter and must not be used with the new default backend until stage 4.
 
 ## Architecture
 
@@ -83,7 +87,8 @@ client or session is released. Do not call `Free` on operation or subscription
 interfaces.
 
 Bluetooth availability is checked explicitly and asynchronously; creating a
-facade or loading an LCL component does not load the native backend:
+facade or loading an LCL component does not enumerate adapters or start BLE
+work. The native shared libraries are already linked at process startup:
 
 ```pascal
 AvailabilityOperation := Ble.CheckAvailabilityAsync(AdapterId);
@@ -91,7 +96,8 @@ AvailabilityOperation := Ble.CheckAvailabilityAsync(AdapterId);
 
 On success, `IBleAvailabilityOperation.Availability` is either
 `lbaAvailable` or `lbaUnavailable`. A failed operation carries a backend or
-native-loader error instead of treating it as an ordinary unavailable result.
+native error instead of treating it as an ordinary unavailable result. A missing
+shared library prevents startup and is not an asynchronous availability result.
 
 `IBleScanOperation.OnResult` reports every new or updated discovery while a
 scan is running. Its `Results` property remains a deduplicated snapshot in
@@ -181,22 +187,40 @@ and restarts its IDE executable once because design-time packages are linked
 into the IDE. This does not rebuild FPC or the complete Lazarus/LCL source
 tree. Merely building the package does not modify or rebuild the IDE.
 
-Console applications and tests can use the blocking `TLazBleSync` facade from
-`LazBleSync`. GUI applications should use the asynchronous API.
+The blocking `TLazBleSync` facade in `LazBleSync` is awaiting its stage-4
+main-loop update; use asynchronous operations with the default backend for now.
+GUI applications should use the asynchronous API.
 
 ## Threads and callbacks
 
-Backend events and asynchronous completion callbacks run on the thread that
-delivers the backend event; the SimpleBLE backend uses its worker thread.
-Scan result and reconnect callbacks follow the same rule; reconnect events can
-run on the timer thread. LazBle does not marshal callbacks to the LCL main
-thread. Handlers must be short and thread-safe, and GUI applications must
-marshal them before accessing LCL controls.
+The SimpleDelphiBLE backend API (including construction, sink registration,
+submission, cancellation and shutdown) runs on the main thread. One command
+worker performs blocking BLE operations. SimpleDelphiBLE delivers native events
+through `edMainThread`; command setup and completion use RTL `Synchronize`.
+Console asynchronous applications must pump `CheckSynchronize`; LCL does this
+through its main loop. Never wait for another BLE operation or destroy the
+owner inside a callback; defer destruction with `TThread.ForceQueue`.
 
-Public readonly async state and result properties are synchronized. Callback
-properties can safely be installed or cleared concurrently with state changes;
-a completion handler installed after an operation finishes is called once
-immediately on the installing thread.
+Only one LazBle default backend may own the process-wide native objects at a
+time. Await `BeginShutdown` / `ShutdownAsync` before creating the next active
+backend. Shutdown detaches handlers, drains commands, unsubscribes, disconnects,
+and joins the worker before completion. The destructor has a blocking fallback
+for legacy/idle owners; explicit asynchronous shutdown is required for GUI use.
+Do not independently replace the same upstream handlers or change the global
+`EventDelivery` while LazBle owns them.
+
+Queued cancellation skips the native call. Scan cancellation wakes its wait and
+stops scanning. A Connect/GATT call that has begun returns its actual outcome;
+there is no rollback of connection or write effects. Notifications become active
+only after subscription completion; early values are dropped. Duplicate active
+subscriptions to a characteristic are rejected. Unsubscribe retires local value
+delivery even on a native error. Queued upstream events carry no session token,
+so absolute attribution across reconnects is not guaranteed.
+
+Other core/LCL threading contracts and reconnect timer delivery are still being
+migrated in stages 3–4. Leave `AutoReconnect` disabled with the default backend
+until its timer has been moved to the main thread in stage 3. Do not assume the whole facade already enforces the new
+main-thread-only API.
 
 ## Custom profiles
 
@@ -254,47 +278,39 @@ Application-facing units are `LazBleTypes`, `LazBleBackend`,
 `LazBleGattSession`, `LazBleGattProfile`, `LazBleByteChannel`, `LazBleClient`,
 `LazBleFacade`, `LazBleSync`, `LazBleNus`, `LazBleBattery`, and
 `LazBleSimpleBleBackend`. `LazBleCentralManager`, `LazBleClientInternal`,
-`LazBleReconnect`, and `LazBleSimpleBleDriverIntf` are package implementation
-units and are not a compatibility surface.
+`LazBleReconnect` are package implementation units and are not a compatibility surface.
 
 ## Build and test
 
-The Lazarus package requires `SimpleBlePascal` 1.2.0 or newer by package name.
-Lazarus does not discover it merely because its checkout is in a sibling
-directory. Register the bindings package in the active Lazarus configuration
-before building LazBle; register the LazBle packages as well before building a
-host project:
+The Lazarus package requires `SimpleDelphiBLEPackage` 1.3.0, the distribution's
+thin Lazarus wrapper in this Entime workspace. Prepare the verified release with
+`python3 scripts/setup-simpledelphible.py --archive /path/to/simpledelphible-1.3.0.zip`
+from the Entime root. Register package links in your chosen Lazarus configuration:
 
 ```sh
-lazbuild --add-package-link=/path/to/simpleblepascal.lpk
-lazbuild --add-package-link=/path/to/lazble.lpk
-lazbuild --add-package-link=/path/to/lazblelcl.lpk
+lazbuild --ws=qt6 --add-package-link /path/to/simpledelphiblepackage.lpk
+lazbuild --ws=qt6 --add-package-link /path/to/lazble.lpk
+lazbuild --ws=qt6 --add-package-link /path/to/lazblelcl.lpk
+lazbuild --ws=qt6 /path/to/lazble.lpk
 ```
 
-The FPC package manager uses a separate repository. Install
-`simpleblepascal` from its checkout into the active FPC package repository
-before building LazBle with `fppkg`:
+A standalone FPC build can instead use `-Fu` and `-Fi` for the official source
+and `-Fl` for the matching native libraries. Deploy the native pair according to
+its platform loader requirements. The old `fpmake.pp` / `manifest.xml` packaging
+has been removed: upstream does not supply a compatible fppkg package, and LazBle
+does not maintain a second binding/package wrapper for it.
+
+Run the reproducible stage-2 checks from the Entime root:
 
 ```sh
-cd /path/to/Pascal-Bindings-For-SimpleBLE-Library
-fppkg install
-cd /path/to/LazBle
-fppkg build
+bash scripts/run-simpledelphible-stage2.sh /path/to/simpleble-v1.3.0
 ```
 
-Neither sequence requires the native SimpleCBLE library. The remaining build
-and test commands use the package registrations above:
-
-```sh
-lazbuild --ws=qt6 lazble.lpk
-lazbuild --ws=qt6 tests/lazbletests.lpi
-tests/bin/lazbletests --all --format=plain
-lazbuild --ws=qt6 lazblelcl.lpk
-lazbuild --ws=qt6 lazblelcldesign.lpk
-lazbuild --ws=qt6 tests/lcl/lazblelcltests.lpi
-tests/bin/lazblelcltests --all --format=plain
-lazbuild --ws=qt6 examples/lcl/lazblelcldemo.lpi
-```
+The script builds upstream PLAIN, runs core/profile regressions and native backend
+integration against PLAIN (without Bluetooth hardware), and builds the Lazarus
+runtime packages. The native tests intentionally reject a production backend.
+The existing LCL suite can be built with `lazbuild --ws=qt6`; its executable now
+also needs the matching production native pair next to it on Linux.
 
 ## License
 

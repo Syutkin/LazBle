@@ -5,16 +5,24 @@
 ### Added
 
 - Add `LazBleGetAbout` and `DiagnosticInfo` for library versions and BLE
-  diagnostics. Reading the snapshot does not load the native library.
+  diagnostics. Reading the snapshot does not start BLE operations.
 
 ### Changed
 
 - Backends now provide their name through `ILazBleBackend.GetBackendName`.
-- Require SimpleBlePascal 1.2.0 for the SimpleCBLE 1.2.0 ABI.
-- Read native error codes and messages from SimpleCBLE 1.2.0 `out_error`
-  objects across adapter, scan, connection, and GATT operations.
-- Copy native GATT services and read buffers into Pascal-owned data, release
-  native allocations, and drain callbacks before shutdown frees their userdata.
+- Replace the internal C driver with the public SimpleDelphiBLE 1.3.0 API.
+  Adapters and peripherals are borrowed from upstream; native events use
+  `edMainThread`, blocking commands run on one worker, and completion uses RTL
+  synchronization. Remove the old loader, driver interface, and event worker.
+- Explicit shutdown detaches handlers, unsubscribes and disconnects on the
+  worker, then joins it before completion. Allow a new backend after shutdown.
+- Preserve actual outcomes of started native Connect/GATT calls instead of
+  compensating successful effects after cancellation.
+- Require matching native libraries before startup, including for fake-backend
+  test executables. Remove obsolete fppkg metadata; use the Lazarus wrapper or
+  direct FPC source/library paths.
+- Replace injected C-driver tests with upstream PLAIN integration. Core, sync,
+  reconnect and LCL contracts remain under migration in stages 3–4.
 
 ### Fixed
 

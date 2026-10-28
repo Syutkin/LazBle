@@ -73,9 +73,9 @@ type
   TLazBleDiagnosticInfo = record
     { Version of the compiled LazBle package. }
     LazBleVersion: string;
-    { Version of the compiled SimpleBlePascal package. }
+    { Version of the compiled SimpleDelphiBLE distribution. }
     BindingVersion: string;
-    { Minimum native SimpleCBLE version accepted by its loader. }
+    { Legacy field; empty with SimpleDelphiBLE's link-time dependency. }
     MinimumNativeVersion: string;
     { Name supplied by ILazBleBackend, or 'unknown' if it returns empty. }
     BackendName: string;

@@ -555,8 +555,8 @@ begin
 
   Diagnostic := FBle.DiagnosticInfo;
   AssertEquals(About.Version, Diagnostic.LazBleVersion);
-  AssertEquals('1.2.0', Diagnostic.BindingVersion);
-  AssertEquals('1.2.0', Diagnostic.MinimumNativeVersion);
+  AssertEquals('1.3.0', Diagnostic.BindingVersion);
+  AssertEquals('', Diagnostic.MinimumNativeVersion);
   AssertEquals('FakeBLE', Diagnostic.BackendName);
   AssertEquals('', Diagnostic.NativeVersion);
   AssertEquals(Ord(lbaUnknown), Ord(Diagnostic.Availability));

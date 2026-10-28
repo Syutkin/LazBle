@@ -10,7 +10,6 @@ uses
   LazBleBackendTests,
   LazBleBackendConformanceTests,
   LazBleSimpleBleBackendTests,
-  LazBleNativeDriverTests,
   LazBleCentralManagerTests,
   LazBleOperationTests,
   LazBleClientTests,

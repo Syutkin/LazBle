@@ -14,7 +14,7 @@
       <UseAppBundle Value="False"/>
       <ResourceType Value="res"/>
     </General>
-    <Units Count="17">
+    <Units Count="16">
       <Unit0>
         <Filename Value="lazbletests.lpr"/>
         <IsPartOfProject Value="True"/>
@@ -94,24 +94,18 @@
         <IsPartOfProject Value="True"/>
         <UnitName Value="TestLazBleAccess"/>
       </Unit15>
-      <Unit16>
-        <Filename Value="backend\lazblenativedrivertests.pas"/>
-        <IsPartOfProject Value="True"/>
-        <UnitName Value="LazBleNativeDriverTests"/>
-      </Unit16>
     </Units>
   </ProjectOptions>
   <CompilerOptions>
     <Version Value="11"/>
     <PathDelim Value="\"/>
-    <Other>
-      <CustomOptions Value="-dLAZBLE_NATIVE_TESTS"/>
-    </Other>
     <Target>
       <Filename Value="bin\lazbletests"/>
     </Target>
     <SearchPaths>
-      <OtherUnitFiles Value="..\src;..\src\backends;..\src\core;..\src\profiles;..\..\simpleble_pascal\SimpleBleUnit;backend;battery;core;nus;support"/>
+      <IncludeFiles Value="..\..\simpledelphible\source"/>
+      <Libraries Value="..\..\simpledelphible_lazarus\native\$(TargetCPU)-$(TargetOS)"/>
+      <OtherUnitFiles Value="..\src;..\src\backends;..\src\core;..\src\profiles;..\..\simpledelphible\source;backend;battery;core;nus;support"/>
       <UnitOutputDirectory Value="lib\$(TargetOS)-$(TargetCPU)"/>
     </SearchPaths>
     <Linking>

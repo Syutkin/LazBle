@@ -99,8 +99,7 @@ type
 implementation
 
 uses
-  LazBleSimpleBleBackend,
-  SimpleBle;
+  LazBleSimpleBleBackend;
 
 type
   TBleClientAccess = class(TBleClient)
@@ -336,8 +335,8 @@ function TLazBle.GetDiagnosticInfo: TLazBleDiagnosticInfo;
 begin
   Result := Default(TLazBleDiagnosticInfo);
   Result.LazBleVersion := LazBleVersion;
-  Result.BindingVersion := SimpleBlePascalVersion;
-  Result.MinimumNativeVersion := SimpleBleMinimumNativeVersion;
+  Result.BindingVersion := '1.3.0';
+  Result.MinimumNativeVersion := '';
   EnterCriticalSection(FBackendInfoLock);
   try
     Result.BackendName := FBackendName;

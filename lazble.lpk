@@ -82,11 +82,6 @@
         <UnitName Value="LazBleBattery"/>
       </Item>
       <Item>
-        <Filename Value="src\backends\lazblesimplebledriverintf.pas"/>
-        <UnitName Value="LazBleSimpleBleDriverIntf"/>
-        <AddToUsesPkgSection Value="False"/>
-      </Item>
-      <Item>
         <Filename Value="src\backends\lazblesimpleblebackend.pas"/>
         <UnitName Value="LazBleSimpleBleBackend"/>
       </Item>
@@ -96,8 +91,8 @@
         <PackageName Value="FCL"/>
       </Item>
       <Item>
-        <PackageName Value="SimpleBlePascal"/>
-        <MinVersion Major="1" Minor="2" Release="0" Valid="True"/>
+        <PackageName Value="SimpleDelphiBLEPackage"/>
+        <MinVersion Major="1" Minor="3" Release="0" Valid="True"/>
       </Item>
     </RequiredPkgs>
     <UsageOptions>
