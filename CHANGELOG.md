@@ -1,8 +1,9 @@
 # Changelog
 
-## [Unreleased]
+## [2.0.0] - 2026-10-28
 
-Changes for LazBle **2.0.0**, including breaking API and dependency changes.
+LazBle **2.0.0** uses SimpleDelphiBLE 1.3.0 and introduces breaking API and
+dependency changes. See the [release notes](docs/releases/2.0.0.md) for upgrade steps.
 
 ### Added
 
@@ -48,7 +49,7 @@ Changes for LazBle **2.0.0**, including breaking API and dependency changes.
   sources directly from a locally downloaded distribution in `simpledelphible/`,
   which is entirely ignored by Git. Configure target-specific native link paths
   without an auxiliary binding package, including macOS Intel and Apple Silicon.
-- Align core, LCL, and design package versions with unreleased LazBle 2.0.0.
+- Align core, LCL, and design package versions with LazBle 2.0.0.
 
 ### Removed
 
@@ -88,4 +89,5 @@ Changes for LazBle **2.0.0**, including breaking API and dependency changes.
 
 - Target SimpleBlePascal and SimpleCBLE 1.1.0.
 
+[2.0.0]: https://github.com/Syutkin/LazBle/releases/tag/v2.0.0
 [1.0.0]: https://github.com/Syutkin/LazBle/releases/tag/v1.0.0
