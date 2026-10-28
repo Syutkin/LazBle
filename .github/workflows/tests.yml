@@ -1,0 +1,551 @@
+name: Tests
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  LAZARUS_VERSION: '4.8'
+
+jobs:
+  binding:
+    name: Resolve latest SimpleDelphiBLE release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+      url: ${{ steps.release.outputs.url }}
+      revision: ${{ steps.release.outputs.revision }}
+    steps:
+      - name: Resolve release and matching PLAIN sources
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api repos/simpleble/simpledelphible/releases/latest --jq '
+            . as $release |
+            (($release.body | capture("simpleble/simpleble@(?<sha>[0-9a-f]{40})").sha)
+              // error("Release description does not identify the SimpleBLE source commit")) as $sha |
+            (first($release.assets[] |
+              select(.name == ("simpledelphible-" + ($release.tag_name | ltrimstr("v")) + ".zip")))
+              // error("Release distribution archive is missing")) |
+            "tag=\($release.tag_name)\nurl=\(.browser_download_url)\nrevision=\($sha)"
+          ' | tee -a "$GITHUB_OUTPUT"
+
+  tests:
+    needs: binding
+    name: ${{ matrix.os }} (${{ matrix.arch }}, ${{ matrix.widgetset }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            arch: x64
+            fpc: '3.2.2'
+            platform: linux-x64
+            toolchain: linux-x64
+            widgetset: qt6
+            cache-suffix: ''
+          - os: windows-2025
+            arch: x64
+            fpc: '3.2.2'
+            platform: win64
+            toolchain: windows-x64
+            widgetset: win32
+            cache-suffix: ''
+          - os: macos-15
+            arch: arm64
+            fpc: '3.2.4rc1'
+            platform: macos-arm64
+            toolchain: macos-arm64
+            widgetset: cocoa
+            cache-suffix: '-xcode-16.4'
+    defaults:
+      run:
+        shell: bash
+    env:
+      WIDGETSET: ${{ matrix.widgetset }}
+      NATIVE_PLATFORM: ${{ matrix.platform }}
+
+    steps:
+      - name: Check out LazBle
+        uses: actions/checkout@v7
+
+      - name: Restore Lazarus and FPC cache
+        id: toolchain-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ runner.tool_cache }}/lazble/lazarus-4.8-${{ matrix.toolchain }}.tar
+          key: lazble-${{ matrix.os }}-${{ matrix.arch }}-lazarus-${{ env.LAZARUS_VERSION }}-fpc-${{ matrix.fpc }}${{ matrix.cache-suffix }}-v1
+
+      - name: Restore cached Lazarus toolchain (Linux)
+        if: runner.os == 'Linux' && steps.toolchain-cache.outputs.cache-hit == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TOOL_CACHE/lazble/lazarus-4.8-linux-x64.tar"
+          sudo tar --extract --file "$archive" --directory /
+
+      - name: Install Linux GUI dependencies (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes xvfb
+
+      - name: Install Lazarus 4.8 (Linux)
+        if: runner.os == 'Linux' && steps.toolchain-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          base_url='https://download.lazarus-ide.org/Lazarus%20Linux%20amd64%20DEB/Lazarus%204.8'
+          fpc_package="$RUNNER_TEMP/fpc-laz_3.2.2-210709_amd64.deb"
+          fpc_sources="$RUNNER_TEMP/fpc-src_3.2.2-210709_amd64.deb"
+          lazarus_package="$RUNNER_TEMP/lazarus-project_4.8.0-0_amd64.deb"
+
+          curl --fail --location --retry 3 \
+            "$base_url/fpc-laz_3.2.2-210709_amd64.deb" \
+            --output "$fpc_package"
+          curl --fail --location --retry 3 \
+            "$base_url/fpc-src_3.2.2-210709_amd64.deb" \
+            --output "$fpc_sources"
+          curl --fail --location --retry 3 \
+            "$base_url/lazarus-project_4.8.0-0_amd64.deb" \
+            --output "$lazarus_package"
+
+          echo "92000f2b831184e153aab0c910f8ae9240450e5c6d76dc189cf53116ee501d83  $fpc_package" | sha256sum --check
+          echo "8c9e145d8056754a9ca39ce3e52e982b8e4816124984c5f542f2a874e721ad53  $fpc_sources" | sha256sum --check
+          echo "401742cefb01ad99a628188034bf728fb5360d641ed2be5f91fb0ee183a301cd  $lazarus_package" | sha256sum --check
+
+          sudo apt-get install --yes \
+            "$fpc_package" \
+            "$fpc_sources" \
+            "$lazarus_package"
+
+      - name: Install Qt6 Pascal bindings (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Ubuntu 24.04 has no Qt6Pas package; pin matching prebuilt bindings.
+          base_url='https://github.com/davidbannon/libqt6pas/releases/download/v6.2.10'
+          qt6pas_runtime="$RUNNER_TEMP/libqt6pas6_6.2.10-1_amd64.deb"
+          qt6pas_devel="$RUNNER_TEMP/libqt6pas6-dev_6.2.10-1_amd64.deb"
+
+          curl --fail --location --retry 3 \
+            "$base_url/libqt6pas6_6.2.10-1_amd64.deb" \
+            --output "$qt6pas_runtime"
+          curl --fail --location --retry 3 \
+            "$base_url/libqt6pas6-dev_6.2.10-1_amd64.deb" \
+            --output "$qt6pas_devel"
+
+          echo "d56329b52898c2bfe4522d6a59ebf305e44ee8a2935bbe7bcd43d825e88293a3  $qt6pas_runtime" | sha256sum --check
+          echo "dd27020c463e39f9ffa89b245db05f729ffdd7323a788acc4a1b10572433ebec  $qt6pas_devel" | sha256sum --check
+
+          sudo apt-get install --yes "$qt6pas_runtime" "$qt6pas_devel"
+
+      - name: Snapshot Lazarus toolchain (Linux)
+        if: runner.os == 'Linux' && steps.toolchain-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TOOL_CACHE/lazble/lazarus-4.8-linux-x64.tar"
+          lazarus_dir="$(dirname "$(readlink -f "$(command -v lazbuild)")")"
+          fpc_dir="$(dirname "$(readlink -f "$(command -v ppcx64)")")"
+
+          case "$lazarus_dir" in
+            /usr/lib/lazarus*|/usr/share/lazarus*|/opt/lazarus*) ;;
+            *) echo "Unexpected Lazarus directory: $lazarus_dir" >&2; exit 1 ;;
+          esac
+          case "$fpc_dir" in
+            /usr/lib/fpc/*|/usr/lib/*/fpc/*|/usr/share/fpc/*|/opt/fpc/*) ;;
+            *) echo "Unexpected FPC directory: $fpc_dir" >&2; exit 1 ;;
+          esac
+
+          mkdir -p "$(dirname "$archive")"
+          sudo tar --create --file "$archive" --directory / \
+            etc/fpc.cfg \
+            usr/bin/fpc \
+            usr/bin/fpcmake \
+            usr/bin/fpcmkcfg \
+            usr/bin/fpcres \
+            usr/bin/lazbuild \
+            usr/bin/ppcx64 \
+            "${fpc_dir#/}" \
+            "${lazarus_dir#/}"
+          sudo chown "$(id -u):$(id -g)" "$archive"
+
+      - name: Configure toolchain paths (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          lazbuild_path="$(readlink -f "$(command -v lazbuild)")"
+          lazarus_dir="$(dirname "$lazbuild_path")"
+          test -d "$lazarus_dir/lcl"
+          echo "LAZARUS_DIR=$lazarus_dir" >> "$GITHUB_ENV"
+
+      - name: Verify toolchain (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(lazbuild --lazarusdir="$LAZARUS_DIR" --version)" = '4.8'
+          test "$(fpc -iV)" = '3.2.2'
+
+      - name: Restore cached Lazarus toolchain (Windows)
+        if: runner.os == 'Windows' && steps.toolchain-cache.outputs.cache-hit == 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $archive = Join-Path $env:RUNNER_TOOL_CACHE `
+            'lazble\lazarus-4.8-windows-x64.tar'
+          tar.exe -xf $archive -C C:\
+          if ($LASTEXITCODE -ne 0) {
+            throw "Could not restore Lazarus toolchain: exit code $LASTEXITCODE"
+          }
+
+      - name: Install Lazarus 4.8 (Windows)
+        if: runner.os == 'Windows' && steps.toolchain-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $installer = Join-Path $env:RUNNER_TEMP 'lazarus-4.8-fpc-3.2.2-win64.exe'
+          $url = 'https://download.lazarus-ide.org/Lazarus%20Windows%2064%20bits/Lazarus%204.8/lazarus-4.8-fpc-3.2.2-win64.exe'
+          curl.exe --fail --location --retry 3 $url --output $installer
+          if ($LASTEXITCODE -ne 0) {
+            throw "Could not download Lazarus installer: exit code $LASTEXITCODE"
+          }
+
+          $actualHash = (Get-FileHash -Algorithm SHA256 $installer).Hash
+          $expectedHash = 'ED25EE171D55E23CF14E0633159FDD2325EFBA56E186F8AB817AD3BF97D267D7'
+          if ($actualHash -ne $expectedHash) {
+            throw "Unexpected Lazarus installer hash: $actualHash"
+          }
+
+          $process = Start-Process -FilePath $installer -ArgumentList @(
+            '/VERYSILENT',
+            '/SUPPRESSMSGBOXES',
+            '/NORESTART',
+            '/SP-',
+            '/DIR=C:\Lazarus'
+          ) -Wait -PassThru
+          if ($process.ExitCode -ne 0) {
+            throw "Lazarus installer failed: exit code $($process.ExitCode)"
+          }
+
+      - name: Snapshot Lazarus toolchain (Windows)
+        if: runner.os == 'Windows' && steps.toolchain-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $archive = Join-Path $env:RUNNER_TOOL_CACHE `
+            'lazble\lazarus-4.8-windows-x64.tar'
+          New-Item -ItemType Directory -Force (Split-Path $archive) |
+            Out-Null
+          tar.exe -cf $archive -C C:\ Lazarus
+          if ($LASTEXITCODE -ne 0) {
+            throw "Could not snapshot Lazarus toolchain: exit code $LASTEXITCODE"
+          }
+
+      - name: Configure toolchain paths (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          'LAZARUS_DIR=C:/Lazarus' | Out-File -FilePath $env:GITHUB_ENV -Append
+          'C:\Lazarus' | Out-File -FilePath $env:GITHUB_PATH -Append
+          'C:\Lazarus\fpc\3.2.2\bin\x86_64-win64' |
+            Out-File -FilePath $env:GITHUB_PATH -Append
+
+      - name: Verify toolchain (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if ((lazbuild --version) -ne '4.8') {
+            throw 'Lazarus 4.8 was not installed'
+          }
+          if ((fpc -iV) -ne '3.2.2') {
+            throw 'FPC 3.2.2 was not installed'
+          }
+
+      - name: Verify Apple toolchain (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          export DEVELOPER_DIR=/Applications/Xcode_16.4.app/Contents/Developer
+          echo "DEVELOPER_DIR=$DEVELOPER_DIR" >> "$GITHUB_ENV"
+          test -d "$DEVELOPER_DIR"
+          xcodebuild -version
+          test -x "$(xcrun --find ld-classic)"
+
+      - name: Restore cached Lazarus toolchain (macOS)
+        if: runner.os == 'macOS' && steps.toolchain-cache.outputs.cache-hit == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TOOL_CACHE/lazble/lazarus-4.8-macos-arm64.tar"
+          sudo tar --extract --file "$archive" --directory /
+
+      - name: Install Lazarus 4.8 (macOS)
+        if: runner.os == 'macOS' && steps.toolchain-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          base_url='https://download.lazarus-ide.org/Lazarus%20macOS%20aarch64/Lazarus%204.8'
+          fpc_image="$RUNNER_TEMP/fpc-3.2.4rc1a.intelarm64-macosx.dmg"
+          lazarus_archive="$RUNNER_TEMP/lazarus-darwin-aarch64-4.8.zip"
+          fpc_volume="$RUNNER_TEMP/fpc-volume"
+          lazarus_dir="$RUNNER_TOOL_CACHE/lazble/installed/lazarus-4.8"
+
+          curl --fail --location --retry 3 \
+            "$base_url/fpc-3.2.4rc1a.intelarm64-macosx.dmg" \
+            --output "$fpc_image"
+          curl --fail --location --retry 3 \
+            "$base_url/lazarus-darwin-aarch64-4.8.zip" \
+            --output "$lazarus_archive"
+
+          echo "e7792c59a31982a00021566d1ab63b0c794ff87d63b6123fe0f45e8f5627f798  $fpc_image" | shasum --algorithm 256 --check
+          echo "e5e0bf52bca911d4605dc875bd924ff5c74a0d0f6cf5699b936b377cc1986d1b  $lazarus_archive" | shasum --algorithm 256 --check
+
+          mkdir -p "$fpc_volume" "$lazarus_dir"
+          hdiutil attach "$fpc_image" \
+            -nobrowse -readonly -mountpoint "$fpc_volume"
+          trap 'hdiutil detach "$fpc_volume" || true' EXIT
+
+          package_count=0
+          while IFS= read -r -d '' package; do
+            sudo installer -pkg "$package" -target /
+            package_count=$((package_count + 1))
+          done < <(find "$fpc_volume" -name '*.pkg' -print0)
+          test "$package_count" -gt 0
+
+          hdiutil detach "$fpc_volume"
+          trap - EXIT
+
+          xattr -cr "$lazarus_archive"
+          unzip -q "$lazarus_archive" -d "$lazarus_dir"
+
+      - name: Snapshot Lazarus toolchain (macOS)
+        if: runner.os == 'macOS' && steps.toolchain-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TOOL_CACHE/lazble/lazarus-4.8-macos-arm64.tar"
+          lazarus_dir="$RUNNER_TOOL_CACHE/lazble/installed/lazarus-4.8"
+          fpc_config_dir="$RUNNER_TOOL_CACHE/lazble/installed/fpc-config"
+          mkdir -p "$fpc_config_dir"
+          cp -L /etc/fpc.cfg "$fpc_config_dir/fpc.cfg"
+          paths=(
+            usr/local/lib/fpc
+            "${fpc_config_dir#/}"
+            "${lazarus_dir#/}"
+          )
+
+          for candidate in \
+            usr/local/bin/fpc \
+            usr/local/bin/fpcmake \
+            usr/local/bin/fpcmkcfg \
+            usr/local/bin/fpcres \
+            usr/local/bin/ppca64
+          do
+            if [ -e "/$candidate" ] || [ -L "/$candidate" ]; then
+              paths+=("$candidate")
+            fi
+          done
+
+          mkdir -p "$(dirname "$archive")"
+          sudo tar --create --file "$archive" --directory / "${paths[@]}"
+          sudo chown "$(id -u):$(id -g)" "$archive"
+
+      - name: Configure toolchain paths (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          lazarus_dir="$RUNNER_TOOL_CACHE/lazble/installed/lazarus-4.8"
+          fpc_config_dir="$RUNNER_TOOL_CACHE/lazble/installed/fpc-config"
+          test -f "$fpc_config_dir/fpc.cfg"
+          lazbuild_path=''
+          while IFS= read -r candidate; do
+            lazbuild_path="$candidate"
+            break
+          done < <(find "$lazarus_dir" -type f -name lazbuild -print)
+          test -n "$lazbuild_path"
+          test -x "$lazbuild_path"
+          lazarus_root="$(dirname "$lazbuild_path")"
+          echo '/usr/local/bin' >> "$GITHUB_PATH"
+          echo "$lazarus_root" >> "$GITHUB_PATH"
+          echo "LAZARUS_DIR=$lazarus_root" >> "$GITHUB_ENV"
+          echo "PPC_CONFIG_PATH=$fpc_config_dir" >> "$GITHUB_ENV"
+
+      - name: Verify toolchain (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(lazbuild --lazarusdir="$LAZARUS_DIR" --version)" = '4.8'
+          case "$(fpc -iV)" in
+            3.2.4*) ;;
+            *) echo 'Expected the official FPC 3.2.4rc1 macOS toolchain' >&2; exit 1 ;;
+          esac
+
+      - name: Save Lazarus and FPC cache
+        if: steps.toolchain-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ runner.tool_cache }}/lazble/lazarus-4.8-${{ matrix.toolchain }}.tar
+          key: ${{ steps.toolchain-cache.outputs.cache-primary-key }}
+
+      - name: Download SimpleDelphiBLE sources
+        env:
+          BINDING_URL: ${{ needs.binding.outputs.url }}
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 "$BINDING_URL" \
+            --output "$RUNNER_TEMP/simpledelphible.zip"
+          mkdir -p simpledelphible
+          unzip -q "$RUNNER_TEMP/simpledelphible.zip" -d "$RUNNER_TEMP/lazble-binding"
+          mv "$RUNNER_TEMP"/lazble-binding/*/* simpledelphible/
+
+      - name: Check out PLAIN fixture sources
+        uses: actions/checkout@v7
+        with:
+          repository: simpleble/simpleble
+          ref: ${{ needs.binding.outputs.revision }}
+          path: simpledelphible/upstream
+          persist-credentials: false
+
+      - name: Build PLAIN fixture
+        run: |
+          set -euo pipefail
+          options=(-DSIMPLEBLE_PLAIN=ON -DBUILD_SHARED_LIBS=ON -DCMAKE_BUILD_TYPE=Release
+            -DCMAKE_PLATFORM_NO_VERSIONED_SONAME=ON -DCMAKE_INSTALL_LIBDIR=lib)
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            options+=(-A x64 -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded)
+          fi
+          cmake -S simpledelphible/upstream/simplecble -B "$RUNNER_TEMP/lazble-plain-build" "${options[@]}"
+          cmake --build "$RUNNER_TEMP/lazble-plain-build" --config Release --parallel 4
+          cmake --install "$RUNNER_TEMP/lazble-plain-build" --config Release \
+            --prefix "$GITHUB_WORKSPACE/simpledelphible/plain-runtime"
+
+      - name: Build LazBle packages, LCL tests and examples
+        run: |
+          set -euo pipefail
+          mkdir -p ci-artifacts
+          options=(--lazarusdir="$LAZARUS_DIR" --pcp="$RUNNER_TEMP/lazble-lazarus" --ws="$WIDGETSET")
+          case "$RUNNER_OS" in
+            Linux) options+=(--opt=-k-lQt6DBus) ;;
+            macOS) options+=(--opt="-k-ld_classic -FD$(dirname "$(xcrun --find ld)") -XR$(xcrun --sdk macosx --show-sdk-path)") ;;
+          esac
+          lazbuild "${options[@]}" --add-package-link lazble.lpk lazblelcl.lpk
+          for project in \
+            lazble.lpk lazblelcl.lpk lazblelcldesign.lpk \
+            tests/lcl/lazblelcltests.lpi \
+            examples/blescan.lpi examples/gattinspect.lpi \
+            examples/nusterminal.lpi examples/batterymonitor.lpi \
+            examples/lcl/lazblelcldemo.lpi
+          do
+            log_name="${project//\//-}"
+            lazbuild "${options[@]}" --build-all "$project" \
+              2>&1 | tee "ci-artifacts/build-$log_name.log"
+          done
+
+      - name: Build core, profile and backend tests
+        working-directory: tests
+        run: |
+          set -euo pipefail
+          mkdir -p bin/plain lib/plain
+          options=()
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            plain_dir=../simpledelphible/plain-runtime/bin
+          else
+            plain_dir="$(cd ../simpledelphible/plain-runtime/lib && pwd)"
+            options+=(-k-rpath "-k$plain_dir")
+          fi
+          if [[ "$RUNNER_OS" == macOS ]]; then
+            options+=(-k-ld_classic "-FD$(dirname "$(xcrun --find ld)")"
+              "-XR$(xcrun --sdk macosx --show-sdk-path)")
+          fi
+          fpc -Fu../src/core -Fu../src/backends -Fu../src/profiles \
+            -Fubackend -Fubattery -Fucore -Funus -Fusupport \
+            -Fu../simpledelphible/source -Fi../simpledelphible/source \
+            "-Fl$plain_dir" "-k-L$plain_dir" "${options[@]}" \
+            -FUlib/plain -FEbin/plain lazbletests.lpr \
+            2>&1 | tee ../ci-artifacts/build-core-tests.log
+
+      - name: Copy runtime files for test executables
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Linux)
+              cp simpledelphible/lib/"$NATIVE_PLATFORM"/*.so tests/bin/
+              ;;
+            macOS)
+              cp simpledelphible/lib/"$NATIVE_PLATFORM"/*.dylib tests/bin/
+              ;;
+            Windows)
+              cp simpledelphible/lib/"$NATIVE_PLATFORM"/*.dll tests/bin/
+              cp simpledelphible/plain-runtime/bin/*.dll tests/bin/plain/
+              ;;
+          esac
+
+      - name: Run LazBle tests
+        run: |
+          set -euo pipefail
+          suffix=''
+          if [[ "$RUNNER_OS" == Windows ]]; then suffix=.exe; fi
+          "tests/bin/plain/lazbletests$suffix" --all --format=xml \
+            --file=ci-artifacts/core-results.xml 2>&1 | tee ci-artifacts/run-core-tests.log
+          if [[ "$RUNNER_OS" == Linux ]]; then
+            QT_QPA_PLATFORM=xcb xvfb-run --auto-servernum tests/bin/lazblelcltests \
+              --all --format=xml --file=ci-artifacts/lcl-results.xml \
+              2>&1 | tee ci-artifacts/run-lcl-tests.log
+          else
+            "tests/bin/lazblelcltests$suffix" --all --format=xml \
+              --file=ci-artifacts/lcl-results.xml 2>&1 | tee ci-artifacts/run-lcl-tests.log
+          fi
+
+      - name: Validate FPCUnit reports
+        if: always()
+        run: |
+          set -euo pipefail
+          echo '### LazBle FPCUnit results' >> "$GITHUB_STEP_SUMMARY"
+          echo '| Suite | Tests | Errors | Failures |' >> "$GITHUB_STEP_SUMMARY"
+          echo '| --- | ---: | ---: | ---: |' >> "$GITHUB_STEP_SUMMARY"
+          for suite in core lcl; do
+            report="ci-artifacts/$suite-results.xml"
+            test -s "$report"
+            tests="$(sed -n 's:.*<NumberOfRunTests>\([0-9][0-9]*\)</NumberOfRunTests>.*:\1:p' "$report" | tail -n 1)"
+            errors="$(sed -n 's:.*<NumberOfErrors>\([0-9][0-9]*\)</NumberOfErrors>.*:\1:p' "$report" | tail -n 1)"
+            failures="$(sed -n 's:.*<NumberOfFailures>\([0-9][0-9]*\)</NumberOfFailures>.*:\1:p' "$report" | tail -n 1)"
+            printf '| %s | %s | %s | %s |\n' "$suite" "$tests" "$errors" "$failures" >> "$GITHUB_STEP_SUMMARY"
+            test "$tests" -gt 0
+            test "$errors" -eq 0
+            test "$failures" -eq 0
+          done
+
+      - name: Upload test reports and build logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: lazble-${{ matrix.os }}-${{ matrix.arch }}-results
+          path: ci-artifacts/
+          if-no-files-found: warn
+          retention-days: 14

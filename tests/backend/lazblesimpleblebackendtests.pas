@@ -21,7 +21,7 @@ type
     function Terminal(Id: TBleOperationId): Boolean;
   end;
 
-  { Real SimpleDelphiBLE + the upstream 1.3.0 PLAIN native implementation.
+  { Real SimpleDelphiBLE + the matching upstream PLAIN native implementation.
     Deliberately no injected driver or imitation of the public binding API. }
   TLazBleSimpleBleBackendTest = class(TTestCase)
   private
@@ -246,7 +246,7 @@ begin
   AssertEquals(Ord(lbekOperationSucceeded), Ord(Wait(Id).Kind));
   E := FEvents.Last(lbekAvailabilityResult, Id);
   AssertTrue(E.Available);
-  AssertEquals('1.3.0', E.BackendVersion);
+  AssertEquals(UTF8Encode(TSimpleDelphiBLE.Version), E.BackendVersion);
   AssertEquals('Plain Adapter', E.AdapterId);
 end;
 

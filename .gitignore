@@ -26,6 +26,7 @@ backup/
 /tests/lib/
 /examples/bin/
 /examples/lib/
+/ci-artifacts/
 
 # Local official SimpleDelphiBLE distribution (sources, libraries, licenses)
 /simpledelphible/
