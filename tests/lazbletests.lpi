@@ -14,6 +14,11 @@
       <UseAppBundle Value="False"/>
       <ResourceType Value="res"/>
     </General>
+    <RequiredPackages Count="1">
+      <Item1>
+        <PackageName Value="LazBle"/>
+      </Item1>
+    </RequiredPackages>
     <Units Count="17">
       <Unit0>
         <Filename Value="lazbletests.lpr"/>
@@ -108,10 +113,8 @@
       <Filename Value="bin\lazbletests"/>
     </Target>
     <SearchPaths>
-      <IncludeFiles Value="..\..\simpledelphible\source"/>
-      <Libraries Value="..\..\simpledelphible_lazarus\native\$(TargetCPU)-$(TargetOS)"/>
-      <OtherUnitFiles Value="..\src;..\src\backends;..\src\core;..\src\profiles;..\..\simpledelphible\source;backend;battery;core;nus;support"/>
-      <UnitOutputDirectory Value="lib\$(TargetOS)-$(TargetCPU)"/>
+      <OtherUnitFiles Value="backend;battery;core;nus;support"/>
+      <UnitOutputDirectory Value="lib\$(TargetOS)-$(TargetCPU)\core"/>
     </SearchPaths>
     <Linking>
       <Debugging>

@@ -9,9 +9,24 @@
       <Version Value="11"/>
       <PathDelim Value="\"/>
       <SearchPaths>
-        <OtherUnitFiles Value="src;src\backends;src\core;src\profiles"/>
+        <IncludeFiles Value="simpledelphible\source"/>
+        <OtherUnitFiles Value="src;src\backends;src\core;src\profiles;simpledelphible\source"/>
         <UnitOutputDirectory Value="lib\$(TargetCPU)-$(TargetOS)"/>
       </SearchPaths>
+      <Conditionals Value="NativeDir := '';
+if (TargetOS='linux') and (TargetCPU='x86_64') then
+  NativeDir := 'simpledelphible/lib/linux-x64'
+else if (TargetOS='win64') and (TargetCPU='x86_64') then
+  NativeDir := 'simpledelphible/lib/win64'
+else if (TargetOS='darwin') and (TargetCPU='x86_64') then
+  NativeDir := 'simpledelphible/lib/macos-x64'
+else if (TargetOS='darwin') and (TargetCPU='aarch64') then
+  NativeDir := 'simpledelphible/lib/macos-arm64';
+if NativeDir&lt;>'' then begin
+  LibraryPath := NativeDir;
+  UsageLibraryPath := NativeDir;
+  UsageLinkerOptions := '-L&quot;$(PkgDir)' + NativeDir + '&quot;';
+end;"/>
     </CompilerOptions>
     <Files>
       <Item>
@@ -89,10 +104,6 @@
     <RequiredPkgs>
       <Item>
         <PackageName Value="FCL"/>
-      </Item>
-      <Item>
-        <PackageName Value="SimpleDelphiBLEPackage"/>
-        <MinVersion Major="1" Minor="3" Release="0" Valid="True"/>
       </Item>
     </RequiredPkgs>
     <UsageOptions>

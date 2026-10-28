@@ -26,3 +26,6 @@ backup/
 /tests/lib/
 /examples/bin/
 /examples/lib/
+
+# Local official SimpleDelphiBLE distribution (sources, libraries, licenses)
+/simpledelphible/

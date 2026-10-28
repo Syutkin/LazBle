@@ -1,168 +1,318 @@
 # LazBle
 
-LazBle is an asynchronous BLE and GATT client library for Free Pascal.
-Lazarus can use the FPC-only core through `lazble.lpk`. The optional
-`lazblelcl.lpk` package provides main-thread LCL components without adding LCL
-dependencies to the core units. `lazblelcldesign.lpk` is an IDE-only package
-that places the components on the Lazarus component palette; applications do
-not depend on it.
+LazBle **2.0.0** is an asynchronous BLE Central and GATT client library for
+Free Pascal and Lazarus. It provides device discovery, connections, GATT
+operations, notifications, typed profiles, optional reconnection, and LCL controls.
 
-Current source version: **2.0.0 (unreleased)**.
-
-The default backend now uses the public API of
+The default backend uses the public API of
 [SimpleDelphiBLE 1.3.0](https://github.com/simpleble/simpledelphible/releases/tag/v1.3.0).
-The matching native libraries are required at link time and before program
-startup. The former SimpleBlePascal driver and lazy loader have been removed.
+Blocking BLE calls run on a command worker. API access and callbacks run on the
+main thread.
 
-Migration stages 1–4 are implemented: core/profiles, LCL main-thread delivery,
-explicit asynchronous GUI shutdown, interactive console pumping, and production
-deployment. Hardware/clean-system validation, Windows BLE runtime, IDE restart,
-and release CI remain for stage 5. This unreleased migration contains breaking
-API changes.
+## Packages and components
 
-## Architecture
+| Package | Purpose |
+| --- | --- |
+| `lazble.lpk` | Core library, SimpleDelphiBLE backend, NUS and Battery profiles; no LCL dependency |
+| `lazblelcl.lpk` | LCL components, device picker, connection control, and translations |
+| `lazblelcldesign.lpk` | Design-time registration on the Lazarus component palette |
 
-- `TLazBle` is the facade, the entry point for creating clients, and their
-  lifetime owner.
-- `TBleClient` represents one remote BLE device and one physical connection.
-- `TBleGattSession` provides the shared GATT context used by a client and its
-  custom profiles.
-- `TBleGattProfile` is the base class for typed GATT profiles.
-- `TBleByteChannel` provides a reusable Write/Notify byte channel.
-- `TNusProfile` configures a byte channel for Nordic UART Service.
-- `TBleBatteryProfile` implements an independent typed Battery Service profile.
-- `TLazBleSync` is the blocking facade intended for console applications and
-  tests.
-- `ILazBleBackend` is the asynchronous boundary used by SimpleBLE and future
-  backend implementations.
-- `TLazBleComponent` is the LCL facade owner and scan component.
-- `TLazBleLclClient` is the persistent LCL component for one selected device;
-  it keeps form event handlers while its core client is created lazily.
-- `TBleDeviceSelectForm` is a reusable modal device picker over the existing
-  LCL scan controller; it does not create or connect a BLE client.
-- `TLazBleDeviceControl` is an optional visual selector and connection-status
-  control bound to an existing `TLazBleLclClient`.
+The main types are:
 
-## Usage
+- `TLazBle`: facade and lifetime owner of device clients.
+- `TBleClient`: one device, its connection, profiles, and reconnect policy.
+- `TBleGattSession`: shared GATT context for a client's operations and profiles.
+- `TBleGattProfile`: base class for typed profiles.
+- `TBleByteChannel`: reusable Write/Notify byte channel.
+- `TNusProfile`: Nordic UART Service, with RX writes and TX notifications.
+- `TBleBatteryProfile`: Battery Service, with an initial read and notifications.
+- `TLazBleSync`: blocking facade for console applications.
+- `ILazBleBackend`: asynchronous backend interface for custom implementations.
+- `TLazBleComponent`: LCL facade owner, availability checks, and scan controller.
+- `TLazBleLclClient`: persistent LCL wrapper for a selected device.
+- `TBleDeviceSelectForm`: modal device picker using an existing scan controller.
+- `TLazBleDeviceControl`: visual device selector and connection-status control.
 
-The default facade creates the bundled SimpleBLE backend. A client represents
-one remote device, while profiles add the GATT behavior required by the
-application.
+## Dependencies and native libraries
+
+Use Free Pascal 3.2.2 or later and, for LCL components, Lazarus. The default
+backend requires the official SimpleDelphiBLE 1.3.0 distribution in
+`simpledelphible/`. This entire directory is local and ignored by Git, including
+sources, native libraries, and licenses.
+
+Download [simpledelphible-1.3.0.zip](https://github.com/simpleble/simpledelphible/releases/download/v1.3.0/simpledelphible-1.3.0.zip),
+extract it, and place its contents in LazBle's `simpledelphible` directory
+(renaming the extracted `simpledelphible-1.3.0` folder to `simpledelphible`):
+
+Archive SHA-256: `6fce6451fec87c67914a8841ffc9945e5af6e852c734ab238d57f4b623bf46c2`.
+
+```text
+lazble/
+  lazble.lpk
+  simpledelphible/           # official release contents; entirely ignored by Git
+    LICENSE.md
+    source/
+    lib/
+      linux-x64/
+      win64/
+      macos-x64/
+      macos-arm64/
+      ...
+```
+
+| Supported target | Link-time directory | Runtime files |
+| --- | --- | --- |
+| Linux x86_64 | `simpledelphible/lib/linux-x64` | `libsimplecble.so` and `libsimpleble.so` |
+| Windows x86_64 | `simpledelphible/lib/win64` | `simplecble.dll` and `simpleble.dll` |
+| macOS 15.0+ Intel x86_64 | `simpledelphible/lib/macos-x64` | `libsimplecble.dylib` and `libsimpleble.dylib` |
+| macOS 15.0+ Apple Silicon (aarch64) | `simpledelphible/lib/macos-arm64` | `libsimplecble.dylib` and `libsimpleble.dylib` |
+
+The official Linux binary uses the SONAME `$ORIGIN/libsimplecble.so` and RUNPATH
+`$ORIGIN`; deploy both libraries beside the executable. On Windows, place both
+DLLs beside the executable. On macOS, place both `.dylib` files beside the
+executable, or in `MyApp.app/Contents/MacOS` for an app bundle. The official
+libraries resolve their dependencies from that location without an added rpath.
+The application needs [Bluetooth permission](https://docs.simpleble.org/fundamentals/permissions).
+Each test/example executable and a Lazarus IDE with the design package also need
+their native dependencies.
+
+Native libraries are required at link time and process startup, including for
+executables using a fake or custom backend. An availability check reports adapter
+and Bluetooth status; it cannot handle a library missing at process startup.
+
+### Lazarus
+
+The `LazBle` package compiles the locally supplied official sources directly. Its unit,
+include, and target-specific library paths are already configured; native link
+paths are passed to dependent projects. Only the LazBle packages need registering:
+
+```sh
+lazbuild --ws=qt6 --add-package-link lazble.lpk
+lazbuild --ws=qt6 --add-package-link lazblelcl.lpk
+lazbuild --ws=qt6 lazble.lpk
+lazbuild --ws=qt6 lazblelcl.lpk
+```
+
+Add `LazBle` to your project's required packages, and `LazBleLCL` when using
+components or controls. Copy the matching runtime libraries to the executable's
+output directory; `lazbuild` does not copy them.
+
+To install the components on the Lazarus palette, open `lazblelcldesign.lpk`
+and choose **Use > Install**. Lazarus rebuilds its IDE executable with the design
+package. Deploy the native libraries beside that executable before restarting it.
+
+### Direct FPC use
+
+Add `src/core`, `src/backends`, and `src/profiles` to `-Fu`. Add the official
+`simpledelphible/source` directory to both `-Fu` and `-Fi`, and the matching
+`simpledelphible/lib` target directory to `-Fl`.
+
+On Linux, `-k-L/path/to/native` can set linker search precedence when other
+library versions are present. Keep compiled units for different targets in
+separate `-FU` directories. Unix console programs must include `cthreads` first
+in their uses clause.
+
+## Console usage
+
+This program connects to a NUS device, waits for profile readiness, sends one
+byte, and completes shutdown before releasing the facade. Pass the device ID
+as its command-line argument.
 
 ```pascal
+program NusExample;
+
+{$mode objfpc}{$H+}
+
 uses
-  Classes,
-  LazBleTypes,
-  LazBleOperation,
-  LazBleClient,
-  LazBleFacade,
-  LazBleNus;
+  {$IFDEF UNIX}cthreads,{$ENDIF}
+  Classes, SysUtils,
+  LazBleTypes, LazBleOperation, LazBleClient, LazBleFacade, LazBleNus;
+
+procedure Await(const Operation: IBleOperation);
+begin
+  while Operation.State = lbopPending do
+    CheckSynchronize(10);
+  if Operation.State <> lbopSucceeded then
+    raise Exception.CreateFmt('BLE operation failed (%d): %s',
+      [Operation.ErrorCode, Operation.ErrorMessage]);
+end;
 
 var
   Ble: TLazBle;
   Client: TBleClient;
   Nus: TNusProfile;
   Operation: IBleOperation;
+  Value: TBytes;
 begin
+  if ParamCount <> 1 then
+    raise Exception.Create('Usage: NusExample DEVICE_ID');
+
   Ble := TLazBle.Create;
   try
-    Client := Ble.CreateClient(DeviceId);
+    Client := Ble.CreateClient(ParamStr(1));
     Nus := TNusProfile.Create;
     Client.AddProfile(Nus);
-    Operation := Client.ConnectAsync;
-    { Observe Operation.OnCompleted or Operation.State. }
+    Await(Client.ConnectAsync);
 
-    { Before releasing Ble, finish application work and await this operation. }
-    Operation := Ble.ShutdownAsync;
-    { Console only: keep pumping until cleanup actually finishes. }
-    while Operation.State = lbopPending do CheckSynchronize(10);
+    SetLength(Value, 1);
+    Value[0] := 1;
+    Await(Nus.SendAsync(Value));
   finally
+    Operation := Ble.ShutdownAsync;
+    while Operation.State = lbopPending do
+      CheckSynchronize(10);
+    if Operation.State = lbopFailed then
+      WriteLn(StdErr, 'BLE shutdown failed: ', Operation.ErrorMessage);
     Ble.Free;
   end;
-end;
+end.
 ```
 
-All asynchronous methods return a non-null reference-counted operation. If a
-request cannot be started, the returned operation is already in
-`lbopFailed`; callers do not need a separate `nil` branch. Keep the interface
-for as long as its terminal state or result is needed. Completed operations,
-scan snapshots, and inactive subscription tokens remain valid after their
-client or session is released. Do not call `Free` on operation or subscription
-interfaces.
+Use asynchronous operations in GUI applications and callbacks. `TLazBleSync`
+provides console methods for Scan, Connect, Disconnect, and Shutdown. It pumps
+`CheckSynchronize` while waiting. A wait deadline returns False with an error
+message; the BLE operation can still be running and keeps its eventual result.
 
-Bluetooth availability is checked explicitly and asynchronously; creating a
-facade or loading an LCL component does not enumerate adapters or start BLE
-work. The native shared libraries are already linked at process startup:
+## Operations, discovery, and ownership
 
-```pascal
-AvailabilityOperation := Ble.CheckAvailabilityAsync(AdapterId);
-```
+Asynchronous requests return reference-counted operation interfaces. A request
+that cannot start returns an operation in `lbopFailed`. Keep the interface while
+observing its state, result, or `OnCompleted` handler. Assigning `OnCompleted`
+after completion invokes it immediately. Do not call `Free` on operation or
+subscription interfaces.
 
-On success, `IBleAvailabilityOperation.Availability` is either
-`lbaAvailable` or `lbaUnavailable`. A failed operation carries a backend or
-native error instead of treating it as an ordinary unavailable result. A missing
-shared library prevents startup and is not an asynchronous availability result.
+`CheckAvailabilityAsync(AdapterId)` explicitly checks Bluetooth availability.
+On success, `IBleAvailabilityOperation.Availability` is `lbaAvailable` or
+`lbaUnavailable`; a failed check carries an error code and message. Creating a
+facade or loading an LCL component does not enumerate adapters or start a scan.
 
-`IBleScanOperation.OnResult` reports every new or updated discovery while a
-scan is running. Its `Results` property remains a deduplicated snapshot in
-discovery order. Installing a handler does not replay results already present
-in the snapshot.
+`ScanAsync(AdapterId, DurationMs)` returns `IBleScanOperation`. `OnResult` reports
+new and updated discoveries; `Results` contains deduplicated device snapshots
+in discovery order. Installing a result handler does not replay earlier results.
+Reaching the scan duration normally completes the scan successfully.
 
-`TLazBle` owns clients created by `CreateClient`. After successful
-`AddProfile`, a client owns the profile. `CreateClient` raises an exception for
-a duplicate device or after shutdown has started. Applications should call
-`ShutdownAsync` and await its completion before freeing the facade.
+`TLazBle` owns clients created by `CreateClient`. Device IDs must be unique
+within a facade. After successful `AddProfile`, the client owns that profile.
+Required profiles must be Ready before the client enters `lbcstReady`.
+Completed operations, scan snapshots, and inactive subscription tokens remain
+readable after their client/session is released.
 
-Reconnect after an unexpected loss is optional and disabled by default:
+### Reconnection
+
+Automatic reconnection after unexpected connection loss is optional and disabled
+by default:
 
 ```pascal
 Client.ReconnectOptions := TLazBleReconnectOptions.Create(1000, 30000, 5);
 Client.AutoReconnect := True;
 ```
 
-The delay doubles up to the configured maximum, and reconnect stops after the
-configured number of attempts. An initial connection failure is not retried.
-`DisconnectAsync`, `TLazBle.ShutdownAsync`, or setting `AutoReconnect` to
-`False` cancels a pending retry. Registered profiles are detached on loss and
-attached again after service discovery.
+The retry delay doubles up to the configured maximum, with a limit on attempts.
+An initial connection failure is not retried. Manual Disconnect, Shutdown, or
+setting `AutoReconnect` to False stops a pending retry. Profiles detach on loss
+and attach again after service discovery.
 
-`TLazBleLclClient` exposes the same policy through published `AutoReconnect`
-and nested `ReconnectOptions` properties. Loading them from an `.lfm` does not
-create a core client or start a BLE operation.
+`TLazBleLclClient` exposes this policy through `AutoReconnect` and the nested
+`ReconnectOptions` properties. Loading these properties from an `.lfm` does not
+create a core client or start a connection.
 
-Call `TLazBleComponent.ShutdownAsync` when the LCL BLE subsystem is no longer
-needed. It returns the same operation on repeated calls, stops application
-callbacks/reconnect, and drains native work without blocking the GUI. Await its
-terminal result before freeing the component or form, including a failed cleanup
-result. `Shutdown` remains a convenience for starting this operation; destruction
-is not a substitute for awaiting it. A blocking legacy destructor fallback has
-no bounded completion guarantee.
+## Threads and lifecycle
 
-Use `OnCloseQuery` to defer form closure, keep the operation in a field, and
-schedule `Close` with `Application.QueueAsyncCall` from its completion callback.
-Remove queued form calls in the destructor. See the LCL demo for a complete
-example. Never free a BLE owner inside its own callback or pump a nested BLE wait
-inside a GUI/callback handler.
+Create, use, and destroy LazBle objects on the main thread. This includes state
+reads, handler registration, operation submission, cancellation, and profile
+access. Custom backends deliver callbacks on the main thread as well.
 
-LCL events now run directly on the main thread. The dispatcher and its cloned
-messages are removed. A callback may start the next async operation immediately;
-stale remaining notifications are suppressed after a reentrant state/owner change.
-`lblssTimedOut` is removed: reaching a scan duration normally completes the scan,
-and native errors are reported as Failed.
+The default backend uses SimpleDelphiBLE `edMainThread` delivery and one worker
+for blocking commands. Console applications service `CheckSynchronize`; LCL
+services it through the GUI event loop. Reconnect timers deliver their client
+actions on the main thread.
 
-`OnConfigureClient` transfers profiles to the newly created core client.
-`OnUnconfigureClient` runs while that client/profiles are still alive, before
-replacement, root shutdown, or detachment. Release borrowed references and clear
-profile callbacks there; do not start BLE work or free the owner in this handler.
+Callbacks may start the next asynchronous operation. Do not run nested BLE waits
+or free the owner inside its callback. Defer destruction with
+`TThread.ForceQueue` or an owned LCL async call; `TThread.Queue` may execute
+immediately when called from the main thread.
 
-`TLazBleComponent.RefreshAvailability` starts the explicit check. Its
-read-only `Availability` property transitions through `lbaChecking`, and the
-published `OnAvailabilityChanged` event is delivered on the LCL main thread.
-No check is started while an `.lfm` is loaded.
+Complete `ShutdownAsync` before freeing an active facade or LCL owner. Shutdown
+stops new work and application callbacks, drains accepted commands, removes
+handlers/subscriptions, disconnects, and stops the worker. Inspect its terminal
+result for cleanup failures. A native call can delay shutdown until it returns;
+there is no guaranteed cleanup deadline. Destruction before completed shutdown
+can block and abandons pending logical results.
 
-Use `TBleDeviceSelectForm` when a user needs to select a discovered device.
-Creating the dialog does not start BLE work; `Execute` starts a scan when one
-is not already active and returns the selected snapshot entry:
+Only one default backend may actively own the process-wide upstream objects at
+a time. After orderly cleanup and release, another backend can use them. Do not
+replace the same upstream handlers or change `EventDelivery` while LazBle owns
+them. Adapters and peripherals are owned by SimpleDelphiBLE.
+
+### Cancellation and subscriptions
+
+`CancelRequested` records a request, not an operation outcome. Queued work can
+be skipped. A started native Connect/GATT call returns its actual success or
+failure and retains its effects. Cancelling profile attachment does not undo
+the connection. If discovery is cancelled after physical connection, the client
+enters Error and explicit Disconnect remains available.
+
+Notifications are delivered only after successful subscription readiness; early
+values are dropped. A characteristic can have one active subscription per
+default backend. Upstream queued events have no original session token, so
+absolute attribution of notifications across reconnects is not guaranteed.
+
+Unsubscribe immediately closes local delivery. With a pending Notify, cleanup
+waits for its outcome and unsubscribes if registration succeeds. A failed
+Unsubscribe preserves the error, leaves the token inactive, and disconnects the
+affected session; configured reconnection may then run. Unsubscribe and explicit
+Disconnect cleanup continue after a cancellation request.
+
+Accepted GATT commands keep their actual results across connection loss and
+orderly shutdown. Their results do not reactivate closed subscriptions or apply
+an old unsubscribe failure to a new session.
+
+### Data and errors
+
+GATT types in `LazBleTypes` alias upstream `TBleService` and `TBleCharacteristic`.
+Use `CanRead`, `CanWriteRequest`, `CanWriteCommand`, `CanNotify`, and `CanIndicate`;
+descriptors are UnicodeString UUIDs.
+
+Services, nested arrays, read values, and notification payloads are managed
+snapshots treated as read-only. Explicitly copy arrays you need to change.
+The backend copies a write buffer when submitting its command.
+
+Inspect operation State to determine success or failure. Native error code 0
+and empty error text can represent a failure. Named negative error codes in
+`LazBleTypes` identify LazBle errors. Custom backends set `ShutdownFailed` on
+failed `lbekShutdownCompleted` events independently of their error code/message.
+
+`LazBleGetAbout` returns static package information. `DiagnosticInfo` contains
+LazBleVersion, BindingName/BindingVersion, BackendName, NativeVersion, AdapterId,
+Availability, and ErrorMessage. Reading it starts no BLE work. NativeVersion and
+AdapterId are populated by an availability check; BindingName/BindingVersion
+describe the compiled SimpleDelphiBLE dependency.
+
+## LCL integration
+
+Assign `LazBle` and `DeviceId` on `TLazBleLclClient`, then configure profiles in
+`OnConfigureClient`. The underlying core client is created on demand.
+`OnUnconfigureClient` runs while that client and its profiles are still alive,
+before replacement, root shutdown, or detachment. Clear profile callbacks and
+release borrowed references there; do not start BLE work or free the owner in
+that handler.
+
+`TLazBleComponent.RefreshAvailability` publishes availability changes through
+`OnAvailabilityChanged`. Scanning uses the component's AdapterId and
+ScanTimeoutMs, with state/result/completion events delivered directly on the
+main thread.
+
+`TLazBleComponent.ShutdownAsync` returns the same operation on repeated calls.
+`Shutdown` starts that cleanup without returning its operation. In a form's
+`OnCloseQuery`, start shutdown, retain the operation, and defer closure while
+it is pending. Its completion handler schedules `Close` using
+`Application.QueueAsyncCall`. Remove owned queued calls in the destructor.
+See the [LCL demo](examples/lcl/lazblelcldemoform.pas) for the complete pattern.
+
+### Device selection and controls
+
+`TBleDeviceSelectForm` uses an existing scan controller and returns a selected
+device snapshot:
 
 ```pascal
 Dialog := TBleDeviceSelectForm.Create(nil, LazBleComponent.ScanController);
@@ -176,216 +326,109 @@ finally
 end;
 ```
 
-The list remains in discovery order. Advertising updates replace the matching
-row by stable device id without re-sorting the list. The dialog temporarily
-chains the scan controller events and restores existing handlers when released.
+The picker keeps discovery order and updates matching rows. It temporarily
+chains scan handlers and restores them when released.
 
-`TLazBleDeviceControl` can be placed on a form and linked through its published
-`Client` property. It uses the same client for selection, status, connect, and
-disconnect, while leaving the client's published event handlers untouched.
-`ShowSelectButton` and `ShowConnectionButton` control which built-in actions
-are visible; their captions are also published and configurable.
-`OnSelectButtonClick` and `OnConnectionButtonClick` replace the corresponding
-built-in action when assigned. A custom handler can invoke `SelectDevice` or
-`ToggleConnection` explicitly when it also needs the default action. Binding
-or streaming the control does not start BLE work. The control and the provided
-selection dialog are optional; applications can build their own UI over
-`TLazBleComponent`, `TLazBleLclScan`, and `TLazBleLclClient`.
+Bind `TLazBleDeviceControl.Client` to an existing LCL client to display its
+device, status, and connection actions. `ShowSelectButton` and
+`ShowConnectionButton` control visibility. Button captions are configurable;
+`OnSelectButtonClick` and `OnConnectionButtonClick` override the built-in actions.
+Custom handlers may call `SelectDevice` or `ToggleConnection` explicitly.
+Binding or streaming a control does not start BLE work.
 
-LazBleLCL translations are stored in `languages` as separate catalogues for
-`LazBleDeviceSelectForm` and `LazBleDeviceControl`. Load them after selecting
-the application language and before creating the controls:
+### Translations
+
+The `languages` directory contains separate catalogues for
+`LazBleDeviceSelectForm` and `LazBleDeviceControl`. Load them after choosing the
+application language and before creating controls:
 
 ```pascal
 TranslateLazBleLclResourceStrings('languages', Language, FallbackLanguage);
 ```
 
-The host application must deploy the LazBleLCL `.po` files alongside its own
-language files. Building `lazblelcl.lpk` updates the `.pot` templates through
-the Lazarus package i18n support; no custom string extractor is required.
+Deploy the `.po` files with the application. Building `lazblelcl.lpk` updates the
+`.pot` templates through Lazarus package i18n support.
 
-To add the components to the Lazarus palette, open
-`lazblelcldesign.lpk` and choose **Use > Install**. Lazarus normally rebuilds
-and restarts its IDE executable once because design-time packages are linked
-into the IDE. This does not rebuild FPC or the complete Lazarus/LCL source
-tree. Merely building the package does not modify or rebuild the IDE.
+## Custom profiles and backends
 
-Console callers can use `TLazBleSync`: it pumps `CheckSynchronize` while waiting.
-A wait deadline returns False with an explanation that the operation may still
-be running. It neither cancels nor changes the operation's eventual result.
-GUI applications and callbacks must use the asynchronous API.
+Derive a profile from `TBleGattProfile`. Use its protected Session for Read,
+Write, and Subscribe operations; start work in `DoAttach`, report readiness with
+`MarkReady` or failure with `MarkError`, and release callbacks/subscriptions in
+`DoDetach`. Register profiles through `TBleClient.AddProfile` before connecting.
 
-## Threads and callbacks
-
-The LazBle API, including core/profile state reads, handler registration,
-submission, cancellation, and lifetime management, runs on the main thread.
-Custom backends and reconnect timers must deliver on that thread too. One command
-worker performs blocking BLE operations. SimpleDelphiBLE delivers native events
-through `edMainThread`; command setup and completion use RTL `Synchronize`.
-Console asynchronous applications must pump `CheckSynchronize`; LCL does this
-through its main loop. Never wait for another BLE operation or destroy the
-owner inside a callback; defer destruction with `TThread.ForceQueue`.
-
-Only one LazBle default backend may own the process-wide native objects at a
-time. Await `BeginShutdown` / `ShutdownAsync` before creating the next active
-backend. Shutdown detaches handlers, drains commands, unsubscribes, disconnects,
-and joins the worker before completion. The destructor has a blocking fallback
-for legacy/idle owners; explicit asynchronous shutdown is required for GUI use.
-Do not independently replace the same upstream handlers or change the global
-`EventDelivery` while LazBle owns them.
-
-Queued cancellation skips the native call. Scan cancellation wakes its wait and
-stops scanning. A Connect/GATT call that has begun returns its actual outcome;
-there is no rollback of connection or write effects. Notifications become active
-only after subscription completion; early values are dropped. Duplicate active
-subscriptions to a characteristic are rejected. Unsubscribe retires local value
-delivery even on a native error. Queued upstream events carry no session token,
-so absolute attribution across reconnects is not guaranteed.
-
-Reconnect waits on a timer thread, then queues the client action once on the
-main thread. Cancel also removes an elapsed action waiting in the queue. The
-existing backoff/attempt policy, disabled default, and no retry of an initial
-failure are preserved.
-
-`CancelRequested` records a request and does not select the terminal state.
-There is no public `IBleOperation.Timeout` or `lbopTimedOut` state. Cancelling
-profile attachment after connection/discovery does not undo the connection;
-attachment completes normally. If queued discovery is cancelled after connecting,
-the client enters Error and an explicit Disconnect remains available. Connection
-loss requests cancellation of queued GATT work while retaining real outcomes of
-in-flight calls, including their own generation after reconnect.
-
-Unsubscribe closes local delivery immediately. When Notify is pending, it waits
-for the actual outcome: cancelled/failed Notify needs no native unsubscribe;
-successful Notify is followed by Unsubscribe. The returned cleanup operation
-cannot be cancelled once delivery is retired (`CancelRequested` can still be
-recorded). Explicit client Disconnect likewise continues after profiles/reconnect
-intent have been retired; Cancel does not rebuild a partly attached connection.
-Failure preserves its native code/text, leaves the token inactive
-with error (`lbsubFailed`), and disconnects the affected session; the configured
-reconnect policy may then run. Shutdown can interrupt pending logical cleanup.
-
-GATT names in `LazBleTypes` are aliases of upstream `TBleService` and
-`TBleCharacteristic`. Use `CanRead`, `CanWriteRequest`, `CanWriteCommand`,
-`CanNotify`, and `CanIndicate` booleans; descriptors are UnicodeString UUIDs.
-Services, nested arrays, read values, and notification payloads are read-only
-managed snapshots. Explicitly copy each array you intend to mutate. Write buffers
-are copied once, at backend Submit.
-
-An accepted command's data and outcome survive orderly shutdown. Pending
-connect/profile pipelines finish when shutdown closes the session, without
-starting new discovery or notification delivery. Custom backends must set
-`ShutdownFailed` on a failed `lbekShutdownCompleted`; neither code 0 nor empty
-text can distinguish failure from success. The facade preserves that failure.
-Destruction before awaited shutdown is a blocking fallback that abandons pending
-logical operations and detaches callbacks; it does not promise their native
-outcomes.
-
-Interactive console examples use a line reader that services CheckSynchronize
-while waiting for input, including partial lines and redirected input. Callback
-output shares the main thread and needs no output lock. `TLazBleSync` is for
-console callers, not GUI handlers.
-
-DiagnosticInfo exposes LazBleVersion, BindingName/BindingVersion,
-BackendName, NativeVersion, AdapterId, Availability, and ErrorMessage. The old
-MinimumNativeVersion, LoadWarning, WarningMessage and BackendWarning fields are
-removed; the OS loader handles the linked dependency before program startup.
-
-## Custom profiles
-
-Custom typed GATT profiles inherit from `TBleGattProfile`. The protected
-`Session` provides the common `ReadAsync`, `WriteAsync`, and `SubscribeAsync`
-API. Start the profile in `DoAttach`, release subscriptions in `DoDetach`, and
-report the result with `MarkReady` or `MarkError`.
-
-```pascal
-type
-  TMyProfile = class(TBleGattProfile)
-  private
-    FRead: IBleGattOperation;
-    procedure ReadCompleted(Sender: TObject);
-  protected
-    procedure DoAttach; override;
-    procedure DoDetach; override;
-  end;
-
-procedure TMyProfile.DoAttach;
-begin
-  FRead := Session.ReadAsync(MyServiceUuid, MyCharacteristicUuid);
-  FRead.OnCompleted := @ReadCompleted;
-end;
-
-procedure TMyProfile.ReadCompleted(Sender: TObject);
-begin
-  if FRead.State = lbopSucceeded then
-    MarkReady
-  else
-    MarkError(FRead.ErrorMessage);
-end;
-
-procedure TMyProfile.DoDetach;
-begin
-  if Assigned(FRead) then
-    FRead.OnCompleted := nil;
-  FRead := nil;
-end;
-```
-
-## Backends
-
-`TLazBle.Create` uses SimpleBLE by default. Backend replacement remains part of
-the supported API: implement the asynchronous `ILazBleBackend` interface and
-inject it when creating the facade.
+To provide a backend, implement `ILazBleBackend` and inject it into the facade:
 
 ```pascal
 Backend := TMyBleBackend.Create;
 Ble := TLazBle.Create(Backend);
 ```
 
-Application-facing units are `LazBleTypes`, `LazBleBackend`,
-`LazBleOperation`, `LazBleGattOperation`, `LazBleGattSubscription`,
-`LazBleGattSession`, `LazBleGattProfile`, `LazBleByteChannel`, `LazBleClient`,
-`LazBleFacade`, `LazBleSync`, `LazBleNus`, `LazBleBattery`, and
-`LazBleSimpleBleBackend`. `LazBleCentralManager`, `LazBleClientInternal`,
-`LazBleReconnect` are package implementation units and are not a compatibility surface.
+Submit and BeginShutdown must return before delivering their corresponding
+events. Each accepted command produces exactly one terminal event. BeginShutdown
+drains pending work, reports cleanup failures with ShutdownFailed, and ends
+backend event delivery. Custom backends also copy submitted write buffers and
+honour the main-thread contract.
 
-## Build and test
+Application-facing units are `LazBleTypes`, `LazBleBackend`, `LazBleOperation`,
+`LazBleGattOperation`, `LazBleGattSubscription`, `LazBleGattSession`,
+`LazBleGattProfile`, `LazBleByteChannel`, `LazBleClient`, `LazBleFacade`,
+`LazBleSync`, `LazBleNus`, `LazBleBattery`, and `LazBleSimpleBleBackend`.
 
-The Lazarus package requires `SimpleDelphiBLEPackage` 1.3.0, the distribution's
-thin Lazarus wrapper in this Entime workspace. Prepare the verified release with
-`python3 scripts/setup-simpledelphible.py --archive /path/to/simpledelphible-1.3.0.zip`
-from the Entime root. Register package links in your chosen Lazarus configuration:
+## Examples and tests
 
-```sh
-lazbuild --ws=qt6 --add-package-link /path/to/simpledelphiblepackage.lpk
-lazbuild --ws=qt6 --add-package-link /path/to/lazble.lpk
-lazbuild --ws=qt6 --add-package-link /path/to/lazblelcl.lpk
-lazbuild --ws=qt6 /path/to/lazble.lpk
-```
+| Example | Purpose |
+| --- | --- |
+| [blescan](examples/blescan.lpr) | Discover devices and display scan results |
+| [gattinspect](examples/gattinspect.lpr) | Inspect services and characteristics |
+| [nusterminal](examples/nusterminal.lpr) | Send and receive NUS bytes with interactive input |
+| [batterymonitor](examples/batterymonitor.lpr) | Read and monitor Battery Level |
+| [LCL demo](examples/lcl/lazblelcldemo.lpi) | Select a device, connect, and close asynchronously |
 
-A standalone FPC build can instead use `-Fu` and `-Fi` for the official source
-and `-Fl` for the matching native libraries. When old libraries exist in other
-search paths, pass linker `-k-L/path/to/the/pinned/native-directory` as well.
-Deploy the native pair according to
-its platform loader requirements. The old `fpmake.pp` / `manifest.xml` packaging
-has been removed: upstream does not supply a compatible fppkg package, and LazBle
-does not maintain a second binding/package wrapper for it.
-
-Run the reproducible stage-3 checks from the Entime root:
+Build examples with their `.lpi` projects, for example:
 
 ```sh
-bash scripts/run-simpledelphible-stage3.sh /path/to/simpleble-v1.3.0
+lazbuild --ws=qt6 examples/nusterminal.lpi
+lazbuild --ws=qt6 examples/lcl/lazblelcldemo.lpi
 ```
 
-The script builds upstream PLAIN, runs core/profile regressions and native backend
-integration against PLAIN (without Bluetooth hardware), and builds the Lazarus
-runtime packages. The native tests intentionally reject a production backend.
-Run `bash scripts/run-simpledelphible-stage4.sh` for LCL, design-package,
-examples, console input, Entime close and production deployment checks. It deploys
-the production pair to LCL test and example executable directories. A plain
-`lazbuild --ws=qt6` build does not copy runtime libraries; deploy them explicitly.
+Console and LCL example executables are written to `examples/bin`; deploy the
+native libraries there. Interactive console input continues servicing callbacks
+while waiting for a line, including partial input and EOF.
+
+The core/profile/backend suite is in `tests/lazbletests.lpr`. Its native backend
+tests require SimpleDelphiBLE 1.3.0 with the upstream PLAIN implementation; keep
+that runtime separate from the production libraries used by applications.
+Build PLAIN from the matching SimpleBLE 1.3.0 source:
+
+```sh
+cmake -S /path/to/simpleble/simplecble -B /path/to/plain-build \
+  -DSIMPLEBLE_PLAIN=ON -DBUILD_SHARED_LIBS=ON -DCMAKE_BUILD_TYPE=Release
+cmake --build /path/to/plain-build
+```
+
+Compile the suite from `tests`, substituting the PLAIN library path:
+
+```sh
+mkdir -p bin/plain lib/plain
+fpc -Fu../src/core -Fu../src/backends -Fu../src/profiles \
+  -Fubackend -Fubattery -Fucore -Funus -Fusupport \
+  -Fu../simpledelphible/source -Fi../simpledelphible/source \
+  -Fl/path/to/plain-build/lib -k-L/path/to/plain-build/lib \
+  -FUlib/plain -FEbin/plain lazbletests.lpr
+LD_LIBRARY_PATH=/path/to/plain-build/lib bin/plain/lazbletests --all --format=plain
+```
+
+Build the LCL suite with its package dependencies registered:
+
+```sh
+lazbuild --ws=qt6 tests/lcl/lazblelcltests.lpi
+```
+
+Deploy the production native libraries to `tests/bin`, then run
+`tests/bin/lazblelcltests --all --format=plain`.
 
 ## License
 
-LazBle is released under the MIT License. Native BLE backends and their runtime
-libraries retain their own licenses.
+LazBle uses the [MIT License](LICENSE). SimpleDelphiBLE and its native libraries
+retain their own licenses; include the distribution's license with deployed
+runtime files.

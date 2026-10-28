@@ -2,54 +2,77 @@
 
 ## [Unreleased]
 
+Changes for LazBle **2.0.0**, including breaking API and dependency changes.
+
 ### Added
 
-- Add `LazBleGetAbout` and `DiagnosticInfo` for library versions and BLE
-  diagnostics. Reading the snapshot does not start BLE operations.
+- `LazBleGetAbout` and `DiagnosticInfo` for package, binding, backend, native
+  version, adapter, and availability information. Reading diagnostics does not
+  start BLE operations. Custom backends provide identity through
+  `ILazBleBackend.GetBackendName`.
+- Named negative LazBle error codes, distinct from native error ordinals.
+- `TLazBleBackendEvent.ShutdownFailed` so custom backends can report cleanup
+  failure independently of the error code and message.
+- `TLazBleComponent.ShutdownAsync` to observe asynchronous cleanup, and
+  `TLazBleLclClient.OnUnconfigureClient` to release borrowed client/profile
+  references before detachment or removal.
 
 ### Changed
 
-- Backends now provide their name through `ILazBleBackend.GetBackendName`.
-- Replace the internal C driver with the public SimpleDelphiBLE 1.3.0 API.
-  Adapters and peripherals are borrowed from upstream; native events use
-  `edMainThread`, blocking commands run on one worker, and completion uses RTL
-  synchronization. Remove the old loader, driver interface, and event worker.
-- Explicit shutdown detaches handlers, unsubscribes and disconnects on the
-  worker, then joins it before completion. Allow a new backend after shutdown.
-- Preserve actual outcomes of started native Connect/GATT calls instead of
-  compensating successful effects after cancellation.
-- Require matching native libraries before startup, including for fake-backend
-  test executables. Remove obsolete fppkg metadata; use the Lazarus wrapper or
-  direct FPC source/library paths.
-- Adopt upstream GATT records/capability booleans and UnicodeString descriptors;
-  remove the conversion layer and automatic deep copies. Snapshots are read-only.
-- Make core, profiles, and custom backend delivery main-thread-only; remove their
-  redundant locks and marshal reconnect timer actions once through RTL Queue.
-- Remove `IBleOperation.Timeout` / `lbopTimedOut`. Cancellation preserves real
-  command outcomes, including native error 0/empty text and old-generation GATT
-  results after connection loss. Remove cancellation rollback Disconnect calls.
-- Retire Unsubscribe delivery immediately and chain pending Notify cleanup without
-  early success. Cleanup is not cancellable; a failed unsubscribe disconnects
-  its session and preserves reconnect policy.
-- Preserve accepted command results during shutdown and propagate cleanup failure
-  with an explicit ShutdownFailed flag. Support the next async request from a
-  completion callback and detach pending-operation callbacks on owner teardown.
-- Move the TLazBleSync main-loop/deadline update forward from stage 4 because
-  removing Timeout requires updating its wait semantics now.
-- Deliver LCL and timing transport callbacks directly on the main thread; remove
-  LazBleLclDispatch, its message clones, and the obsolete scan TimedOut state.
-- Add TLazBleComponent.ShutdownAsync and OnUnconfigureClient. Await cleanup before
-  freeing GUI owners and release borrowed profiles before core-client removal.
-  The LCL demo uses asynchronous CloseQuery; console input services callbacks.
-- Remove legacy loader diagnostics; expose BindingName = SimpleDelphiBLE and
-  BindingVersion = 1.3.0. Align package metadata with unreleased LazBle 2.0.0.
-- Replace injected C-driver tests with upstream PLAIN integration. Hardware,
-  Windows runtime, clean-system/IDE verification and release remain for stage 5.
+- Use the public SimpleDelphiBLE **1.3.0** API and its matching native libraries.
+  Upstream owns adapters and peripherals; its main-thread events drive the
+  backend, while one command worker performs blocking BLE calls.
+- Require main-thread access to the API, state, handler registration, and object
+  lifetime, including for custom backends. Reconnect actions and LCL callbacks
+  run on that thread; LCL no longer queues a second delivery of each event.
+- Use upstream GATT records, boolean characteristic capabilities, and UUID
+  strings for descriptors. Managed GATT/data snapshots are read-only by
+  contract, without automatic deep copies; submitted write buffers are copied.
+- Treat cancellation as a request. Queued work can be skipped, but started
+  native calls retain their actual success/failure and effects. Cancelling
+  connection or profile attachment does not trigger a rollback Disconnect.
+- Deliver notifications only after subscription readiness. Unsubscribe closes
+  local delivery immediately and waits for pending Notify cleanup; native
+  failure leaves the token inactive and disconnects the affected session.
+  Explicit Disconnect and Unsubscribe cleanup continue after cancellation.
+- Require completed `ShutdownAsync` before freeing active facade/LCL owners.
+  Shutdown drains accepted work and stops the worker before completion; cleanup
+  failure is returned to the caller. A new default backend can be used after
+  the previous owner has completed cleanup and been released.
+- Make `TLazBleSync` pump `CheckSynchronize`. Its deadline limits waiting and
+  does not cancel the operation or replace its eventual result.
+- Keep console example callbacks running while waiting for input. The LCL demo
+  defers form closure until asynchronous shutdown completes.
+- Require native libraries at link time and process startup, including for
+  executables using a fake/custom backend. Compile the official SimpleDelphiBLE
+  sources directly from a locally downloaded distribution in `simpledelphible/`,
+  which is entirely ignored by Git. Configure target-specific native link paths
+  without an auxiliary binding package, including macOS Intel and Apple Silicon.
+- Align core, LCL, and design package versions with unreleased LazBle 2.0.0.
+
+### Removed
+
+- Dependency on SimpleBlePascal, the internal C-driver abstraction, custom
+  native loader and `SIMPLECBLE_LIBRARY_DIR` lookup, and separate event worker.
+- `IBleOperation.Timeout`, `lbopTimedOut`, and `lblssTimedOut`. Scan duration
+  remains supported and normally completes the scan successfully.
+- Legacy loader diagnostics: `MinimumNativeVersion`, `LoadWarning`,
+  `WarningMessage`, and `BackendWarning`. Use `BindingName`/`BindingVersion`
+  and the native version reported by an availability check.
+- `LazBleLclDispatch` and its cloned event messages.
+- Obsolete fppkg metadata (`fpmake.pp` and `manifest.xml`).
 
 ### Fixed
 
-- Cancel pending session operations safely during shutdown when cancellation
-  removes entries from the operation list.
+- Preserve backend/native error codes and messages through session operations
+  and shutdown, including failures with code 0 and empty text.
+- Cancel pending session operations safely when cancellation removes entries
+  from the operation list.
+- Keep accepted GATT command results after connection loss/reconnect without
+  applying an old unsubscribe failure to a new session.
+- Handle reentrant async actions and client/handler removal during callbacks.
+  A Disconnect or shutdown from the Connecting handler prevents a Connect
+  that has not yet been submitted.
 
 ## [1.0.0] - 2026-08-12
 
