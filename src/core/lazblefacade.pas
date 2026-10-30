@@ -12,7 +12,6 @@ uses
   LazBleOperation,
   LazBleGattSession,
   LazBleCentralManager,
-  LazBleClientInternal,
   LazBleClient,
   LazBleReconnect;
 
@@ -42,10 +41,6 @@ type
     procedure ScanFinished(Sender: TObject);
     procedure AvailabilityFinished(Sender: TObject);
     procedure CancelPendingOperations;
-    function ConnectSessionAsync(const ADeviceId: string):
-      IBleOperation;
-    function DisconnectSessionAsync(const ASession: TBleGattSession):
-      IBleOperation;
   protected
     constructor Create(const ABackend: ILazBleBackend;
       const AReconnectTimerFactory: ILazBleReconnectTimerFactory); overload;
@@ -95,20 +90,12 @@ type
   TBleClientAccess = class(TBleClient)
   public
     constructor CreateInternal(const ASession: TBleGattSession;
-      const AConnectSession: TLazBleConnectSessionEvent;
-      const ADisconnectSession: TLazBleDisconnectSessionEvent;
       const AReconnectTimer: ILazBleReconnectTimer);
   end;
 
   TBleCentralManagerAccess = class(TBleCentralManager)
   public
     procedure DetachBackendEventsInternal;
-  end;
-
-  TBleGattSessionAccess = class(TBleGattSession)
-  public
-    function ConnectInternal: IBleOperation;
-    function DisconnectInternal: IBleOperation;
   end;
 
   TBleOperationAccess = class(TBleOperation)
@@ -139,30 +126,15 @@ type
   end;
 
 constructor TBleClientAccess.CreateInternal(const ASession: TBleGattSession;
-  const AConnectSession: TLazBleConnectSessionEvent;
-  const ADisconnectSession: TLazBleDisconnectSessionEvent;
   const AReconnectTimer: ILazBleReconnectTimer);
 begin
-  inherited Create(ASession, AConnectSession, ADisconnectSession,
-    AReconnectTimer);
+  inherited Create(ASession, AReconnectTimer);
 end;
 
 procedure TBleCentralManagerAccess.DetachBackendEventsInternal;
 begin
   LazBleRequireMainThread;
   DetachBackendEvents;
-end;
-
-function TBleGattSessionAccess.ConnectInternal: IBleOperation;
-begin
-  LazBleRequireMainThread;
-  Result := BeginConnect;
-end;
-
-function TBleGattSessionAccess.DisconnectInternal: IBleOperation;
-begin
-  LazBleRequireMainThread;
-  Result := BeginDisconnect;
 end;
 
 constructor TBleOperationAccess.CreateInternal(
@@ -453,8 +425,7 @@ begin
   if not Assigned(Session) then
     raise EInvalidOperation.Create(
       'Cannot create a BLE client after shutdown has started');
-  Result := TBleClientAccess.CreateInternal(Session, @ConnectSessionAsync,
-    @DisconnectSessionAsync, FReconnectTimerFactory.CreateTimer);
+  Result := TBleClientAccess.CreateInternal(Session, FReconnectTimerFactory.CreateTimer);
   FClients.Add(Result);
 end;
 
@@ -473,27 +444,6 @@ begin
       'BLE client must be disconnected or in error before it can be removed');
   FClients.Delete(Index);
   AClient.Free;
-end;
-
-function TLazBle.ConnectSessionAsync(const ADeviceId: string): IBleOperation;
-var Session: TBleGattSession; Operation: TBleOperationAccess;
-begin
-  LazBleRequireMainThread;
-  Session := FManager.CreateSession(ADeviceId);
-  if Session <> nil then Exit(TBleGattSessionAccess(Session).ConnectInternal);
-  Operation := TBleOperationAccess.CreateInternal(nil);
-  Result := Operation;
-  Operation.Finish(lbopFailed, LazBleErrorInvalidState, 'Could not create BLE session');
-end;
-
-function TLazBle.DisconnectSessionAsync(const ASession: TBleGattSession): IBleOperation;
-var Operation: TBleOperationAccess;
-begin
-  LazBleRequireMainThread;
-  if ASession <> nil then Exit(TBleGattSessionAccess(ASession).DisconnectInternal);
-  Operation := TBleOperationAccess.CreateInternal(nil);
-  Result := Operation;
-  Operation.Finish(lbopFailed, LazBleErrorInvalidState, 'BLE session is not assigned');
 end;
 
 function TLazBle.ShutdownAsync: IBleOperation;

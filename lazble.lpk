@@ -52,11 +52,6 @@
         <AddToUsesPkgSection Value="False"/>
       </Item>
       <Item>
-        <Filename Value="src\core\lazbleclientinternal.pas"/>
-        <UnitName Value="LazBleClientInternal"/>
-        <AddToUsesPkgSection Value="False"/>
-      </Item>
-      <Item>
         <Filename Value="src\core\lazbleclient.pas"/>
         <UnitName Value="LazBleClient"/>
       </Item>

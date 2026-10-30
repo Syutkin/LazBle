@@ -13,7 +13,6 @@ uses
   LazBleGattSubscription,
   LazBleGattSession,
   LazBleGattProfile,
-  LazBleClientInternal,
   LazBleReconnect;
 
 type
@@ -34,8 +33,6 @@ type
     ConnectAsync; the owning TLazBle manages the client's lifetime. }
   TBleClient = class
   private
-    FConnectSession: TLazBleConnectSessionEvent;
-    FDisconnectSession: TLazBleDisconnectSessionEvent;
     FSession: TBleGattSession;
     FProfiles: TList;
     FState: TLazBleClientState;
@@ -87,8 +84,6 @@ type
     procedure CancelForShutdown;
     { Applications obtain clients from TLazBle.CreateClient. }
     constructor Create(const ASession: TBleGattSession;
-      const AConnectSession: TLazBleConnectSessionEvent;
-      const ADisconnectSession: TLazBleDisconnectSessionEvent;
       const AReconnectTimer: ILazBleReconnectTimer);
     property Generation: QWord read GetGeneration;
     property Profiles[const AIndex: Integer]: TBleGattProfile read GetProfile;
@@ -156,6 +151,8 @@ type
 
   TBleGattSessionAccess = class(TBleGattSession)
   public
+    function ConnectInternal: IBleOperation;
+    function DisconnectInternal: IBleOperation;
     procedure AddHandler(const AHandler: TLazBleSessionStateChangedEvent);
     procedure RemoveHandler(const AHandler: TLazBleSessionStateChangedEvent);
   end;
@@ -211,6 +208,12 @@ begin
   RemoveStateChangedHandler(AHandler);
 end;
 
+function TBleGattSessionAccess.ConnectInternal: IBleOperation;
+begin Result := BeginConnect; end;
+
+function TBleGattSessionAccess.DisconnectInternal: IBleOperation;
+begin Result := BeginDisconnect; end;
+
 procedure TBleGattSessionAccess.AddHandler(
   const AHandler: TLazBleSessionStateChangedEvent);
 begin
@@ -226,21 +229,13 @@ begin
 end;
 
 constructor TBleClient.Create(const ASession: TBleGattSession;
-  const AConnectSession: TLazBleConnectSessionEvent;
-  const ADisconnectSession: TLazBleDisconnectSessionEvent;
   const AReconnectTimer: ILazBleReconnectTimer);
 begin
   inherited Create;
   if not Assigned(ASession) then
     raise EArgumentNilException.Create('ASession');
-  if not Assigned(AConnectSession) then
-    raise EArgumentNilException.Create('AConnectSession');
-  if not Assigned(ADisconnectSession) then
-    raise EArgumentNilException.Create('ADisconnectSession');
   if not Assigned(AReconnectTimer) then
     raise EArgumentNilException.Create('AReconnectTimer');
-  FConnectSession := AConnectSession;
-  FDisconnectSession := ADisconnectSession;
   FSession := ASession;
   FProfiles := TList.Create;
   FReconnectController := TLazBleReconnectController.Create(
@@ -293,8 +288,6 @@ begin
   FProfiles.Free;
   FReconnectController.Free;
   FSession := nil;
-  FConnectSession := nil;
-  FDisconnectSession := nil;
   inherited Destroy;
 end;
 
@@ -514,7 +507,7 @@ begin
             begin
               DetachProfiles;
               FDisconnectGeneration := FSession.Generation;
-              FSessionDisconnectOperation := FDisconnectSession(FSession);
+              FSessionDisconnectOperation := TBleGattSessionAccess(FSession).DisconnectInternal;
               SetState(lbcstDisconnecting);
               FSessionDisconnectOperation.OnCompleted :=
                 @SessionDisconnectCompleted;
@@ -695,7 +688,7 @@ begin
   LazBleRequireMainThread;
   DetachProfiles;
   FDisconnectGeneration := FSession.Generation;
-  FSessionDisconnectOperation := FDisconnectSession(FSession);
+  FSessionDisconnectOperation := TBleGattSessionAccess(FSession).DisconnectInternal;
   FSessionDisconnectOperation.OnCompleted := @SessionDisconnectCompleted;
 end;
 
@@ -778,7 +771,7 @@ begin
     Operation.Finish(lbopCancelled);
     Exit;
   end;
-  FSessionConnectOperation := FConnectSession(DeviceId);
+  FSessionConnectOperation := TBleGattSessionAccess(FSession).ConnectInternal;
   FSessionConnectOperation.OnCompleted := @SessionConnectCompleted;
 end;
 
@@ -810,7 +803,7 @@ begin
   SetState(lbcstDisconnecting);
   DetachProfiles;
   FDisconnectGeneration := FSession.Generation;
-  FSessionDisconnectOperation := FDisconnectSession(FSession);
+  FSessionDisconnectOperation := TBleGattSessionAccess(FSession).DisconnectInternal;
   FSessionDisconnectOperation.OnCompleted := @SessionDisconnectCompleted;
 end;
 
