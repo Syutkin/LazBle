@@ -38,16 +38,15 @@ The main types are:
 Use Free Pascal 3.2.2 or later and, for LCL components, Lazarus. The default
 backend requires the SimpleDelphiBLE 1.3.1 API. Use the official
 [1.3.1-dev.25 distribution](https://github.com/simpleble/simpledelphible/releases/tag/v1.3.1-dev.25)
-in `simpledelphible/`. This entire directory is local and ignored by Git,
-including the upstream package, sources, native library, and licenses.
+supplied separately from LazBle.
 
-Extract the distribution and place its contents in LazBle's `simpledelphible`
-directory:
+Extract it to a convenient directory. The commands below use this layout:
 
 ```text
-lazble/
-  lazble.lpk
-  simpledelphible/           # official release contents; entirely ignored by Git
+workspace/
+  lazble/
+    lazble.lpk
+  simpledelphible/           # official distribution
     SimpleDelphiBLEPackage.lpk
     LICENSE.md
     source/
@@ -59,12 +58,14 @@ lazble/
       ...
 ```
 
+Run commands from `lazble/` unless another directory is specified.
+
 | Supported target | Distribution directory | Runtime file |
 | --- | --- | --- |
-| Linux x86_64 | `simpledelphible/lib/linux-x64` | `libsimplecble.so` |
-| Windows x86_64 | `simpledelphible/lib/win64` | `simplecble.dll` |
-| macOS 15.0+ Intel x86_64 | `simpledelphible/lib/macos-x64` | `libsimplecble.dylib` |
-| macOS 15.0+ Apple Silicon (aarch64) | `simpledelphible/lib/macos-arm64` | `libsimplecble.dylib` |
+| Linux x86_64 | `lib/linux-x64` | `libsimplecble.so` |
+| Windows x86_64 | `lib/win64` | `simplecble.dll` |
+| macOS 15.0+ Intel x86_64 | `lib/macos-x64` | `libsimplecble.dylib` |
+| macOS 15.0+ Apple Silicon (aarch64) | `lib/macos-arm64` | `libsimplecble.dylib` |
 
 Deploy the matching runtime file beside the executable. For a macOS app bundle,
 use `MyApp.app/Contents/MacOS`. With no explicit path, SimpleDelphiBLE first
@@ -72,12 +73,17 @@ looks in the executable's directory, then uses the system library search.
 On Linux, the runtime can instead be installed in a directory visible to the
 system dynamic loader, or supplied through `LD_LIBRARY_PATH`.
 
-To select a file or directory explicitly, set `TSimpleDelphiBLE.LibraryPath`
-from the `SimpleDelphiBLE` unit before the first native call:
+To select a runtime file or existing directory, set `TLazBle.LibraryPath`
+from the `LazBleFacade` unit on the main thread, before starting BLE operations:
 
 ```pascal
-TSimpleDelphiBLE.LibraryPath := '/path/to/native';
+TLazBle.LibraryPath := '/path/to/native';
 ```
+
+This process-wide property directly accesses `TSimpleDelphiBLE.LibraryPath`.
+An empty string enables the executable/system search. Reading or setting the
+property does not load the runtime; changing it after loading does not switch
+the loaded library.
 
 The runtime loads on the first native call. Building, starting the application,
 creating the facade or LCL components, and reading package information or
@@ -94,7 +100,7 @@ The application needs [Bluetooth permission](https://docs.simpleble.org/fundamen
 Register that package before the LazBle packages:
 
 ```sh
-lazbuild --ws=qt6 --add-package-link simpledelphible/SimpleDelphiBLEPackage.lpk
+lazbuild --ws=qt6 --add-package-link ../simpledelphible/SimpleDelphiBLEPackage.lpk
 lazbuild --ws=qt6 --add-package-link lazble.lpk
 lazbuild --ws=qt6 --add-package-link lazblelcl.lpk
 lazbuild --ws=qt6 lazble.lpk
@@ -113,16 +119,16 @@ native runtime; it is needed when the IDE process itself performs BLE work.
 ### Direct FPC use
 
 Add `src/core`, `src/backends`, and `src/profiles` to `-Fu`. Add the official
-`simpledelphible/source` directory to both `-Fu` and `-Fi`. Native linker paths
+`../simpledelphible/source` directory to both `-Fu` and `-Fi`. Native linker paths
 and rpath options are not required. Keep compiled units for different targets
 in separate `-FU` directories. Unix console programs must include `cthreads`
 first in their uses clause.
 
 ## Console usage
 
-This program connects to a NUS device, waits for profile readiness, sends one
-byte, and completes shutdown before releasing the facade. Pass the device ID
-as its command-line argument.
+This program scans, connects to a NUS device, waits for profile readiness,
+sends one byte, and completes shutdown before releasing the facade. Pass the
+device ID as its command-line argument.
 
 ```pascal
 program NusExample;
@@ -155,6 +161,7 @@ begin
 
   Ble := TLazBle.Create;
   try
+    Await(Ble.ScanAsync('', 5000));
     Client := Ble.CreateClient(ParamStr(1));
     Nus := TNusProfile.Create;
     Client.AddProfile(Nus);
@@ -198,6 +205,16 @@ in discovery order. Installing a result handler does not replay earlier results.
 Reaching the scan duration normally completes the scan successfully. Duration 0
 keeps scanning until cancellation or shutdown. Use the scan operation's `Cancel`
 method to stop it and await `lbopCancelled` before starting another scan.
+
+`ConnectAsync` uses an upstream peripheral from an earlier scan, an existing
+connection, or the paired-device list. An unknown DeviceId fails with
+`LazBleErrorDeviceNotKnown`; Connect does not start a scan. Creating a client
+only creates its local state. Scan explicitly before connecting an unknown
+device, including one whose ID was restored from settings.
+
+Connected GATT requests reuse the selected peripheral. Use
+`CheckAvailabilityAsync` for adapter and power checks; GATT commands do not
+repeat these checks before calling the native operation.
 
 `TLazBle` owns clients created by `CreateClient`. Device IDs must be unique
 within a facade. After successful `AddProfile`, the client owns that profile.
@@ -254,8 +271,8 @@ reads, handler registration, operation submission, cancellation, and profile
 access. Custom backends deliver callbacks on the main thread as well.
 
 The default backend uses SimpleDelphiBLE Async methods and `edMainThread`
-delivery. Commands run sequentially; only metadata and scan calls without an
-upstream Async method use a LazBle background executor. Console applications
+delivery. Commands and internal cleanup share one sequential FIFO queue.
+Synchronous metadata and scan calls run in the background. Console applications
 service `CheckSynchronize`; LCL services it through the GUI event loop. Scan
 and reconnect timers deliver their actions on the main thread.
 
@@ -265,9 +282,11 @@ or free the owner inside its callback. Defer destruction with
 immediately when called from the main thread.
 
 Complete `ShutdownAsync` before freeing an active facade or LCL owner. Shutdown
-stops new work and application callbacks, drains accepted commands, removes
-handlers/subscriptions, and disconnects. It completes after pending command and
-cleanup callbacks return. Inspect its terminal result for cleanup failures.
+stops new work and application data callbacks, cancels queued requests, waits
+for started commands, then unsubscribes and disconnects through the same queue.
+It completes after command and cleanup callbacks return. Its terminal result
+preserves the first cleanup failure. A native NotConnected result during
+internal cleanup is treated as an already closed link.
 A native call can delay shutdown until it returns; there is no guaranteed
 cleanup deadline. Destruction before completed shutdown can block and abandons
 pending logical results.
@@ -288,8 +307,9 @@ enters Error and explicit Disconnect remains available.
 
 Notifications and indications are delivered only after successful subscription
 readiness; early values are dropped. A characteristic can have one active
-subscription per default backend. Upstream queued events have no original session token, so
-absolute attribution of notifications across reconnects is not guaranteed.
+subscription per default backend. SimpleDelphiBLE routes values to the registered
+subscription handler. Upstream queued events have no original session token,
+so absolute attribution of notifications across reconnects is not guaranteed.
 
 Unsubscribe immediately closes local delivery. With a pending Notify or Indicate,
 cleanup waits for its outcome and unsubscribes if registration succeeds. A failed
@@ -454,7 +474,7 @@ Compile the suite from `tests` and place the PLAIN runtime beside its executable
 mkdir -p bin/plain lib/plain
 fpc -Fu../src/core -Fu../src/backends -Fu../src/profiles \
   -Fubackend -Fubattery -Fucore -Funus -Fusupport \
-  -Fu../simpledelphible/source -Fi../simpledelphible/source \
+  -Fu../../simpledelphible/source -Fi../../simpledelphible/source \
   -FUlib/plain -FEbin/plain lazbletests.lpr
 cp /path/to/plain-runtime/lib/libsimplecble.so bin/plain/
 bin/plain/lazbletests --all --format=plain

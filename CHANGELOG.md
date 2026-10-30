@@ -2,24 +2,28 @@
 
 ## [Unreleased]
 
-Official SimpleDelphiBLE package integration, dynamic runtime loading, and GATT
-descriptor and indication support.
+Official SimpleDelphiBLE package integration, configurable runtime loading,
+and GATT descriptor and indication support.
 
 ### Added
 
 - Descriptor reads and writes through `ReadDescriptorAsync` and `WriteDescriptorAsync`.
 - Indications through `SubscribeAsync(..., lbsmIndicate)` using the existing subscription API.
+- Process-wide runtime path configuration through `TLazBle.LibraryPath`.
 
 ### Changed
 
 - Requires the SimpleDelphiBLE 1.3.1 API and official Lazarus runtime package.
-- One native SimpleCBLE library, loaded on demand from the executable directory, system search path, or `TSimpleDelphiBLE.LibraryPath`.
+- One native SimpleCBLE library, loaded on demand from the executable directory, system search path, or `TLazBle.LibraryPath`.
 - Missing native runtime is reported as an operation failure; compilation and application startup do not require it.
 - Subscriptions validate the discovered characteristic and its Notify/Indicate capability.
+- Connecting an unknown DeviceId requires an explicit scan.
+- GATT commands reuse their peripheral without repeating adapter availability checks.
 
 ### Fixed
 
 - A delayed stop event from a previous scan no longer interrupts the next scan.
+- A native NotConnected result during shutdown cleanup no longer counts as a failure.
 
 ## [2.0.0] - 2026-10-28
 
