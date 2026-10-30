@@ -753,8 +753,9 @@ begin
   if Stopping or (FScan = nil) or (FScan.Adapter <> Sender) then Exit;
   if FScan.Request.Kind <> lbckStartScan then Exit;
   if FScan.ScanStopped then Exit;
+  { Upstream may deliver a previous scan's queued stop after a new scan starts. }
+  if not FScan.ScanStarted or Sender.ScanIsActive then Exit;
   FScan.ScanStopped := True;
-  FScan.Wake.SetEvent;
   Deliver(EventFor(FScan, lbekScanStopped));
 end;
 

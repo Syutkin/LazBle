@@ -43,7 +43,9 @@ type
     procedure MissingAdapterIsAsyncFailure;
     procedure PoweredOffAdapterIsUnavailable;
     procedure ScanUsesMainThreadEventsAndFinalSnapshot;
-    procedure StopScanWakesWorker;
+    procedure StopScanCompletesActiveScan;
+    procedure QueuedWritesPreserveOrderAndSubmittedData;
+    procedure CancelledScanAllowsNextScan;
     procedure QueuedCancellationSkipsNativeCall;
     procedure ConnectDiscoveryAndGatt;
     procedure NativeErrorZeroIsFailure;
@@ -282,7 +284,7 @@ begin
   AssertEquals('Plain Peripheral', E.DeviceName);
 end;
 
-procedure TLazBleSimpleBleBackendTest.StopScanWakesWorker;
+procedure TLazBleSimpleBleBackendTest.StopScanCompletesActiveScan;
 var C: TLazBleBackendCommand; ScanId, StopId: TBleOperationId;
 begin
   C := Request(lbckStartScan); C.TimeoutMs := 0;
@@ -291,6 +293,56 @@ begin
   StopId := Send(lbckStopScan);
   AssertEquals(Ord(lbekOperationSucceeded), Ord(Wait(ScanId).Kind));
   AssertEquals(Ord(lbekOperationSucceeded), Ord(Wait(StopId).Kind));
+end;
+
+procedure TLazBleSimpleBleBackendTest.QueuedWritesPreserveOrderAndSubmittedData;
+var
+  C: TLazBleBackendCommand;
+  FirstId, SecondId, ReadId: TBleOperationId;
+  E: TLazBleBackendEvent;
+  PreviousTerminal: TBleOperationId;
+begin
+  Connect;
+  C := Request(lbckWrite);
+  C.WriteMode := lbwmRequest;
+  C.Value := TBytes.Create(11);
+  FirstId := FBackend.Submit(C);
+  C.Value[0] := 22;
+  SecondId := FBackend.Submit(C);
+  C.Value[0] := 33;
+  ReadId := Send(lbckRead);
+  AssertFalse('Submit does not deliver completion inline', FEvents.Terminal(ReadId));
+  AssertEquals(Ord(lbekOperationSucceeded), Ord(Wait(FirstId).Kind));
+  AssertEquals(Ord(lbekOperationSucceeded), Ord(Wait(SecondId).Kind));
+  AssertEquals(Ord(lbekOperationSucceeded), Ord(Wait(ReadId).Kind));
+  E := FEvents.Last(lbekReadResult, ReadId);
+  AssertEquals(1, Length(E.Value));
+  AssertEquals('The queued write owns its submitted bytes', 22, E.Value[0]);
+  PreviousTerminal := 0;
+  for E in FEvents.Events do
+    if LazBleBackendEventIsTerminal(E) then
+    begin
+      if E.OperationId = SecondId then AssertEquals(FirstId, PreviousTerminal);
+      if E.OperationId = ReadId then AssertEquals(SecondId, PreviousTerminal);
+      PreviousTerminal := E.OperationId;
+    end;
+end;
+
+procedure TLazBleSimpleBleBackendTest.CancelledScanAllowsNextScan;
+var
+  C: TLazBleBackendCommand;
+  FirstId, SecondId: TBleOperationId;
+begin
+  C := Request(lbckStartScan);
+  C.TimeoutMs := 0;
+  FirstId := FBackend.Submit(C);
+  WaitForEvent(lbekScanStarted);
+  FBackend.Cancel(FirstId);
+  AssertEquals(Ord(lbekOperationCancelled), Ord(Wait(FirstId).Kind));
+  SecondId := Send(lbckStartScan);
+  AssertEquals(Ord(lbekOperationSucceeded), Ord(Wait(SecondId).Kind));
+  AssertEquals(1, FEvents.Count(lbekScanStarted, SecondId));
+  AssertEquals(1, FEvents.Count(lbekScanStopped, SecondId));
 end;
 
 procedure TLazBleSimpleBleBackendTest.QueuedCancellationSkipsNativeCall;
