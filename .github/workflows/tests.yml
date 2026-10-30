@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       binding_release:
-        description: 'SimpleDelphiBLE release tag (empty: latest stable)'
+        description: 'SimpleDelphiBLE release tag (empty: latest, including prereleases)'
         type: string
         required: false
         default: ''
@@ -39,12 +39,15 @@ jobs:
           BINDING_RELEASE: ${{ inputs.binding_release }}
         run: |
           set -euo pipefail
-          endpoint=repos/simpleble/simpledelphible/releases/latest
+          endpoint='repos/simpleble/simpledelphible/releases?per_page=100'
           if [[ -n "$BINDING_RELEASE" ]]; then
             endpoint="repos/simpleble/simpledelphible/releases/tags/$BINDING_RELEASE"
           fi
           gh api "$endpoint" --jq '
-            . as $release |
+            (if type == "array" then
+              map(select(.draft == false)) | max_by(.published_at)
+            else . end
+              // error("No published SimpleDelphiBLE release found")) as $release |
             (($release.body | capture("simpleble/simpleble@(?<sha>[0-9a-f]{40})").sha)
               // error("Release description does not identify the SimpleBLE source commit")) as $sha |
             (first($release.assets[] |
