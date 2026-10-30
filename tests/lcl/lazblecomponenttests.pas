@@ -836,7 +836,7 @@ begin
 
     AssertEquals(0, FResultCount);
     AssertEquals(0, FCompletionCount);
-    AssertFalse(FBackendObject.HasEventSink);
+    AssertTrue(FBackendObject.ShutdownStarted);
   finally
     Thread.WaitFor;
     Thread.Free;

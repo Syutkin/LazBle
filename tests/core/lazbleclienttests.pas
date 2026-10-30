@@ -41,13 +41,9 @@ type
 
   TTrackedGattProfile = class(TManualGattProfile)
   private
-    FBackend: TFakeLazBleBackend;
-    FBackendHadSinkWhenDestroyed: PBoolean;
     FDestroyCount: PInteger;
   public
-    constructor Create(const ABackend: TFakeLazBleBackend;
-      const ADestroyCount: PInteger;
-      const ABackendHadSinkWhenDestroyed: PBoolean);
+    constructor Create(const ADestroyCount: PInteger);
     destructor Destroy; override;
   end;
 
@@ -233,24 +229,12 @@ begin
   Result := AttachedGeneration;
 end;
 
-constructor TTrackedGattProfile.Create(const ABackend: TFakeLazBleBackend;
-  const ADestroyCount: PInteger;
-  const ABackendHadSinkWhenDestroyed: PBoolean);
-begin
-  inherited Create;
-  FBackend := ABackend;
-  FDestroyCount := ADestroyCount;
-  FBackendHadSinkWhenDestroyed := ABackendHadSinkWhenDestroyed;
-end;
+constructor TTrackedGattProfile.Create(const ADestroyCount: PInteger);
+begin inherited Create; FDestroyCount := ADestroyCount; end;
 
 destructor TTrackedGattProfile.Destroy;
 begin
-  if Assigned(FDestroyCount) then
-    Inc(FDestroyCount^);
-  if Assigned(FBackendHadSinkWhenDestroyed) then
-    FBackendHadSinkWhenDestroyed^ := Assigned(FBackend) and
-      FBackend.HasEventSink;
-  FBackend := nil;
+  if FDestroyCount <> nil then Inc(FDestroyCount^);
   inherited Destroy;
 end;
 
@@ -1110,24 +1094,20 @@ end;
 
 procedure TLazBleClientTest.FacadeDetachesBackendBeforeDestroyingClientsAndProfiles;
 var
-  BackendHadSinkWhenProfileDestroyed: Boolean;
   Client: TBleClient;
   DestroyCount: Integer;
   Profile: TTrackedGattProfile;
 begin
-  BackendHadSinkWhenProfileDestroyed := False;
   DestroyCount := 0;
   Client := FBle.CreateClient('device-a');
-  Profile := TTrackedGattProfile.Create(FBackendObject, @DestroyCount,
-    @BackendHadSinkWhenProfileDestroyed);
+  Profile := TTrackedGattProfile.Create(@DestroyCount);
   Client.AddProfile(Profile);
 
   FBle.Free;
   FBle := nil;
 
   AssertEquals(1, DestroyCount);
-  AssertFalse(BackendHadSinkWhenProfileDestroyed);
-  AssertFalse(FBackendObject.HasEventSink);
+  AssertTrue(FBackendObject.ShutdownStarted);
 end;
 
 procedure TLazBleClientTest.ShutdownCancelsActiveClientConnection;
@@ -1159,7 +1139,7 @@ begin
   AssertEquals(Ord(lbopCancelled), Ord(ConnectOperation.State));
   AssertEquals(Ord(lbcstDisconnected), Ord(Client.State));
   AssertEquals(Ord(lbopSucceeded), Ord(ShutdownOperation.State));
-  AssertFalse(FBackendObject.HasEventSink);
+  AssertTrue(FBackendObject.ShutdownStarted);
 end;
 
 procedure TLazBleClientTest.ShutdownCancelsClientWhileProfileIsAttaching;

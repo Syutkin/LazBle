@@ -76,9 +76,6 @@ type
     procedure CompleteRequest(const AResult: TLazBleRequestResult);
     procedure ReceiveValue(const AValue: TBytes);
     constructor CreateFailed(const AErrorCode: Integer; const AErrorMessage: string);
-    constructor Create(const AOperationId: TBleOperationId;
-      const AGeneration: QWord; const AUnsubscribe: TLazBleUnsubscribe);
-    procedure HandleBackendEvent(const AEvent: TLazBleBackendEvent);
     procedure Invalidate(const AForce: Boolean = False);
     procedure DetachCallbacks;
     function CleanupPending: Boolean;
@@ -117,22 +114,6 @@ procedure TUnsubscribeOperation.Finish(AState: TLazBleOperationState;
   ACode: Integer; const Text: string);
 begin
   Complete(AState, ACode, Text);
-end;
-
-constructor TBleSubscription.Create(const AOperationId: TBleOperationId;
-  const AGeneration: QWord; const AUnsubscribe: TLazBleUnsubscribe);
-begin
-  inherited Create;
-  FOperationId := AOperationId;
-  FGeneration := AGeneration;
-  FUnsubscribe := AUnsubscribe;
-  if AOperationId = InvalidBleOperationId then
-  begin
-    FState := lbsubFailed;
-    FErrorCode := LazBleErrorInvalidState;
-    FErrorMessage := 'BLE subscription could not be started';
-  end
-  else FState := lbsubPending;
 end;
 
 constructor TBleSubscription.CreateRequest(const AGeneration: QWord;
@@ -305,39 +286,6 @@ begin
   if Operation = nil then Exit;
   Operation.OnCompleted := nil;
   FinishUnsubscribe(Operation.State, Operation.ErrorCode, Operation.ErrorMessage);
-end;
-
-procedure TBleSubscription.HandleBackendEvent(const AEvent: TLazBleBackendEvent);
-begin
-  LazBleRequireMainThread;
-  if (AEvent.Generation <> 0) and (AEvent.Generation <> FGeneration) then Exit;
-  if FClosing then Exit;
-  if (AEvent.OperationId = FOperationId) then
-    case AEvent.Kind of
-      lbekSubscribed:
-        begin
-          FSubscriptionId := AEvent.SubscriptionId;
-          if FState = lbsubPending then SetState(lbsubActive);
-        end;
-      lbekOperationSucceeded:
-        if FState = lbsubUnsubscribing then StartNativeUnsubscribe;
-      lbekOperationFailed, lbekOperationCancelled:
-        if FState = lbsubUnsubscribing then
-        begin
-          if FSubscriptionId <> InvalidBleSubscriptionId then StartNativeUnsubscribe
-          else FinishUnsubscribe(lbopSucceeded);
-        end
-        else if FState in [lbsubPending, lbsubActive] then
-        begin
-          FErrorCode := AEvent.ErrorCode;
-          FErrorMessage := AEvent.ErrorMessage;
-          if FErrorMessage = '' then FErrorMessage := 'BLE subscription did not complete';
-          SetState(lbsubFailed);
-        end;
-    end;
-  if (FState = lbsubActive) and (AEvent.Kind = lbekNotification) and
-    (AEvent.SubscriptionId = FSubscriptionId) and Assigned(FOnData) then
-    FOnData(Self, AEvent.Value);
 end;
 
 function TBleSubscription.CleanupPending: Boolean;

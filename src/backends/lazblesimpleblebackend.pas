@@ -19,7 +19,6 @@ type
       DeviceId: string;
       Observer: ILazBleLinkObserver;
       Generation: QWord;
-      ConnectId, DisconnectId: TBleOperationId;
       ConnectedReported, DisconnectedReported, NeedsDisconnect: Boolean;
       procedure Connected(Sender: TBlePeripheral);
       procedure Disconnected(Sender: TBlePeripheral);
@@ -50,10 +49,9 @@ type
       NativePeer: TBlePeripheral;
       Peer: TPeerContext;
       Subscription: TSubscriptionContext;
-      ResultEvent: TLazBleBackendEvent;
-      ScanDevices: TBleDeviceInfos;
-      Cancelled, Prepared, HasResult, Failed: Boolean;
-      ScanStarted, ScanStopped, StopRequested: Boolean;
+      ResultData: TLazBleRequestResult;
+      Cancelled, Prepared, Failed: Boolean;
+      StopRequested: Boolean;
       ErrorCode: Integer;
       ErrorText: string;
     end;
@@ -79,7 +77,6 @@ type
     FCurrent, FScan: TCommand;
     FAdapter: TBleAdapter;
     FAdapterId: string;
-    FSink: ILazBleBackendEventSink;
     FScanTimer: ILazBleReconnectTimer;
     FNextId: TBleOperationId;
     FNextSubscription: TBleSubscriptionId;
@@ -93,8 +90,6 @@ type
     function NewId: TBleOperationId;
     function FindPeer(const DeviceId: string): TPeerContext;
     function FindSubscription(Id: TBleSubscriptionId): TSubscriptionContext;
-    procedure Deliver(const Event: TLazBleBackendEvent);
-    function EventFor(Task: TCommand; Kind: TLazBleBackendEventKind): TLazBleBackendEvent;
     procedure Schedule;
     procedure Pump;
     procedure BeginCommand;
@@ -109,12 +104,11 @@ type
     procedure InvokeCurrent;
     procedure CommandDone(Sender: TObject; Error: Exception);
     procedure ReadDone(Sender: TBlePeripheral; const Data: TBytes; Error: Exception);
-    procedure FinishCurrent(Kind: TLazBleBackendEventKind;
+    procedure FinishCurrent(Kind: TLazBleRequestStatus;
       Code: Integer = 0; const Text: string = '');
     procedure FailCurrent(Error: Exception);
     procedure StopCurrentScan;
     procedure ScanElapsed;
-    procedure ScanStart(Sender: TBleAdapter);
     procedure ScanStop(Sender: TBleAdapter);
     procedure ScanFound(Sender: TBleAdapter; Peripheral: TBlePeripheral);
     procedure ReportPeer(Peer: TPeerContext; IsConnected: Boolean);
@@ -123,7 +117,6 @@ type
     constructor Create;
     destructor Destroy; override;
     function GetBackendName: string;
-    procedure SetEventSink(const AEventSink: ILazBleBackendEventSink);
     function Submit(const ACommand: TLazBleBackendCommand;
       const ACompletion: ILazBleRequestCompletion = nil;
       const AValues: ILazBleValueSink = nil;
@@ -155,6 +148,14 @@ begin
   if Error is EBleError then Result := Ord(EBleError(Error).Code)
   else if Error is EBackendError then Result := EBackendError(Error).Code
   else Result := LazBleErrorBackendUnavailable;
+end;
+
+procedure DeliverCompletion(const Target: ILazBleRequestCompletion;
+  const ResultData: TLazBleRequestResult);
+begin
+  if Target = nil then Exit;
+  try Target.CompleteRequest(ResultData);
+  except LazBleReportCallbackException; end;
 end;
 
 constructor TLazBleSimpleBleBackend.TMetadataWorker.Create(
@@ -211,7 +212,6 @@ destructor TLazBleSimpleBleBackend.Destroy;
 begin
   LazBleRequireMainThread;
   FDestroying := True;
-  FSink := nil;
   BeginShutdown;
   while not FShutdownDone do CheckSynchronize(10);
   FScanTimer.Cancel;
@@ -237,12 +237,6 @@ end;
 function TLazBleSimpleBleBackend.GetBackendName: string;
 begin
   Result := 'SimpleBLE';
-end;
-
-procedure TLazBleSimpleBleBackend.SetEventSink(const AEventSink: ILazBleBackendEventSink);
-begin
-  LazBleRequireMainThread;
-  FSink := AEventSink;
 end;
 
 function TLazBleSimpleBleBackend.FindPeer(const DeviceId: string): TPeerContext;
@@ -272,7 +266,7 @@ var
   I: Integer;
 begin
   LazBleRequireMainThread;
-  if FStopping then Exit(InvalidBleOperationId);
+  if FStopping or (ACompletion = nil) then Exit(InvalidBleOperationId);
   Task := TCommand.Create;
   Task.Id := NewId;
   Task.Request := ACommand;
@@ -329,40 +323,6 @@ begin
   Result := FShutdownId;
 end;
 
-procedure TLazBleSimpleBleBackend.Deliver(const Event: TLazBleBackendEvent);
-var
-  Sink: ILazBleBackendEventSink;
-begin
-  Sink := FSink;
-  if Sink <> nil then
-    try
-      Sink.HandleBackendEvent(Event);
-    except
-      try
-        if Assigned(ApplicationHandleException) then ApplicationHandleException(nil)
-        else ShowException(ExceptObject, ExceptAddr);
-      except
-        { A failing user exception reporter must not strand shutdown. }
-      end;
-    end;
-end;
-
-function TLazBleSimpleBleBackend.EventFor(Task: TCommand;
-  Kind: TLazBleBackendEventKind): TLazBleBackendEvent;
-begin
-  Result := Default(TLazBleBackendEvent);
-  Result.Kind := Kind;
-  Result.OperationId := Task.Id;
-  Result.Generation := Task.Request.Generation;
-  Result.BackendName := GetBackendName;
-  Result.DeviceId := Task.Request.DeviceId;
-  Result.ServiceUuid := Task.Request.ServiceUuid;
-  Result.CharacteristicUuid := Task.Request.CharacteristicUuid;
-  Result.DescriptorUuid := Task.Request.DescriptorUuid;
-  Result.SubscriptionId := Task.Request.SubscriptionId;
-  Result.AdapterId := Task.AdapterId;
-end;
-
 procedure TLazBleSimpleBleBackend.Schedule;
 begin
   if FQueued or FShutdownDone then Exit;
@@ -385,11 +345,11 @@ begin
   FPending.Delete(0);
   if FCurrent.Role = crShutdown then CompleteShutdown
   else if (FCurrent.Role = crRequest) and (FStopping or FCurrent.Cancelled) then
-    FinishCurrent(lbekOperationCancelled)
+    FinishCurrent(lbrsCancelled)
   else if FCurrent.Failed then
-    FinishCurrent(lbekOperationFailed, FCurrent.ErrorCode, FCurrent.ErrorText)
+    FinishCurrent(lbrsFailed, FCurrent.ErrorCode, FCurrent.ErrorText)
   else if (ActiveBackend <> nil) and (ActiveBackend <> Self) then
-    FinishCurrent(lbekOperationFailed, LazBleErrorAdapterAlreadyActive,
+    FinishCurrent(lbrsFailed, LazBleErrorAdapterAlreadyActive,
       'Another LazBle SimpleDelphiBLE backend is active')
   else
   begin
@@ -408,7 +368,7 @@ var
 begin
   FCurrent.Adapter := FAdapter;
   FCurrent.AdapterId := FAdapterId;
-  FCurrent.ResultEvent := EventFor(FCurrent, lbekOperationSucceeded);
+  FCurrent.ResultData := Default(TLazBleRequestResult);
   if FCurrent.Role = crCleanup then
   begin
     if FCurrent.Request.Kind = lbckStopScan then StartMetadata
@@ -417,7 +377,7 @@ begin
   end;
   if FCurrent.Request.Kind = lbckStopScan then
   begin
-    FinishCurrent(lbekOperationSucceeded);
+    FinishCurrent(lbrsSucceeded);
     Exit;
   end;
   if FCurrent.Request.Kind in [lbckCheckAvailability, lbckStartScan] then
@@ -501,10 +461,8 @@ begin
       begin
         if not Task.Adapter.IsPowered then
           raise EBackendError.Create(LazBleErrorBluetoothDisabled, 'Bluetooth adapter is powered off');
-        Task.ResultEvent.BackendVersion := UTF8Encode(TSimpleDelphiBLE.Version);
-        Task.ResultEvent.Kind := lbekAvailabilityResult;
-        Task.ResultEvent.Available := True;
-        Task.HasResult := True;
+        Task.ResultData.BackendVersion := UTF8Encode(TSimpleDelphiBLE.Version);
+        Task.ResultData.Availability := lbaAvailable;
       end;
     lbckConnect:
       begin
@@ -516,9 +474,7 @@ begin
       end;
     lbckDiscoverServices:
       begin
-        Task.ResultEvent.Services := Task.Peer.Native.Services;
-        Task.ResultEvent.Kind := lbekServicesDiscovered;
-        Task.HasResult := True;
+        Task.ResultData.Services := Task.Peer.Native.Services;
       end;
     lbckStartScan:
       if not Worker.FStopScan then Task.Adapter.ScanStart
@@ -526,12 +482,12 @@ begin
       begin
         Task.Adapter.ScanStop;
         Peers := Task.Adapter.ScanGetResults;
-        SetLength(Task.ScanDevices, Length(Peers));
+        SetLength(Task.ResultData.ScanResults, Length(Peers));
         for I := 0 to High(Peers) do
         begin
-          Task.ScanDevices[I].DeviceId := UTF8Encode(Peers[I].Address);
-          Task.ScanDevices[I].DeviceName := UTF8Encode(Peers[I].Identifier);
-          Task.ScanDevices[I].Rssi := Peers[I].Rssi;
+          Task.ResultData.ScanResults[I].DeviceId := UTF8Encode(Peers[I].Address);
+          Task.ResultData.ScanResults[I].DeviceName := UTF8Encode(Peers[I].Identifier);
+          Task.ResultData.ScanResults[I].Rssi := Peers[I].Rssi;
         end;
       end;
     lbckStopScan: if Task.Adapter.ScanIsActive then Task.Adapter.ScanStop;
@@ -541,8 +497,6 @@ end;
 procedure TLazBleSimpleBleBackend.MetadataDone(Worker: TMetadataWorker);
 var
   Task: TCommand;
-  Device: TBleDeviceInfo;
-  Event: TLazBleBackendEvent;
 begin
   Task := FCurrent;
   try
@@ -554,13 +508,12 @@ begin
       FAdapterId := Task.AdapterId;
       if not FStopping then
       begin
-        FAdapter.OnScanStart := @ScanStart;
         FAdapter.OnScanStop := @ScanStop;
         FAdapter.OnScanFound := @ScanFound;
         FAdapter.OnScanUpdated := @ScanFound;
       end;
     end;
-    Task.ResultEvent.AdapterId := Task.AdapterId;
+    Task.ResultData.AdapterId := Task.AdapterId;
     if Worker.FFailed then
     begin
       if FScan = Task then
@@ -568,7 +521,7 @@ begin
         FScanTimer.Cancel;
         FScanning := False;
       end;
-      FinishCurrent(lbekOperationFailed, Worker.FCode, Worker.FText);
+      FinishCurrent(lbrsFailed, Worker.FCode, Worker.FText);
       Exit;
     end;
     if Task.Request.Kind = lbckStartScan then
@@ -576,36 +529,19 @@ begin
       FScanning := not Worker.FStopScan;
       if not Worker.FStopScan then
       begin
-        ScanStart(Task.Adapter);
         if FStopping or Task.Cancelled or Task.StopRequested then StopCurrentScan
         else if Task.Request.TimeoutMs > 0 then FScanTimer.Start(Task.Request.TimeoutMs, @ScanElapsed);
         Exit;
       end;
       FScanTimer.Cancel;
-      if Task.Completion = nil then for Device in Task.ScanDevices do
-      begin
-        if FStopping then Break;
-        ScanStart(Task.Adapter);
-        if FStopping then Break;
-        Event := EventFor(Task, lbekScanResult);
-        Event.DeviceId := Device.DeviceId;
-        Event.DeviceName := Device.DeviceName;
-        Event.Rssi := Device.Rssi;
-        Deliver(Event);
-      end;
-      if (Task.Completion = nil) and not FStopping and Task.ScanStarted and not Task.ScanStopped then
-      begin
-        Task.ScanStopped := True;
-        Deliver(EventFor(Task, lbekScanStopped));
-      end;
-      if FStopping or Task.Cancelled then FinishCurrent(lbekOperationCancelled)
-      else FinishCurrent(lbekOperationSucceeded);
+      if FStopping or Task.Cancelled then FinishCurrent(lbrsCancelled)
+      else FinishCurrent(lbrsSucceeded);
     end
     else if Task.Request.Kind = lbckConnect then
     begin
       if FStopping or Task.Cancelled then
       begin
-        FinishCurrent(lbekOperationCancelled);
+        FinishCurrent(lbrsCancelled);
         Exit;
       end;
       Task.Peer := TPeerContext.Create;
@@ -617,7 +553,7 @@ begin
       FPeers.Add(Task.Peer);
       BeginCommand;
     end
-    else FinishCurrent(lbekOperationSucceeded);
+    else FinishCurrent(lbrsSucceeded);
   except
     on E: Exception do FailCurrent(E);
   end;
@@ -715,33 +651,17 @@ begin
 end;
 
 procedure TLazBleSimpleBleBackend.CompleteShutdown;
-var
-  Event: TLazBleBackendEvent;
-  Completion: ILazBleRequestCompletion;
-  R: TLazBleRequestResult;
+var Completion: ILazBleRequestCompletion; R: TLazBleRequestResult;
 begin
   FreeAndNil(FCurrent);
   FShutdownDone := True;
   if ActiveBackend = Self then ActiveBackend := nil;
   Completion := FShutdownCompletion;
   FShutdownCompletion := nil;
-  if Completion <> nil then
-  begin
-    R := Default(TLazBleRequestResult);
-    if FShutdownFailed then R.Status := lbrsFailed else R.Status := lbrsSucceeded;
-    R.ErrorCode := FShutdownErrorCode;
-    R.ErrorMessage := FShutdownError;
-    Completion.CompleteRequest(R);
-    Exit;
-  end;
-  Event := Default(TLazBleBackendEvent);
-  Event.Kind := lbekShutdownCompleted;
-  Event.OperationId := FShutdownId;
-  Event.BackendName := GetBackendName;
-  Event.ShutdownFailed := FShutdownFailed;
-  Event.ErrorCode := FShutdownErrorCode;
-  Event.ErrorMessage := FShutdownError;
-  Deliver(Event);
+  R := Default(TLazBleRequestResult);
+  if FShutdownFailed then R.Status := lbrsFailed else R.Status := lbrsSucceeded;
+  R.ErrorCode := FShutdownErrorCode; R.ErrorMessage := FShutdownError;
+  DeliverCompletion(Completion, R);
 end;
 
 procedure TLazBleSimpleBleBackend.InvokeCurrent;
@@ -754,13 +674,10 @@ begin
   begin
     Peer.Generation := FCurrent.Request.Generation;
     Peer.Observer := FCurrent.Link;
-    Peer.ConnectId := FCurrent.Id;
-    Peer.DisconnectId := InvalidBleOperationId;
     Peer.ConnectedReported := False;
     Peer.DisconnectedReported := False;
     Peer.NeedsDisconnect := True;
   end;
-  if FCurrent.Request.Kind = lbckDisconnect then Peer.DisconnectId := FCurrent.Id;
   Service := UTF8Decode(LowerCase(FCurrent.Request.ServiceUuid));
   Characteristic := UTF8Decode(LowerCase(FCurrent.Request.CharacteristicUuid));
   Descriptor := UTF8Decode(LowerCase(FCurrent.Request.DescriptorUuid));
@@ -792,7 +709,7 @@ end;
 procedure TLazBleSimpleBleBackend.ReadDone(Sender: TBlePeripheral;
   const Data: TBytes; Error: Exception);
 begin
-  FCurrent.ResultEvent.Value := Data;
+  FCurrent.ResultData.Value := Data;
   CommandDone(Sender, Error);
 end;
 
@@ -809,33 +726,25 @@ begin
   end;
   case FCurrent.Request.Kind of
     lbckDisconnect: FCurrent.Peer.NeedsDisconnect := False;
-    lbckRead, lbckReadDescriptor: FCurrent.ResultEvent.Kind := lbekReadResult;
-    lbckWrite, lbckWriteDescriptor: FCurrent.ResultEvent.Kind := lbekWriteCompleted;
     lbckSubscribe:
       begin
         FCurrent.Subscription.Registered := True;
         FCurrent.Subscription.Active := not FStopping;
-        FCurrent.ResultEvent.Kind := lbekSubscribed;
-        FCurrent.ResultEvent.SubscriptionId := FCurrent.Subscription.Id;
+        FCurrent.ResultData.SubscriptionId := FCurrent.Subscription.Id;
       end;
-    lbckUnsubscribe: FCurrent.ResultEvent.Kind := lbekUnsubscribed;
   end;
-  FCurrent.HasResult := FCurrent.Request.Kind in [lbckRead, lbckWrite,
-    lbckReadDescriptor, lbckWriteDescriptor, lbckSubscribe, lbckUnsubscribe];
-  FinishCurrent(lbekOperationSucceeded);
+  FinishCurrent(lbrsSucceeded);
 end;
 
 procedure TLazBleSimpleBleBackend.FailCurrent(Error: Exception);
 begin
-  FinishCurrent(lbekOperationFailed, ErrorCode(Error), Error.Message);
+  FinishCurrent(lbrsFailed, ErrorCode(Error), Error.Message);
 end;
 
-procedure TLazBleSimpleBleBackend.FinishCurrent(Kind: TLazBleBackendEventKind;
+procedure TLazBleSimpleBleBackend.FinishCurrent(Kind: TLazBleRequestStatus;
   Code: Integer; const Text: string);
 var
   Task: TCommand;
-  Event: TLazBleBackendEvent;
-  ResultData: TLazBleRequestResult;
 begin
   Task := FCurrent;
   FCurrent := nil;
@@ -845,7 +754,7 @@ begin
     begin
       { Unsubscribe removes the upstream handler even when a lost connection
         rejects the native call. That cleanup is complete, not a shutdown error. }
-      if (Kind = lbekOperationFailed) and (Code <> Ord(ecPeripheralNotConnected)) then
+      if (Kind = lbrsFailed) and (Code <> Ord(ecPeripheralNotConnected)) then
       begin
         if (Task.Parent <> nil) and not Task.Parent.Failed then
         begin
@@ -863,46 +772,22 @@ begin
     end
     else
     begin
-      if (Kind = lbekOperationSucceeded) and not FStopping then
+      if (Kind = lbrsSucceeded) and not FStopping then
       begin
         if Task.Request.Kind = lbckConnect then
           if not Task.Peer.DisconnectedReported then ReportPeer(Task.Peer, True);
         if Task.Request.Kind = lbckDisconnect then ReportPeer(Task.Peer, False);
       end;
-      if Task.Completion <> nil then
-      begin
-        ResultData := Default(TLazBleRequestResult);
-        case Kind of
-          lbekOperationSucceeded: ResultData.Status := lbrsSucceeded;
-          lbekOperationCancelled: ResultData.Status := lbrsCancelled;
-          else ResultData.Status := lbrsFailed;
-        end;
-        ResultData.ErrorCode := Code;
-        ResultData.ErrorMessage := Text;
-        ResultData.Value := Task.ResultEvent.Value;
-        ResultData.Services := Task.ResultEvent.Services;
-        ResultData.ScanResults := Task.ScanDevices;
-        ResultData.SubscriptionId := Task.ResultEvent.SubscriptionId;
-        if Task.HasResult and (Task.Request.Kind = lbckCheckAvailability) then
-          if Task.ResultEvent.Available then ResultData.Availability := lbaAvailable
-          else ResultData.Availability := lbaUnavailable;
-        ResultData.BackendName := GetBackendName;
-        ResultData.BackendVersion := Task.ResultEvent.BackendVersion;
-        ResultData.AdapterId := Task.AdapterId;
-        Task.Completion.CompleteRequest(ResultData);
-      end
-      else
-      begin
-        if Task.HasResult and (Kind = lbekOperationSucceeded) then Deliver(Task.ResultEvent);
-        Event := EventFor(Task, Kind);
-        Event.ErrorCode := Code;
-        Event.ErrorMessage := Text;
-        Deliver(Event);
-      end;
+      Task.ResultData.Status := Kind;
+      Task.ResultData.ErrorCode := Code;
+      Task.ResultData.ErrorMessage := Text;
+      Task.ResultData.BackendName := GetBackendName;
+      Task.ResultData.AdapterId := Task.AdapterId;
+      DeliverCompletion(Task.Completion, Task.ResultData);
     end;
     if (Task.Subscription <> nil) and
       ((Task.Request.Kind = lbckUnsubscribe) or
-        ((Task.Request.Kind = lbckSubscribe) and (Kind <> lbekOperationSucceeded))) then
+        ((Task.Request.Kind = lbckSubscribe) and (Kind <> lbrsSucceeded))) then
       FSubscriptions.Remove(Task.Subscription);
   finally
     Task.Free;
@@ -924,13 +809,6 @@ begin
   StopCurrentScan;
 end;
 
-procedure TLazBleSimpleBleBackend.ScanStart(Sender: TBleAdapter);
-begin
-  if FStopping or (FScan = nil) or (FScan.Adapter <> Sender) or FScan.ScanStarted then Exit;
-  FScan.ScanStarted := True;
-  if FScan.Completion = nil then Deliver(EventFor(FScan, lbekScanStarted));
-end;
-
 procedure TLazBleSimpleBleBackend.ScanStop(Sender: TBleAdapter);
 begin
   if FStopping or not FScanning or (FScan = nil) or (FScan.Adapter <> Sender) then Exit;
@@ -938,58 +816,42 @@ begin
 end;
 
 procedure TLazBleSimpleBleBackend.ScanFound(Sender: TBleAdapter; Peripheral: TBlePeripheral);
-var
-  Event: TLazBleBackendEvent;
-  Device: TBleDeviceInfo;
+var Device: TBleDeviceInfo; Sink: ILazBleScanSink;
 begin
   if FStopping or (FScan = nil) or (FScan.Adapter <> Sender) then Exit;
-  ScanStart(Sender);
-  if FStopping then Exit;
-  Event := EventFor(FScan, lbekScanResult);
-  Event.DeviceId := UTF8Encode(Peripheral.Address);
-  Event.DeviceName := UTF8Encode(Peripheral.Identifier);
-  Event.Rssi := Peripheral.Rssi;
-  if FScan.Scan <> nil then
-  begin
-    Device.DeviceId := Event.DeviceId;
-    Device.DeviceName := Event.DeviceName;
-    Device.Rssi := Event.Rssi;
-    FScan.Scan.ReceiveScanResult(Device);
-  end
-  else if FScan.Completion = nil then Deliver(Event);
+  Sink := FScan.Scan;
+  if Sink = nil then Exit;
+  Device.DeviceId := UTF8Encode(Peripheral.Address);
+  Device.DeviceName := UTF8Encode(Peripheral.Identifier);
+  Device.Rssi := Peripheral.Rssi;
+  try
+    Sink.ReceiveScanResult(Device);
+  except LazBleReportCallbackException; end;
 end;
 
 procedure TLazBleSimpleBleBackend.ReportPeer(Peer: TPeerContext; IsConnected: Boolean);
-var
-  Event: TLazBleBackendEvent;
-  I: Integer;
+var I: Integer; Observer: ILazBleLinkObserver;
 begin
   if Peer = nil then Exit;
   Peer.NeedsDisconnect := IsConnected;
-  Event := Default(TLazBleBackendEvent);
   if IsConnected then
   begin
     if Peer.ConnectedReported then Exit;
     Peer.ConnectedReported := True;
     Peer.DisconnectedReported := False;
-    Event.Kind := lbekConnected;
-    Event.OperationId := Peer.ConnectId;
   end
   else
   begin
     if Peer.DisconnectedReported then Exit;
     Peer.DisconnectedReported := True;
-    Event.Kind := lbekDisconnected;
-    Event.OperationId := Peer.DisconnectId;
     for I := 0 to FSubscriptions.Count - 1 do
       if TSubscriptionContext(FSubscriptions[I]).Peer = Peer then
         TSubscriptionContext(FSubscriptions[I]).Active := False;
   end;
-  Event.DeviceId := Peer.DeviceId;
-  Event.Generation := Peer.Generation;
-  Event.BackendName := GetBackendName;
-  if Peer.Observer <> nil then Peer.Observer.LinkChanged(IsConnected, Peer.Generation)
-  else Deliver(Event);
+  Observer := Peer.Observer;
+  if Observer <> nil then
+    try Observer.LinkChanged(IsConnected, Peer.Generation);
+    except LazBleReportCallbackException; end;
 end;
 
 procedure TLazBleSimpleBleBackend.TPeerContext.Connected(Sender: TBlePeripheral);
@@ -1006,24 +868,13 @@ end;
 
 procedure TLazBleSimpleBleBackend.TSubscriptionContext.ValueReceived(Sender: TBlePeripheral;
   const Service, Characteristic: UnicodeString; const Data: TBytes);
-var
-  Event: TLazBleBackendEvent;
+var Sink: ILazBleValueSink;
 begin
   if Owner.FStopping or not Active then Exit;
-  if Values <> nil then
-  begin
-    Values.ReceiveValue(Data);
-    Exit;
-  end;
-  Event := Default(TLazBleBackendEvent);
-  Event.Kind := lbekNotification;
-  Event.SubscriptionId := Id;
-  Event.Generation := Generation;
-  Event.DeviceId := Peer.DeviceId;
-  Event.ServiceUuid := ServiceUuid;
-  Event.CharacteristicUuid := CharacteristicUuid;
-  Event.Value := Data;
-  Owner.Deliver(Event);
+  Sink := Values;
+  if Sink <> nil then
+    try Sink.ReceiveValue(Data);
+    except LazBleReportCallbackException; end;
 end;
 
 procedure TLazBleSimpleBleBackend.DetachCallbacks;
@@ -1033,7 +884,6 @@ var
 begin
   if FAdapter <> nil then
   begin
-    FAdapter.OnScanStart := nil;
     FAdapter.OnScanStop := nil;
     FAdapter.OnScanFound := nil;
     FAdapter.OnScanUpdated := nil;
@@ -1041,6 +891,7 @@ begin
   for I := 0 to FPeers.Count - 1 do
   begin
     Peer := TPeerContext(FPeers[I]);
+    Peer.Observer := nil;
     Peer.Native.OnConnected := nil;
     Peer.Native.OnDisconnected := nil;
   end;

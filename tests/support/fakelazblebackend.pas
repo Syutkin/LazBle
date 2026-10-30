@@ -22,7 +22,6 @@ type
 
   TFakeLazBleBackend = class(TInterfacedObject, ILazBleBackend)
   private
-    FEventSink: ILazBleBackendEventSink;
     FNextOperationId: TBleOperationId;
     FCommands: array of TLazBleBackendCommand;
     FOperationIds: array of TBleOperationId;
@@ -36,13 +35,11 @@ type
     function FindOperation(const AOperationId: TBleOperationId): Integer;
     function AllOperationsAreTerminal: Boolean;
     procedure RecordCancellation(const AOperationId: TBleOperationId);
-    procedure Deliver(const AEvent: TLazBleBackendEvent);
     function GetCommand(const AIndex: Integer): TLazBleBackendCommand;
     function GetOperationId(const AIndex: Integer): TBleOperationId;
     function GetCancelledOperationId(const AIndex: Integer): TBleOperationId;
   public
     function GetBackendName: string;
-    procedure SetEventSink(const AEventSink: ILazBleBackendEventSink);
     function Submit(const ACommand: TLazBleBackendCommand;
       const ACompletion: ILazBleRequestCompletion = nil;
       const AValues: ILazBleValueSink = nil;
@@ -62,7 +59,6 @@ type
       const AErrorMessage: string = ''; const AFailed: Boolean = False): Boolean;
     function CancellationWasRequested(
       const AOperationId: TBleOperationId): Boolean;
-    function HasEventSink: Boolean;
     function CommandCount: Integer;
     function CancelledOperationCount: Integer;
     property Commands[const AIndex: Integer]: TLazBleBackendCommand
@@ -71,6 +67,8 @@ type
       read GetOperationId;
     property CancelledOperationIds[const AIndex: Integer]: TBleOperationId
       read GetCancelledOperationId;
+    property ShutdownStarted: Boolean read FShutdownStarted;
+    property ShutdownCompleted: Boolean read FShutdownCompleted;
     property ShutdownOperationId: TBleOperationId read FShutdownOperationId;
   end;
 
@@ -123,13 +121,6 @@ begin
   FCancelledOperationIds[Index] := AOperationId;
 end;
 
-procedure TFakeLazBleBackend.Deliver(const AEvent: TLazBleBackendEvent);
-begin
-  LazBleRequireMainThread;
-  if Assigned(FEventSink) then
-    FEventSink.HandleBackendEvent(AEvent);
-end;
-
 function TFakeLazBleBackend.GetCommand(
   const AIndex: Integer): TLazBleBackendCommand;
 begin
@@ -151,13 +142,6 @@ begin
   Result := FCancelledOperationIds[AIndex];
 end;
 
-procedure TFakeLazBleBackend.SetEventSink(
-  const AEventSink: ILazBleBackendEventSink);
-begin
-  LazBleRequireMainThread;
-  FEventSink := AEventSink;
-end;
-
 function TFakeLazBleBackend.Submit(
   const ACommand: TLazBleBackendCommand;
   const ACompletion: ILazBleRequestCompletion;
@@ -167,7 +151,7 @@ var
   Index: Integer;
 begin
   LazBleRequireMainThread;
-  if FShutdownStarted then
+  if FShutdownStarted or (ACompletion = nil) then
     Exit(InvalidBleOperationId);
 
   Result := AllocateOperationId;
@@ -266,10 +250,10 @@ begin
           FOperations[Index].Values.ReceiveValue(AEvent.Value);
           Exit(True);
         end;
-    if (Index >= 0) and
-      (FOperations[Index].Completion <> nil) and
-      (AEvent.Kind in [lbekReadResult, lbekServicesDiscovered,
-        lbekAvailabilityResult, lbekSubscribed]) then
+    Index := FindOperation(AEvent.OperationId);
+    if (AEvent.Kind in [lbekReadResult, lbekServicesDiscovered,
+      lbekAvailabilityResult, lbekSubscribed]) and (Index >= 0) and
+      (FOperations[Index].Completion <> nil) then
       with FOperations[Index].ResultData do
       begin
         Value := AEvent.Value;
@@ -279,14 +263,13 @@ begin
         BackendName := AEvent.BackendName;
         BackendVersion := AEvent.BackendVersion;
         AdapterId := AEvent.AdapterId;
-      end
-    else Deliver(AEvent);
+      end;
   end;
 end;
 
 function TFakeLazBleBackend.FinishRequest(const AOperationId: TBleOperationId;
   const AResult: TLazBleRequestResult): Boolean;
-var Index: Integer; Completion: ILazBleRequestCompletion;
+var Index, I: Integer; Completion: ILazBleRequestCompletion;
 begin
   LazBleRequireMainThread;
   Index := FindOperation(AOperationId);
@@ -299,94 +282,55 @@ begin
   FOperations[Index].ResultData := AResult;
   Completion := FOperations[Index].Completion;
   FOperations[Index].Completion := nil;
-  Completion.CompleteRequest(AResult);
+  try
+    Completion.CompleteRequest(AResult);
+  finally
+    FOperations[Index].Scan := nil;
+    if (FCommands[Index].Kind = lbckSubscribe) and (AResult.Status <> lbrsSucceeded) then
+      FOperations[Index].Values := nil;
+    if FCommands[Index].Kind = lbckUnsubscribe then
+      for I := 0 to High(FOperations) do
+        if FOperations[I].ResultData.SubscriptionId = FCommands[Index].SubscriptionId then
+          FOperations[I].Values := nil;
+  end;
 end;
 
-function TFakeLazBleBackend.CompleteOperation(
-  const AOperationId: TBleOperationId;
+function TFakeLazBleBackend.CompleteOperation(const AOperationId: TBleOperationId;
   const AEventKind: TLazBleBackendEventKind; const AErrorCode: Integer;
   const AErrorMessage: string): Boolean;
-var
-  BackendEvent: TLazBleBackendEvent;
-  Index: Integer;
-  ResultData: TLazBleRequestResult;
+var Index: Integer; R: TLazBleRequestResult;
 begin
   LazBleRequireMainThread;
-  Result := False;
-  if FShutdownCompleted or not (AEventKind in [
-    lbekOperationSucceeded,
-    lbekOperationFailed,
-    lbekOperationCancelled
-  ]) then
-    Exit;
-
   Index := FindOperation(AOperationId);
-  if (Index < 0) or FOperations[Index].TerminalDelivered then
-    Exit;
-
-  if FOperations[Index].Completion <> nil then
-  begin
-    ResultData := FOperations[Index].ResultData;
-    case AEventKind of
-      lbekOperationSucceeded: ResultData.Status := lbrsSucceeded;
-      lbekOperationFailed: ResultData.Status := lbrsFailed;
-      lbekOperationCancelled: ResultData.Status := lbrsCancelled;
-    end;
-    ResultData.ErrorCode := AErrorCode;
-    ResultData.ErrorMessage := AErrorMessage;
-    Exit(FinishRequest(AOperationId, ResultData));
+  if (Index < 0) or FShutdownCompleted then Exit(False);
+  R := FOperations[Index].ResultData;
+  case AEventKind of
+    lbekOperationSucceeded: R.Status := lbrsSucceeded;
+    lbekOperationFailed: R.Status := lbrsFailed;
+    lbekOperationCancelled: R.Status := lbrsCancelled;
+    else Exit(False);
   end;
-  FOperations[Index].TerminalDelivered := True;
-  BackendEvent := Default(TLazBleBackendEvent);
-  BackendEvent.Kind := AEventKind;
-  BackendEvent.OperationId := AOperationId;
-  BackendEvent.Generation := FCommands[Index].Generation;
-  BackendEvent.DeviceId := FCommands[Index].DeviceId;
-  BackendEvent.ErrorCode := AErrorCode;
-  BackendEvent.ErrorMessage := AErrorMessage;
-  Deliver(BackendEvent);
-  Result := True;
+  R.ErrorCode := AErrorCode; R.ErrorMessage := AErrorMessage;
+  Result := FinishRequest(AOperationId, R);
 end;
 
 function TFakeLazBleBackend.CompleteShutdown(const AErrorCode: Integer;
   const AErrorMessage: string; const AFailed: Boolean): Boolean;
-var
-  BackendEvent: TLazBleBackendEvent;
-  Completion: ILazBleRequestCompletion;
-  R: TLazBleRequestResult;
-  I: Integer;
+var Completion: ILazBleRequestCompletion; R: TLazBleRequestResult; I: Integer;
 begin
   LazBleRequireMainThread;
-  Result := FShutdownStarted and not FShutdownCompleted and
-    AllOperationsAreTerminal;
-  if not Result then
-    Exit;
-
+  Result := FShutdownStarted and not FShutdownCompleted and AllOperationsAreTerminal;
+  if not Result then Exit;
   FShutdownCompleted := True;
-  Completion := FShutdownCompletion;
-  FShutdownCompletion := nil;
-  if Completion <> nil then
+  Completion := FShutdownCompletion; FShutdownCompletion := nil;
+  for I := 0 to High(FOperations) do
   begin
-    for I := 0 to High(FOperations) do
-    begin
-      FOperations[I].Values := nil;
-      FOperations[I].Scan := nil;
-      FOperations[I].Link := nil;
-    end;
-    R := Default(TLazBleRequestResult);
-    R.Status := lbrsSucceeded;
-    if AFailed or (AErrorCode <> 0) or (AErrorMessage <> '') then R.Status := lbrsFailed;
-    R.ErrorCode := AErrorCode; R.ErrorMessage := AErrorMessage;
-    Completion.CompleteRequest(R);
-    Exit;
+    FOperations[I].Values := nil; FOperations[I].Scan := nil; FOperations[I].Link := nil;
   end;
-  BackendEvent := Default(TLazBleBackendEvent);
-  BackendEvent.Kind := lbekShutdownCompleted;
-  BackendEvent.OperationId := FShutdownOperationId;
-  BackendEvent.ShutdownFailed := AFailed or (AErrorCode <> 0) or (AErrorMessage <> '');
-  BackendEvent.ErrorCode := AErrorCode;
-  BackendEvent.ErrorMessage := AErrorMessage;
-  Deliver(BackendEvent);
+  R := Default(TLazBleRequestResult); R.Status := lbrsSucceeded;
+  if AFailed or (AErrorCode <> 0) or (AErrorMessage <> '') then R.Status := lbrsFailed;
+  R.ErrorCode := AErrorCode; R.ErrorMessage := AErrorMessage;
+  if Completion <> nil then Completion.CompleteRequest(R);
 end;
 
 function TFakeLazBleBackend.CancellationWasRequested(
@@ -397,12 +341,6 @@ begin
   LazBleRequireMainThread;
   Index := FindOperation(AOperationId);
   Result := (Index >= 0) and FOperations[Index].CancellationRequested;
-end;
-
-function TFakeLazBleBackend.HasEventSink: Boolean;
-begin
-  LazBleRequireMainThread;
-  Result := Assigned(FEventSink);
 end;
 
 function TFakeLazBleBackend.CommandCount: Integer;

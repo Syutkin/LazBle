@@ -12,20 +12,31 @@ uses Classes, SysUtils, fpcunit, testregistry, SimpleDelphiBLE,
 type
   TNativeRequestCompletion = class(TInterfacedObject, ILazBleRequestCompletion)
     Count: Integer;
+    RaiseOnComplete: Boolean;
+    Destroyed: PInteger;
     ResultData: TLazBleRequestResult;
     procedure CompleteRequest(const AResult: TLazBleRequestResult);
+    destructor Destroy; override;
   end;
 
-  TNativeEventSink = class(TInterfacedObject, ILazBleBackendEventSink)
+  INativeObservations = interface
+    ['{3F6A3292-D6BE-4815-8D64-5C188B19CD9A}']
+    procedure Observe(const Event: TLazBleBackendEvent);
+  end;
+
+  TNativeEventSink = class(TInterfacedObject, INativeObservations)
   public
     Events: array of TLazBleBackendEvent;
     WrongThread: Integer;
+    Detached: Boolean;
     CancelOnConnect, ShutdownBackend: ILazBleBackend;
     ShutdownOn: TLazBleBackendEventKind;
-    procedure HandleBackendEvent(const Event: TLazBleBackendEvent);
+    procedure Observe(const Event: TLazBleBackendEvent);
     function Count(Kind: TLazBleBackendEventKind; Id: TBleOperationId = 0): Integer;
     function Last(Kind: TLazBleBackendEventKind; Id: TBleOperationId = 0): TLazBleBackendEvent;
     function Terminal(Id: TBleOperationId): Boolean;
+    function Submit(const Backend: ILazBleBackend; const Command: TLazBleBackendCommand): TBleOperationId;
+    function Shutdown(const Backend: ILazBleBackend): TBleOperationId;
   end;
 
   { Real SimpleDelphiBLE + the matching upstream PLAIN native implementation.
@@ -33,10 +44,14 @@ type
   TLazBleSimpleBleBackendTest = class(TTestCase)
   private
     FBackend: ILazBleBackend;
-    FSink: ILazBleBackendEventSink;
+    FSink: INativeObservations;
     FEvents: TNativeEventSink;
+    FCallbackErrors: Integer;
+    procedure CallbackError(Sender: TObject);
     function Request(Kind: TLazBleBackendCommandKind): TLazBleBackendCommand;
     function Send(Kind: TLazBleBackendCommandKind): TBleOperationId;
+    function Submit(const Command: TLazBleBackendCommand): TBleOperationId;
+    procedure WaitForScan;
     function Wait(Id: TBleOperationId): TLazBleBackendEvent;
     procedure Pump(Ms: Cardinal);
     procedure WaitForEvent(Kind: TLazBleBackendEventKind; Count: Integer = 1);
@@ -90,14 +105,175 @@ type
     procedure TwoSubscriptionsKeepTheirOwnIdentity;
     procedure AddressedAvailabilityHasOneRecipient;
     procedure AddressedReadReturnsPayloadWithStatus;
+    procedure RaisingCompletionDoesNotStrandShutdown;
+    procedure BackendReleasesCompletedRecipient;
   end;
 
 implementation
+
+type
+  { Logs observations from typed callbacks. Payload and status are received
+    together; the log is only a test assertion aid, not a backend protocol. }
+  TNativeRequestProbe = class(TInterfacedObject, ILazBleRequestCompletion,
+    ILazBleValueSink, ILazBleScanSink, ILazBleLinkObserver)
+    Log: INativeObservations;
+    Command: TLazBleBackendCommand;
+    Id: TBleOperationId;
+    SubscriptionId: TBleSubscriptionId;
+    IsShutdown: Boolean;
+    procedure CompleteRequest(const R: TLazBleRequestResult);
+    procedure ReceiveValue(const Value: TBytes);
+    procedure ReceiveScanResult(const Device: TBleDeviceInfo);
+    procedure LinkChanged(const Connected: Boolean; const Generation: QWord);
+    function Observation(Kind: TLazBleBackendEventKind): TLazBleBackendEvent;
+  end;
+
+function TNativeRequestProbe.Observation(Kind: TLazBleBackendEventKind): TLazBleBackendEvent;
+begin
+  Result := Default(TLazBleBackendEvent);
+  Result.Kind := Kind; Result.OperationId := Id; Result.SubscriptionId := SubscriptionId;
+  Result.DeviceId := Command.DeviceId; Result.Generation := Command.Generation;
+  Result.ServiceUuid := Command.ServiceUuid; Result.CharacteristicUuid := Command.CharacteristicUuid;
+  Result.DescriptorUuid := Command.DescriptorUuid;
+end;
+
+procedure TNativeRequestProbe.CompleteRequest(const R: TLazBleRequestResult);
+var E: TLazBleBackendEvent; D: TBleDeviceInfo;
+begin
+  SubscriptionId := R.SubscriptionId;
+  E := Observation(lbekOperationSucceeded);
+  E.Value := R.Value; E.Services := R.Services; E.Available := R.Availability = lbaAvailable;
+  E.BackendName := R.BackendName; E.BackendVersion := R.BackendVersion; E.AdapterId := R.AdapterId;
+  E.ErrorCode := R.ErrorCode; E.ErrorMessage := R.ErrorMessage;
+  if IsShutdown then
+  begin
+    E.Kind := lbekShutdownCompleted; E.ShutdownFailed := R.Status <> lbrsSucceeded;
+  end
+  else
+  begin
+    if R.Status = lbrsSucceeded then
+    begin
+      case Command.Kind of
+        lbckRead, lbckReadDescriptor: E.Kind := lbekReadResult;
+        lbckWrite, lbckWriteDescriptor: E.Kind := lbekWriteCompleted;
+        lbckDiscoverServices: E.Kind := lbekServicesDiscovered;
+        lbckSubscribe: E.Kind := lbekSubscribed;
+        lbckUnsubscribe: E.Kind := lbekUnsubscribed;
+        lbckCheckAvailability: E.Kind := lbekAvailabilityResult;
+      end;
+      if E.Kind <> lbekOperationSucceeded then Log.Observe(E);
+    end;
+    for D in R.ScanResults do ReceiveScanResult(D);
+    case R.Status of
+      lbrsSucceeded: E.Kind := lbekOperationSucceeded;
+      lbrsFailed: E.Kind := lbekOperationFailed;
+      lbrsCancelled: E.Kind := lbekOperationCancelled;
+    end;
+  end;
+  Log.Observe(E);
+end;
+
+procedure TNativeRequestProbe.ReceiveValue(const Value: TBytes);
+var E: TLazBleBackendEvent;
+begin
+  E := Observation(lbekNotification); E.OperationId := 0; E.Value := Value;
+  Log.Observe(E);
+end;
+
+procedure TNativeRequestProbe.ReceiveScanResult(const Device: TBleDeviceInfo);
+var E: TLazBleBackendEvent;
+begin
+  E := Observation(lbekScanResult); E.DeviceId := Device.DeviceId;
+  E.DeviceName := Device.DeviceName; E.Rssi := Device.Rssi;
+  Log.Observe(E);
+end;
+
+procedure TNativeRequestProbe.LinkChanged(const Connected: Boolean; const Generation: QWord);
+var E: TLazBleBackendEvent;
+begin
+  if Connected then E := Observation(lbekConnected) else E := Observation(lbekDisconnected);
+  E.Generation := Generation;
+  Log.Observe(E);
+end;
+
+function TNativeEventSink.Submit(const Backend: ILazBleBackend;
+  const Command: TLazBleBackendCommand): TBleOperationId;
+var Probe: TNativeRequestProbe; KeepAlive: ILazBleRequestCompletion;
+begin
+  Probe := TNativeRequestProbe.Create; KeepAlive := Probe;
+  Probe.Log := Self; Probe.Command := Command;
+  Result := Backend.Submit(Command, Probe, Probe, Probe, Probe);
+  Probe.Id := Result;
+end;
+
+function TNativeEventSink.Shutdown(const Backend: ILazBleBackend): TBleOperationId;
+var Probe: TNativeRequestProbe; KeepAlive: ILazBleRequestCompletion;
+begin
+  Probe := TNativeRequestProbe.Create; KeepAlive := Probe;
+  Probe.Log := Self; Probe.IsShutdown := True;
+  Result := Backend.BeginShutdown(Probe);
+  Probe.Id := Result;
+end;
+
+function TLazBleSimpleBleBackendTest.Submit(const Command: TLazBleBackendCommand): TBleOperationId;
+begin Result := FEvents.Submit(FBackend, Command); end;
+
+procedure TLazBleSimpleBleBackendTest.WaitForScan;
+var Deadline: QWord;
+begin
+  Deadline := GetTickCount64 + 8000;
+  while not TBleAdapter.GetAdapters[0].ScanIsActive and (GetTickCount64 < Deadline) do
+    CheckSynchronize(5);
+  AssertTrue('Scan is active', TBleAdapter.GetAdapters[0].ScanIsActive);
+end;
 
 procedure TNativeRequestCompletion.CompleteRequest(const AResult: TLazBleRequestResult);
 begin
   ResultData := AResult;
   Inc(Count);
+  if RaiseOnComplete then raise Exception.Create('test completion handler');
+end;
+
+destructor TNativeRequestCompletion.Destroy;
+begin
+  if Destroyed <> nil then Inc(Destroyed^);
+  inherited Destroy;
+end;
+
+procedure TLazBleSimpleBleBackendTest.RaisingCompletionDoesNotStrandShutdown;
+var Target: ILazBleRequestCompletion; Observer: TNativeRequestCompletion;
+  Deadline: QWord; Previous: TNotifyEvent;
+begin
+  Observer := TNativeRequestCompletion.Create; Target := Observer;
+  Observer.RaiseOnComplete := True;
+  FBackend.Submit(Request(lbckCheckAvailability), Target);
+  Deadline := GetTickCount64 + 8000;
+  Previous := ApplicationHandleException;
+  ApplicationHandleException := @CallbackError;
+  try
+    while (Observer.Count = 0) and (GetTickCount64 < Deadline) do CheckSynchronize(10);
+  finally ApplicationHandleException := Previous; end;
+  AssertEquals(1, Observer.Count);
+  AssertEquals(1, FCallbackErrors);
+  Shutdown;
+end;
+
+procedure TLazBleSimpleBleBackendTest.CallbackError(Sender: TObject);
+begin Inc(FCallbackErrors); end;
+
+procedure TLazBleSimpleBleBackendTest.BackendReleasesCompletedRecipient;
+var Target: ILazBleRequestCompletion; Observer: TNativeRequestCompletion;
+  Destroyed: Integer; Deadline: QWord;
+begin
+  Destroyed := 0;
+  Observer := TNativeRequestCompletion.Create; Observer.Destroyed := @Destroyed;
+  Target := Observer;
+  FBackend.Submit(Request(lbckCheckAvailability), Target);
+  Target := nil;
+  AssertEquals(0, Destroyed);
+  Deadline := GetTickCount64 + 8000;
+  while (Destroyed = 0) and (GetTickCount64 < Deadline) do CheckSynchronize(10);
+  AssertEquals(1, Destroyed);
 end;
 
 procedure TLazBleSimpleBleBackendTest.AddressedAvailabilityHasOneRecipient;
@@ -166,15 +342,16 @@ end;
 procedure TWrongThreadCall.Execute;
 begin
   try
-    Backend.Submit(Default(TLazBleBackendCommand));
+    Backend.Submit(Default(TLazBleBackendCommand), nil);
   except
     on E: EInvalidOperation do Rejected := True;
   end;
 end;
 
-procedure TNativeEventSink.HandleBackendEvent(const Event: TLazBleBackendEvent);
+procedure TNativeEventSink.Observe(const Event: TLazBleBackendEvent);
 var N: Integer;
 begin
+  if Detached then Exit;
   if GetCurrentThreadID <> MainThreadID then Inc(WrongThread);
   N := Length(Events);
   SetLength(Events, N + 1);
@@ -182,7 +359,7 @@ begin
   if (Event.Kind = lbekConnected) and (CancelOnConnect <> nil) then
     CancelOnConnect.Cancel(Event.OperationId);
   if (ShutdownBackend <> nil) and (Event.Kind = ShutdownOn) then
-    ShutdownBackend.BeginShutdown;
+    Shutdown(ShutdownBackend);
 end;
 
 function TNativeEventSink.Count(Kind: TLazBleBackendEventKind; Id: TBleOperationId): Integer;
@@ -217,7 +394,6 @@ begin
   FEvents := TNativeEventSink.Create;
   FSink := FEvents;
   FBackend := TLazBleSimpleBleBackend.Create;
-  FBackend.SetEventSink(FSink);
 end;
 
 procedure TLazBleSimpleBleBackendTest.TearDown;
@@ -226,7 +402,6 @@ begin
   FEvents.ShutdownBackend := nil;
   Shutdown;
   AssertEquals('Every event delivered on the main thread', 0, FEvents.WrongThread);
-  FBackend.SetEventSink(nil);
   FBackend := nil;
   FSink := nil;
 end;
@@ -244,7 +419,7 @@ end;
 
 function TLazBleSimpleBleBackendTest.Send(Kind: TLazBleBackendCommandKind): TBleOperationId;
 begin
-  Result := FBackend.Submit(Request(Kind));
+  Result := Submit(Request(Kind));
   AssertTrue('Operation accepted', Result <> InvalidBleOperationId);
 end;
 
@@ -284,7 +459,7 @@ procedure TLazBleSimpleBleBackendTest.Discover;
 var C: TLazBleBackendCommand;
 begin
   C := Request(lbckStartScan); C.TimeoutMs := 1000;
-  AssertEquals(Ord(lbekOperationSucceeded), Ord(Wait(FBackend.Submit(C)).Kind));
+  AssertEquals(Ord(lbekOperationSucceeded), Ord(Wait(Submit(C)).Kind));
 end;
 
 procedure TLazBleSimpleBleBackendTest.Connect;
@@ -301,7 +476,7 @@ end;
 procedure TLazBleSimpleBleBackendTest.Shutdown;
 var E: TLazBleBackendEvent;
 begin
-  E := Wait(FBackend.BeginShutdown);
+  E := Wait(FEvents.Shutdown(FBackend));
   AssertEquals(Ord(lbekShutdownCompleted), Ord(E.Kind));
   AssertEquals(E.ErrorMessage, '', E.ErrorMessage);
 end;
@@ -311,7 +486,7 @@ var C: TLazBleBackendCommand; Id: TBleOperationId; E: TLazBleBackendEvent;
 begin
   C := Request(lbckCheckAvailability);
   C.AdapterId := 'AA:BB:CC:DD:EE:FF';
-  Id := FBackend.Submit(C);
+  Id := Submit(C);
   AssertEquals(0, Length(FEvents.Events));
   AssertEquals(Ord(lbekOperationSucceeded), Ord(Wait(Id).Kind));
   E := FEvents.Last(lbekAvailabilityResult, Id);
@@ -324,7 +499,7 @@ procedure TLazBleSimpleBleBackendTest.MissingAdapterIsAsyncFailure;
 var C: TLazBleBackendCommand; E: TLazBleBackendEvent;
 begin
   C := Request(lbckCheckAvailability); C.AdapterId := 'missing';
-  E := Wait(FBackend.Submit(C));
+  E := Wait(Submit(C));
   AssertEquals(Ord(lbekOperationFailed), Ord(E.Kind));
   AssertEquals(LazBleErrorAdapterNotFound, E.ErrorCode);
 end;
@@ -345,8 +520,7 @@ var Id: TBleOperationId; E: TLazBleBackendEvent;
 begin
   Id := Send(lbckStartScan);
   AssertEquals(Ord(lbekOperationSucceeded), Ord(Wait(Id).Kind));
-  AssertEquals(1, FEvents.Count(lbekScanStarted, Id));
-  AssertEquals(1, FEvents.Count(lbekScanStopped, Id));
+  AssertFalse('Native scan is stopped', TBleAdapter.GetAdapters[0].ScanIsActive);
   E := FEvents.Last(lbekScanResult, Id);
   AssertEquals(Device, E.DeviceId);
   AssertEquals('Plain Peripheral', E.DeviceName);
@@ -356,8 +530,8 @@ procedure TLazBleSimpleBleBackendTest.StopScanCompletesActiveScan;
 var C: TLazBleBackendCommand; ScanId, StopId: TBleOperationId;
 begin
   C := Request(lbckStartScan); C.TimeoutMs := 0;
-  ScanId := FBackend.Submit(C);
-  WaitForEvent(lbekScanStarted);
+  ScanId := Submit(C);
+  WaitForScan;
   StopId := Send(lbckStopScan);
   AssertEquals(Ord(lbekOperationSucceeded), Ord(Wait(ScanId).Kind));
   AssertEquals(Ord(lbekOperationSucceeded), Ord(Wait(StopId).Kind));
@@ -374,9 +548,9 @@ begin
   C := Request(lbckWrite);
   C.WriteMode := lbwmRequest;
   C.Value := TBytes.Create(11);
-  FirstId := FBackend.Submit(C);
+  FirstId := Submit(C);
   C.Value[0] := 22;
-  SecondId := FBackend.Submit(C);
+  SecondId := Submit(C);
   C.Value[0] := 33;
   ReadId := Send(lbckRead);
   AssertFalse('Submit does not deliver completion inline', FEvents.Terminal(ReadId));
@@ -403,22 +577,21 @@ var
 begin
   C := Request(lbckStartScan);
   C.TimeoutMs := 0;
-  FirstId := FBackend.Submit(C);
-  WaitForEvent(lbekScanStarted);
+  FirstId := Submit(C);
+  WaitForScan;
   FBackend.Cancel(FirstId);
   AssertEquals(Ord(lbekOperationCancelled), Ord(Wait(FirstId).Kind));
   SecondId := Send(lbckStartScan);
   AssertEquals(Ord(lbekOperationSucceeded), Ord(Wait(SecondId).Kind));
-  AssertEquals(1, FEvents.Count(lbekScanStarted, SecondId));
-  AssertEquals(1, FEvents.Count(lbekScanStopped, SecondId));
+  AssertFalse('Native scan is stopped', TBleAdapter.GetAdapters[0].ScanIsActive);
 end;
 
 procedure TLazBleSimpleBleBackendTest.QueuedCancellationSkipsNativeCall;
 var C: TLazBleBackendCommand; ScanId, ReadId: TBleOperationId;
 begin
   C := Request(lbckStartScan); C.TimeoutMs := 0;
-  ScanId := FBackend.Submit(C);
-  WaitForEvent(lbekScanStarted);
+  ScanId := Submit(C);
+  WaitForScan;
   ReadId := Send(lbckRead);
   FBackend.Cancel(ReadId);
   FBackend.Cancel(ScanId);
@@ -431,14 +604,13 @@ procedure TLazBleSimpleBleBackendTest.StopScanBeforeDispatchCompletesBothCommand
 var C: TLazBleBackendCommand; ScanId, StopId: TBleOperationId;
 begin
   C := Request(lbckStartScan); C.TimeoutMs := 0;
-  ScanId := FBackend.Submit(C);
+  ScanId := Submit(C);
   StopId := Send(lbckStopScan);
   AssertFalse(FEvents.Terminal(ScanId));
   AssertFalse(FEvents.Terminal(StopId));
   AssertEquals(Ord(lbekOperationSucceeded), Ord(Wait(ScanId).Kind));
   AssertEquals(Ord(lbekOperationSucceeded), Ord(Wait(StopId).Kind));
-  AssertEquals(1, FEvents.Count(lbekScanStarted, ScanId));
-  AssertEquals(1, FEvents.Count(lbekScanStopped, ScanId));
+  AssertFalse('Native scan is stopped', TBleAdapter.GetAdapters[0].ScanIsActive);
 end;
 
 procedure TLazBleSimpleBleBackendTest.CancelledSubscribeDoesNotInstallHandler;
@@ -446,7 +618,7 @@ var C: TLazBleBackendCommand; ScanId, SubscribeId: TBleOperationId;
 begin
   Connect;
   C := Request(lbckStartScan); C.TimeoutMs := 0;
-  ScanId := FBackend.Submit(C); WaitForEvent(lbekScanStarted);
+  ScanId := Submit(C); WaitForScan;
   SubscribeId := Send(lbckSubscribe);
   FBackend.Cancel(SubscribeId);
   FBackend.Cancel(ScanId);
@@ -479,7 +651,7 @@ begin
   Connect;
   FEvents.ShutdownBackend := FBackend; FEvents.ShutdownOn := lbekWriteCompleted;
   C := Request(lbckWrite); C.Value := TBytes.Create(71);
-  WriteId := FBackend.Submit(C);
+  WriteId := Submit(C);
   ReadId := Send(lbckRead);
   AssertEquals(Ord(lbekOperationSucceeded), Ord(Wait(WriteId).Kind));
   AssertEquals(Ord(lbekOperationCancelled), Ord(Wait(ReadId).Kind));
@@ -508,12 +680,12 @@ begin
         end;
   AssertTrue('Public GATT records converted', Found);
   C := Request(lbckWrite); C.Value := TBytes.Create(0, 127, 128, 255);
-  Id := FBackend.Submit(C); C.Value[0] := 44;
+  Id := Submit(C); C.Value[0] := 44;
   AssertEquals(Ord(lbekOperationSucceeded), Ord(Wait(Id).Kind));
   Id := Send(lbckRead); Wait(Id); E := FEvents.Last(lbekReadResult, Id);
   AssertEquals(4, Length(E.Value)); AssertEquals(0, E.Value[0]); AssertEquals(255, E.Value[3]);
   C.WriteMode := lbwmCommand; C.Value := TBytes.Create(12, 34);
-  AssertEquals(Ord(lbekOperationSucceeded), Ord(Wait(FBackend.Submit(C)).Kind));
+  AssertEquals(Ord(lbekOperationSucceeded), Ord(Wait(Submit(C)).Kind));
   Id := Send(lbckRead); Wait(Id); E := FEvents.Last(lbekReadResult, Id);
   AssertEquals(2, Length(E.Value)); AssertEquals(12, E.Value[0]);
 end;
@@ -522,7 +694,7 @@ procedure TLazBleSimpleBleBackendTest.NativeErrorZeroIsFailure;
 var C: TLazBleBackendCommand; E: TLazBleBackendEvent;
 begin
   Connect; C := Request(lbckRead); C.ServiceUuid := StringOfChar('x', 37);
-  E := Wait(FBackend.Submit(C));
+  E := Wait(Submit(C));
   AssertEquals(Ord(lbekOperationFailed), Ord(E.Kind));
   AssertEquals(Ord(ecInvalidArgument), E.ErrorCode);
   AssertTrue(E.ErrorMessage <> '');
@@ -532,7 +704,7 @@ procedure TLazBleSimpleBleBackendTest.NativeAttErrorIsPreserved;
 var C: TLazBleBackendCommand; E: TLazBleBackendEvent;
 begin
   Connect; C := Request(lbckRead); C.CharacteristicUuid := ErrorValue;
-  E := Wait(FBackend.Submit(C));
+  E := Wait(Submit(C));
   AssertEquals(Ord(lbekOperationFailed), Ord(E.Kind));
   AssertEquals(Ord(ecOperationFailed), E.ErrorCode);
 end;
@@ -541,13 +713,13 @@ procedure TLazBleSimpleBleBackendTest.NotificationAndUnsubscribe;
 var C: TLazBleBackendCommand; Id: TBleOperationId; Sub: TBleSubscriptionId; N: Integer;
 begin
   Connect; C := Request(lbckSubscribe); C.ServiceUuid := BatteryService; C.CharacteristicUuid := BatteryValue;
-  Id := FBackend.Submit(C); AssertEquals(Ord(lbekOperationSucceeded), Ord(Wait(Id).Kind));
+  Id := Submit(C); AssertEquals(Ord(lbekOperationSucceeded), Ord(Wait(Id).Kind));
   Sub := FEvents.Last(lbekSubscribed, Id).SubscriptionId;
   AssertTrue(Sub <> 0); WaitForEvent(lbekNotification);
   AssertEquals(100, FEvents.Last(lbekNotification).Value[0]);
   AssertEquals(7, FEvents.Last(lbekNotification).Generation);
   C.Kind := lbckUnsubscribe; C.SubscriptionId := Sub;
-  AssertEquals(Ord(lbekOperationSucceeded), Ord(Wait(FBackend.Submit(C)).Kind));
+  AssertEquals(Ord(lbekOperationSucceeded), Ord(Wait(Submit(C)).Kind));
   N := FEvents.Count(lbekNotification); Pump(1200);
   AssertEquals('No values after unsubscribe', N, FEvents.Count(lbekNotification));
 end;
@@ -587,12 +759,12 @@ end;
 procedure TLazBleSimpleBleBackendTest.ShutdownDrainsScanAndQueuedCommands;
 var C: TLazBleBackendCommand; ScanId, ReadId: TBleOperationId; N: Integer;
 begin
-  C := Request(lbckStartScan); C.TimeoutMs := 0; ScanId := FBackend.Submit(C);
-  WaitForEvent(lbekScanStarted); ReadId := Send(lbckRead);
+  C := Request(lbckStartScan); C.TimeoutMs := 0; ScanId := Submit(C);
+  WaitForScan; ReadId := Send(lbckRead);
   Shutdown;
   AssertEquals(Ord(lbekOperationCancelled), Ord(Wait(ScanId).Kind));
   AssertEquals(Ord(lbekOperationCancelled), Ord(Wait(ReadId).Kind));
-  AssertEquals(QWord(0), QWord(FBackend.Submit(C)));
+  AssertEquals(QWord(0), QWord(Submit(C)));
   N := Length(FEvents.Events); Pump(100); AssertEquals(N, Length(FEvents.Events));
 end;
 
@@ -611,28 +783,27 @@ begin
   for I := 1 to 3 do
   begin
     Connect; Wait(Send(lbckSubscribe)); Shutdown;
-    FBackend.SetEventSink(nil); FBackend := nil;
+    FBackend := nil;
     FEvents.Events := nil;
-    FBackend := TLazBleSimpleBleBackend.Create; FBackend.SetEventSink(FSink);
+    FBackend := TLazBleSimpleBleBackend.Create;
   end;
 end;
 
 procedure TLazBleSimpleBleBackendTest.OnlyOneBackendOwnsNativeCallbacks;
-var Other: ILazBleBackend; OtherSink: TNativeEventSink; Sink: ILazBleBackendEventSink;
+var Other: ILazBleBackend; OtherSink: TNativeEventSink; Sink: INativeObservations;
   Id: TBleOperationId; Deadline: QWord;
 begin
   Wait(Send(lbckCheckAvailability));
   Other := TLazBleSimpleBleBackend.Create; OtherSink := TNativeEventSink.Create; Sink := OtherSink;
-  Other.SetEventSink(Sink);
   try
-    Id := Other.Submit(Request(lbckCheckAvailability)); Deadline := GetTickCount64+8000;
+    Id := OtherSink.Submit(Other, Request(lbckCheckAvailability)); Deadline := GetTickCount64+8000;
     while not OtherSink.Terminal(Id) and (GetTickCount64 < Deadline) do CheckSynchronize(5);
     AssertEquals(LazBleErrorAdapterAlreadyActive, OtherSink.Last(lbekOperationFailed,Id).ErrorCode);
-    Id := Other.BeginShutdown; Deadline := GetTickCount64+8000;
+    Id := OtherSink.Shutdown(Other); Deadline := GetTickCount64+8000;
     while not OtherSink.Terminal(Id) and (GetTickCount64 < Deadline) do CheckSynchronize(5);
     AssertTrue(OtherSink.Terminal(Id));
     AssertEquals(Ord(lbekOperationSucceeded), Ord(Wait(Send(lbckCheckAvailability)).Kind));
-  finally Other.SetEventSink(nil); Other := nil; Sink := nil; end;
+  finally Other := nil; Sink := nil; end;
 end;
 
 procedure TLazBleSimpleBleBackendTest.PublicApiRequiresMainThread;
@@ -644,8 +815,8 @@ end;
 
 procedure TLazBleSimpleBleBackendTest.SinkCanBeDetached;
 begin
-  FBackend.SetEventSink(nil); Send(lbckCheckAvailability); Pump(100);
-  AssertEquals(0, Length(FEvents.Events)); FBackend.SetEventSink(FSink);
+  FEvents.Detached := True; Send(lbckCheckAvailability); Pump(100);
+  AssertEquals(0, Length(FEvents.Events)); FEvents.Detached := False;
 end;
 
 procedure TLazBleSimpleBleBackendTest.UnsubscribeAfterLinkLossRetiresHandler;
@@ -661,7 +832,7 @@ begin
   Worker.Peer := TBleAdapter.GetAdapters[0].GetConnectedPeripherals[0];
   try Worker.Start; Worker.WaitFor; finally Worker.Free; end;
   WaitForEvent(lbekDisconnected);
-  E := Wait(FBackend.Submit(C));
+  E := Wait(Submit(C));
   AssertEquals(Ord(lbekOperationFailed), Ord(E.Kind));
   AssertEquals(Ord(ecPeripheralNotConnected), E.ErrorCode);
   N := FEvents.Count(lbekNotification); Pump(1100);
@@ -794,8 +965,8 @@ begin
   Connect;
   C := Request(lbckWriteDescriptor); C.DescriptorUuid := UpperCase(Description);
   C.Value := TBytes.Create(0, 127, 255);
-  WriteId := FBackend.Submit(C); C.Value[0] := 99;
-  C.Kind := lbckReadDescriptor; ReadId := FBackend.Submit(C);
+  WriteId := Submit(C); C.Value[0] := 99;
+  C.Kind := lbckReadDescriptor; ReadId := Submit(C);
   AssertFalse(FEvents.Terminal(WriteId));
   AssertEquals(Ord(lbekOperationSucceeded), Ord(Wait(WriteId).Kind));
   AssertEquals(Ord(lbekOperationSucceeded), Ord(Wait(ReadId).Kind));
@@ -809,11 +980,11 @@ var C: TLazBleBackendCommand; E: TLazBleBackendEvent;
 begin
   Connect; C := Request(lbckReadDescriptor);
   C.DescriptorUuid := '00002999-0000-1000-8000-00805f9b34fb';
-  E := Wait(FBackend.Submit(C));
+  E := Wait(Submit(C));
   AssertEquals(Ord(lbekOperationFailed), Ord(E.Kind));
   AssertEquals(Ord(ecGattDescriptorNotFound), E.ErrorCode);
   C.DescriptorUuid := StringOfChar('x', 37);
-  E := Wait(FBackend.Submit(C));
+  E := Wait(Submit(C));
   AssertEquals(Ord(lbekOperationFailed), Ord(E.Kind));
   AssertEquals(Ord(ecInvalidArgument), E.ErrorCode);
 end;
@@ -822,15 +993,15 @@ procedure TLazBleSimpleBleBackendTest.IndicationAndUnsubscribe;
 var C: TLazBleBackendCommand; Id: TBleOperationId; Token: TBleSubscriptionId; N: Integer;
 begin
   Connect; C := Request(lbckSubscribe); C.SubscriptionMode := lbsmIndicate;
-  Id := FBackend.Submit(C);
+  Id := Submit(C);
   AssertEquals(Ord(lbekOperationSucceeded), Ord(Wait(Id).Kind));
   Token := FEvents.Last(lbekSubscribed, Id).SubscriptionId;
   WaitForEvent(lbekNotification);
   AssertEquals(Token, FEvents.Last(lbekNotification).SubscriptionId);
   C.SubscriptionMode := lbsmNotify;
-  AssertEquals(LazBleErrorInvalidState, Wait(FBackend.Submit(C)).ErrorCode);
+  AssertEquals(LazBleErrorInvalidState, Wait(Submit(C)).ErrorCode);
   C.Kind := lbckUnsubscribe; C.SubscriptionId := Token;
-  AssertEquals(Ord(lbekOperationSucceeded), Ord(Wait(FBackend.Submit(C)).Kind));
+  AssertEquals(Ord(lbekOperationSucceeded), Ord(Wait(Submit(C)).Kind));
   N := FEvents.Count(lbekNotification); Pump(1100);
   AssertEquals(N, FEvents.Count(lbekNotification));
 end;
@@ -841,7 +1012,7 @@ begin
   Connect; C := Request(lbckSubscribe);
   C.ServiceUuid := BatteryService; C.CharacteristicUuid := BatteryValue;
   C.SubscriptionMode := lbsmIndicate;
-  E := Wait(FBackend.Submit(C));
+  E := Wait(Submit(C));
   AssertEquals(Ord(lbekOperationFailed), Ord(E.Kind));
   AssertEquals(Ord(ecOperationNotSupported), E.ErrorCode);
 end;
@@ -878,7 +1049,7 @@ procedure TLazBleSimpleBleBackendTest.UnknownConnectDoesNotStartScan;
 var C: TLazBleBackendCommand; Id: TBleOperationId; Deadline: QWord;
 begin
   C := Request(lbckConnect); C.DeviceId := '99:88:77:66:55:44';
-  Id := FBackend.Submit(C);
+  Id := Submit(C);
   AssertFalse('Failure is deferred until after Submit', FEvents.Terminal(Id));
   Deadline := GetTickCount64 + 1000;
   while not FEvents.Terminal(Id) and (GetTickCount64 < Deadline) do CheckSynchronize(5);
@@ -918,10 +1089,10 @@ var C: TLazBleBackendCommand; Id: TBleOperationId; BatteryToken, TestToken: TBle
 begin
   Connect;
   C := Request(lbckSubscribe); C.ServiceUuid := BatteryService; C.CharacteristicUuid := BatteryValue;
-  Id := FBackend.Submit(C); Wait(Id);
+  Id := Submit(C); Wait(Id);
   BatteryToken := FEvents.Last(lbekSubscribed, Id).SubscriptionId;
   C := Request(lbckSubscribe); C.SubscriptionMode := lbsmIndicate;
-  Id := FBackend.Submit(C); Wait(Id);
+  Id := Submit(C); Wait(Id);
   TestToken := FEvents.Last(lbekSubscribed, Id).SubscriptionId;
   Deadline := GetTickCount64 + 8000;
   repeat

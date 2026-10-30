@@ -109,8 +109,6 @@ type
   public
     function ConnectInternal: IBleOperation;
     function DisconnectInternal: IBleOperation;
-    procedure CancelConnectInternal;
-    procedure CancelDisconnectInternal;
   end;
 
   TBleOperationAccess = class(TBleOperation)
@@ -123,12 +121,12 @@ type
 
   TBleScanOperationAccess = class(TBleScanOperation)
   public
+    procedure CloseResultsInternal;
     constructor CreateInternal(
       const AOnCancel: TLazBleOperationCancelEvent);
     procedure Finish(const AState: TLazBleOperationState;
       const AErrorCode: Integer = 0; const AErrorMessage: string = '');
-    procedure AddResult(const ADeviceId, ADeviceName: string;
-      const ARssi: SmallInt);
+    procedure SetFinishing(const AHandler: TLazBleOperationCompletedEvent);
   end;
 
   TBleAvailabilityOperationAccess = class(TBleAvailabilityOperation)
@@ -137,7 +135,7 @@ type
       const AOnCancel: TLazBleOperationCancelEvent);
     procedure Finish(const AState: TLazBleOperationState;
       const AErrorCode: Integer = 0; const AErrorMessage: string = '');
-    procedure StoreAvailability(const AAvailability: TBleAvailability);
+    procedure SetFinishing(const AHandler: TLazBleOperationCompletedEvent);
   end;
 
 constructor TBleClientAccess.CreateInternal(const ASession: TBleGattSession;
@@ -167,11 +165,6 @@ begin
   Result := BeginDisconnect;
 end;
 
-procedure TBleGattSessionAccess.CancelConnectInternal;
-begin CancelConnect; end;
-procedure TBleGattSessionAccess.CancelDisconnectInternal;
-begin CancelDisconnect; end;
-
 constructor TBleOperationAccess.CreateInternal(
   const AOnCancel: TLazBleOperationCancelEvent);
 begin
@@ -198,12 +191,8 @@ begin
   Complete(AState, AErrorCode, AErrorMessage);
 end;
 
-procedure TBleAvailabilityOperationAccess.StoreAvailability(
-  const AAvailability: TBleAvailability);
-begin
-  LazBleRequireMainThread;
-  SetAvailability(AAvailability);
-end;
+procedure TBleAvailabilityOperationAccess.SetFinishing(const AHandler: TLazBleOperationCompletedEvent);
+begin OnFinishing := AHandler; end;
 
 procedure TBleOperationAccess.Finish(const AState: TLazBleOperationState;
   const AErrorCode: Integer; const AErrorMessage: string);
@@ -212,12 +201,11 @@ begin
   Complete(AState, AErrorCode, AErrorMessage);
 end;
 
-procedure TBleScanOperationAccess.AddResult(const ADeviceId,
-  ADeviceName: string; const ARssi: SmallInt);
-begin
-  LazBleRequireMainThread;
-  AddOrUpdateResult(ADeviceId, ADeviceName, ARssi);
-end;
+procedure TBleScanOperationAccess.SetFinishing(const AHandler: TLazBleOperationCompletedEvent);
+begin OnFinishing := AHandler; end;
+
+procedure TBleScanOperationAccess.CloseResultsInternal;
+begin CloseResults; end;
 
 procedure TBleScanOperationAccess.Finish(const AState: TLazBleOperationState;
   const AErrorCode: Integer; const AErrorMessage: string);
@@ -367,7 +355,11 @@ procedure TLazBle.CancelPendingOperations;
 var Index: Integer;
 begin
   LazBleRequireMainThread;
-  if Assigned(FActiveScan) and (FActiveScan.State = lbopPending) then FActiveScan.Cancel;
+  if Assigned(FActiveScan) and (FActiveScan.State = lbopPending) then
+  begin
+    TBleScanOperationAccess(FActiveScanObject).CloseResultsInternal;
+    FActiveScan.Cancel;
+  end;
   if Assigned(FActiveAvailability) and (FActiveAvailability.State = lbopPending) then
     FActiveAvailability.Cancel;
   for Index := 0 to FClients.Count - 1 do
@@ -400,7 +392,7 @@ begin
   Result := Operation;
   FActiveAvailability := Result;
   FActiveAvailabilityObject := Operation;
-  TBleOperationAccess(Operation).OnFinishing := @AvailabilityFinished;
+  Operation.SetFinishing(@AvailabilityFinished);
   if FManager.CheckAvailability(AAdapterId, Operation) = InvalidBleOperationId then
   begin
     FActiveAvailability := nil;
@@ -424,7 +416,7 @@ begin
   Result := Operation;
   FActiveScan := Result;
   FActiveScanObject := Operation;
-  TBleOperationAccess(Operation).OnFinishing := @ScanFinished;
+  Operation.SetFinishing(@ScanFinished);
   if FManager.StartScan(AAdapterId, ATimeoutMs, Operation, Operation) = InvalidBleOperationId then
   begin
     FActiveScan := nil;

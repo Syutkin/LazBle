@@ -71,7 +71,6 @@ type
     function GetOnStateChanged: TLazBleSessionStateChangedEvent;
     procedure SetOnStateChanged(
       const AHandler: TLazBleSessionStateChangedEvent);
-    function Submit(const AKind: TLazBleBackendCommandKind): TBleOperationId;
     function SubmitGattCommand(const ACommand: TLazBleBackendCommand):
       IBleGattOperation;
     function DescriptorCommand(const AKind: TLazBleBackendCommandKind;
@@ -93,7 +92,7 @@ type
     function BeginDisconnect: IBleOperation;
     procedure CancelConnect;
     procedure CancelDisconnect;
-    procedure HandleBackendEvent(const AEvent: TLazBleBackendEvent);
+    procedure HandleLinkChanged(const AConnected: Boolean; const AGeneration: QWord);
     procedure HandleBackendShutdown;
     procedure PrepareShutdown;
     procedure AddStateChangedHandler(
@@ -142,7 +141,7 @@ type
     procedure LinkChanged(const AConnected: Boolean; const AGeneration: QWord);
   end;
 
-  TSessionWorkflow = class(TBleOperation, ILazBleRequestCompletion)
+  TSessionWorkflow = class(TBleOperation)
   private
     FSession: TBleGattSession;
     FGeneration: QWord;
@@ -154,7 +153,7 @@ type
     constructor Create(ASession: TBleGattSession;
       AKind: TLazBleBackendCommandKind);
     procedure Start(AKind: TLazBleBackendCommandKind);
-    procedure CompleteRequest(const AResult: TLazBleRequestResult);
+    procedure CompleteRequest(const AResult: TLazBleRequestResult); override;
     procedure Detach;
   end;
 
@@ -166,15 +165,8 @@ type
     procedure Bind(const AOperationId: TBleOperationId);
     constructor CreateFailed(const AKind: TLazBleBackendCommandKind;
       const ACode: Integer; const AText: string);
-    constructor CreateInternal(const AOperationId: TBleOperationId;
-      const AKind: TLazBleBackendCommandKind;
-      const AOnCancel: TLazBleOperationCancelEvent; const AGeneration: QWord);
-    constructor CreateTerminal(const AKind: TLazBleBackendCommandKind;
-      const AState: TLazBleOperationState; const AErrorMessage: string = '');
-    procedure HandleEvent(const AEvent: TLazBleBackendEvent);
     procedure CancelWithoutBackend;
     procedure DetachFromSession;
-    function Matches(const AOperationId: TBleOperationId): Boolean;
     function OperationId: TBleOperationId;
     function OperationKind: TLazBleBackendCommandKind;
   end;
@@ -185,9 +177,6 @@ type
       const AUnsubscribe: TLazBleUnsubscribe; const AOnRetired: TNotifyEvent);
     procedure Bind(const AOperationId: TBleOperationId);
     constructor CreateFailed(const ACode: Integer; const AText: string);
-    constructor CreateInternal(const AOperationId: TBleOperationId;
-      const AGeneration: QWord; const AUnsubscribe: TLazBleUnsubscribe);
-    procedure HandleEvent(const AEvent: TLazBleBackendEvent);
     procedure InvalidateInternal(const AForce: Boolean = False);
     procedure DetachCallbacksInternal;
     function CleanupPendingInternal: Boolean;
@@ -221,14 +210,9 @@ begin
 end;
 
 procedure TSessionLink.LinkChanged(const AConnected: Boolean; const AGeneration: QWord);
-var Event: TLazBleBackendEvent;
 begin
   LazBleRequireMainThread;
-  if Session = nil then Exit;
-  Event := Default(TLazBleBackendEvent);
-  if AConnected then Event.Kind := lbekConnected else Event.Kind := lbekDisconnected;
-  Event.Generation := AGeneration;
-  Session.HandleBackendEvent(Event);
+  if Session <> nil then Session.HandleLinkChanged(AConnected, AGeneration);
 end;
 
 constructor TSessionWorkflow.Create(ASession: TBleGattSession;
@@ -268,6 +252,13 @@ end;
 
 procedure TSessionWorkflow.Finish(const AResult: TLazBleRequestResult);
 begin
+  if (FSession <> nil) and (FGeneration = FSession.Generation) then
+  begin
+    FSession.FLastOperationFailed := AResult.Status = lbrsFailed;
+    FSession.FLastOperationCancelled := AResult.Status = lbrsCancelled;
+    FSession.FErrorCode := AResult.ErrorCode;
+    FSession.FErrorMessage := AResult.ErrorMessage;
+  end;
   FSession := nil;
   case AResult.Status of
     lbrsSucceeded: Complete(lbopSucceeded);
@@ -388,28 +379,6 @@ end;
 procedure TBleSubscriptionAccess.Bind(const AOperationId: TBleOperationId);
 begin BindRequest(AOperationId); end;
 
-constructor TBleGattOperationAccess.CreateInternal(
-  const AOperationId: TBleOperationId;
-  const AKind: TLazBleBackendCommandKind;
-  const AOnCancel: TLazBleOperationCancelEvent; const AGeneration: QWord);
-begin
-  inherited Create(AOperationId, AKind, AOnCancel, AGeneration);
-end;
-
-constructor TBleGattOperationAccess.CreateTerminal(
-  const AKind: TLazBleBackendCommandKind;
-  const AState: TLazBleOperationState; const AErrorMessage: string);
-begin
-  inherited CreateCompleted(AKind, AState, AErrorMessage);
-end;
-
-procedure TBleGattOperationAccess.HandleEvent(
-  const AEvent: TLazBleBackendEvent);
-begin
-  LazBleRequireMainThread;
-  HandleBackendEvent(AEvent);
-end;
-
 procedure TBleGattOperationAccess.CancelWithoutBackend;
 begin
   LazBleRequireMainThread;
@@ -425,31 +394,10 @@ begin
   DetachOwner;
 end;
 
-function TBleGattOperationAccess.Matches(
-  const AOperationId: TBleOperationId): Boolean;
-begin
-  LazBleRequireMainThread;
-  Result := MatchesOperationId(AOperationId);
-end;
-
 function TBleGattOperationAccess.OperationId: TBleOperationId;
 begin
   LazBleRequireMainThread;
   Result := GetOperationId;
-end;
-
-constructor TBleSubscriptionAccess.CreateInternal(
-  const AOperationId: TBleOperationId; const AGeneration: QWord;
-  const AUnsubscribe: TLazBleUnsubscribe);
-begin
-  inherited Create(AOperationId, AGeneration, AUnsubscribe);
-end;
-
-procedure TBleSubscriptionAccess.HandleEvent(
-  const AEvent: TLazBleBackendEvent);
-begin
-  LazBleRequireMainThread;
-  HandleBackendEvent(AEvent);
 end;
 
 procedure TBleSubscriptionAccess.InvalidateInternal(const AForce: Boolean);
@@ -653,22 +601,6 @@ begin
   FSubscriptions.Free;
   FOperations.Free;
   inherited Destroy;
-end;
-
-function TBleGattSession.Submit(
-  const AKind: TLazBleBackendCommandKind): TBleOperationId;
-var
-  Command: TLazBleBackendCommand;
-begin
-  LazBleRequireMainThread;
-  Result := InvalidBleOperationId;
-  if not Assigned(FSubmitCommand) then
-    Exit;
-  Command := Default(TLazBleBackendCommand);
-  Command.Kind := AKind;
-  Command.DeviceId := FDeviceId;
-  Command.Generation := Generation;
-  Result := FSubmitCommand(Command);
 end;
 
 function TBleGattSession.SubmitGattCommand(
@@ -1016,20 +948,16 @@ begin
     FCancelOperation(FDisconnectOperationId);
 end;
 
-procedure TBleGattSession.HandleBackendEvent(const AEvent: TLazBleBackendEvent);
+procedure TBleGattSession.HandleLinkChanged(const AConnected: Boolean; const AGeneration: QWord);
 begin
   LazBleRequireMainThread;
-  if FShuttingDown or ((AEvent.DeviceId <> '') and (AEvent.DeviceId <> FDeviceId)) or
-    ((AEvent.Generation <> 0) and (AEvent.Generation <> Generation)) then Exit;
-  case AEvent.Kind of
-    lbekConnected: FConnectionEstablished := True;
-    lbekDisconnected:
-      if State <> lbssDisconnected then
-      begin
-        FConnectionEstablished := False;
-        InvalidateGattState;
-        SetState(lbssDisconnected);
-      end;
+  if FShuttingDown or ((AGeneration <> 0) and (AGeneration <> Generation)) then Exit;
+  if AConnected then FConnectionEstablished := True
+  else if State <> lbssDisconnected then
+  begin
+    FConnectionEstablished := False;
+    InvalidateGattState;
+    SetState(lbssDisconnected);
   end;
 end;
 

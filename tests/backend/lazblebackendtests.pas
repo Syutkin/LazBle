@@ -4,208 +4,116 @@ unit LazBleBackendTests;
 
 interface
 
-uses
-  Classes,
-  SysUtils,
-  fpcunit,
-  testregistry,
-  LazBleTypes,
-  LazBleBackend,
-  FakeLazBleBackend;
+uses SysUtils, fpcunit, testregistry, LazBleTypes, LazBleBackend, FakeLazBleBackend;
 
 type
-  TRecordingEventSink = class(TInterfacedObject, ILazBleBackendEventSink)
-  private
-    FEvents: array of TLazBleBackendEvent;
-    function GetEvent(const AIndex: Integer): TLazBleBackendEvent;
+  TRequestRecorder = class(TInterfacedObject, ILazBleRequestCompletion)
   public
-    procedure HandleBackendEvent(const AEvent: TLazBleBackendEvent);
-    function EventCount: Integer;
-    property Events[const AIndex: Integer]: TLazBleBackendEvent read GetEvent;
+    Count: Integer;
+    Last: TLazBleRequestResult;
+    procedure CompleteRequest(const AResult: TLazBleRequestResult);
   end;
 
   TLazBleBackendTest = class(TTestCase)
   private
     FBackend: ILazBleBackend;
-    FBackendObject: TFakeLazBleBackend;
-    FEventSink: ILazBleBackendEventSink;
-    FEventSinkObject: TRecordingEventSink;
+    FFake: TFakeLazBleBackend;
+    FTarget: ILazBleRequestCompletion;
+    FRecorder: TRequestRecorder;
   protected
     procedure SetUp; override;
     procedure TearDown; override;
   published
     procedure SubmitStoresTypedCommandsAndReturnsDistinctIds;
-    procedure SubmitDoesNotDeliverEventsSynchronously;
-    procedure EmitPreservesEventIdentityAndPayload;
+    procedure SubmitDoesNotCompleteSynchronously;
+    procedure CompletePreservesStatusAndPayload;
     procedure CancelOnlyRecordsTheRequestedOperation;
     procedure BeginShutdownReturnsAnIdWithoutSynchronousCompletion;
-    procedure TerminalEventKindsAreExplicit;
+    procedure FailureStatusIsIndependentOfCodeAndText;
+    procedure SubmitWithoutRecipientIsRejected;
   end;
 
 implementation
 
-function TRecordingEventSink.GetEvent(
-  const AIndex: Integer): TLazBleBackendEvent;
-begin
-  Result := FEvents[AIndex];
-end;
-
-procedure TRecordingEventSink.HandleBackendEvent(
-  const AEvent: TLazBleBackendEvent);
-var
-  Index: Integer;
-begin
-  Index := Length(FEvents);
-  SetLength(FEvents, Index + 1);
-  FEvents[Index] := AEvent;
-end;
-
-function TRecordingEventSink.EventCount: Integer;
-begin
-  Result := Length(FEvents);
-end;
+procedure TRequestRecorder.CompleteRequest(const AResult: TLazBleRequestResult);
+begin LazBleRequireMainThread; Last := AResult; Inc(Count); end;
 
 procedure TLazBleBackendTest.SetUp;
 begin
-  FBackendObject := TFakeLazBleBackend.Create;
-  FBackend := FBackendObject;
-  FEventSinkObject := TRecordingEventSink.Create;
-  FEventSink := FEventSinkObject;
-  FBackend.SetEventSink(FEventSink);
+  FFake := TFakeLazBleBackend.Create; FBackend := FFake;
+  FRecorder := TRequestRecorder.Create; FTarget := FRecorder;
 end;
 
 procedure TLazBleBackendTest.TearDown;
-begin
-  FBackend.SetEventSink(nil);
-  FEventSink := nil;
-  FEventSinkObject := nil;
-  FBackend := nil;
-  FBackendObject := nil;
-end;
+begin FBackend := nil; FTarget := nil; end;
 
 procedure TLazBleBackendTest.SubmitStoresTypedCommandsAndReturnsDistinctIds;
-var
-  FirstCommand: TLazBleBackendCommand;
-  SecondCommand: TLazBleBackendCommand;
-  FirstId: TBleOperationId;
-  SecondId: TBleOperationId;
+var C: TLazBleBackendCommand; First, Second: TBleOperationId;
 begin
-  FirstCommand := Default(TLazBleBackendCommand);
-  FirstCommand.Kind := lbckConnect;
-  FirstCommand.DeviceId := 'device-1';
-  SecondCommand := Default(TLazBleBackendCommand);
-  SecondCommand.Kind := lbckRead;
-  SecondCommand.DeviceId := 'device-1';
-  SecondCommand.ServiceUuid := '180f';
-  SecondCommand.CharacteristicUuid := '2a19';
-
-  FirstId := FBackend.Submit(FirstCommand);
-  SecondId := FBackend.Submit(SecondCommand);
-
-  AssertTrue('The first operation id must be valid',
-    FirstId <> InvalidBleOperationId);
-  AssertTrue('Operation ids must be distinct', FirstId <> SecondId);
-  AssertEquals(2, FBackendObject.CommandCount);
-  AssertEquals(Ord(lbckConnect), Ord(FBackendObject.Commands[0].Kind));
-  AssertEquals('device-1', FBackendObject.Commands[0].DeviceId);
-  AssertEquals(Ord(lbckRead), Ord(FBackendObject.Commands[1].Kind));
-  AssertEquals('180f', FBackendObject.Commands[1].ServiceUuid);
-  AssertTrue(FirstId = FBackendObject.OperationIds[0]);
-  AssertTrue(SecondId = FBackendObject.OperationIds[1]);
+  C := Default(TLazBleBackendCommand); C.Kind := lbckWrite;
+  C.DeviceId := 'device'; C.ServiceUuid := 'service'; C.CharacteristicUuid := 'value';
+  C.Value := TBytes.Create(42);
+  First := FBackend.Submit(C, FTarget); Second := FBackend.Submit(C, FTarget);
+  C.Value[0] := 99;
+  AssertTrue(First <> InvalidBleOperationId); AssertTrue(First <> Second);
+  AssertEquals(2, FFake.CommandCount);
+  AssertEquals('device', FFake.Commands[0].DeviceId);
+  AssertEquals('service', FFake.Commands[0].ServiceUuid);
+  AssertEquals('value', FFake.Commands[0].CharacteristicUuid);
+  AssertEquals(42, FFake.Commands[0].Value[0]);
 end;
 
-procedure TLazBleBackendTest.SubmitDoesNotDeliverEventsSynchronously;
-var
-  Command: TLazBleBackendCommand;
+procedure TLazBleBackendTest.SubmitDoesNotCompleteSynchronously;
 begin
-  Command := Default(TLazBleBackendCommand);
-  Command.Kind := lbckStartScan;
-
-  FBackend.Submit(Command);
-
-  AssertEquals(0, FEventSinkObject.EventCount);
+  FBackend.Submit(Default(TLazBleBackendCommand), FTarget);
+  AssertEquals(0, FRecorder.Count);
 end;
 
-procedure TLazBleBackendTest.EmitPreservesEventIdentityAndPayload;
-var
-  BackendEvent: TLazBleBackendEvent;
-  Command: TLazBleBackendCommand;
-  OperationId: TBleOperationId;
+procedure TLazBleBackendTest.CompletePreservesStatusAndPayload;
+var Id: TBleOperationId; R: TLazBleRequestResult;
 begin
-  Command := Default(TLazBleBackendCommand);
-  Command.Kind := lbckSubscribe;
-  OperationId := FBackend.Submit(Command);
-  BackendEvent := Default(TLazBleBackendEvent);
-  BackendEvent.Kind := lbekNotification;
-  BackendEvent.OperationId := OperationId;
-  BackendEvent.SubscriptionId := 11;
-  BackendEvent.Generation := 3;
-  BackendEvent.DeviceId := 'device-1';
-  SetLength(BackendEvent.Value, 3);
-  BackendEvent.Value[0] := $10;
-  BackendEvent.Value[1] := $20;
-  BackendEvent.Value[2] := $30;
-
-  FBackendObject.Emit(BackendEvent);
-
-  AssertEquals(1, FEventSinkObject.EventCount);
-  AssertEquals(Ord(lbekNotification),
-    Ord(FEventSinkObject.Events[0].Kind));
-  AssertTrue(FEventSinkObject.Events[0].OperationId = OperationId);
-  AssertTrue(FEventSinkObject.Events[0].SubscriptionId = 11);
-  AssertTrue(FEventSinkObject.Events[0].Generation = 3);
-  AssertEquals('device-1', FEventSinkObject.Events[0].DeviceId);
-  AssertEquals(3, Length(FEventSinkObject.Events[0].Value));
-  AssertEquals($20, Integer(FEventSinkObject.Events[0].Value[1]));
+  Id := FBackend.Submit(Default(TLazBleBackendCommand), FTarget);
+  R := Default(TLazBleRequestResult); R.Status := lbrsSucceeded;
+  R.Value := TBytes.Create(42); R.AdapterId := 'adapter';
+  AssertTrue(FFake.FinishRequest(Id, R));
+  AssertEquals(1, FRecorder.Count);
+  AssertEquals(42, FRecorder.Last.Value[0]); AssertEquals('adapter', FRecorder.Last.AdapterId);
 end;
 
 procedure TLazBleBackendTest.CancelOnlyRecordsTheRequestedOperation;
-var
-  Command: TLazBleBackendCommand;
-  OperationId: TBleOperationId;
+var First, Second: TBleOperationId;
 begin
-  Command := Default(TLazBleBackendCommand);
-  Command.Kind := lbckRead;
-  OperationId := FBackend.Submit(Command);
-
-  FBackend.Cancel(OperationId);
-  FBackend.Cancel(OperationId);
-
-  AssertEquals(1, FBackendObject.CancelledOperationCount);
-  AssertTrue(FBackendObject.CancelledOperationIds[0] = OperationId);
-  AssertEquals(0, FEventSinkObject.EventCount);
+  First := FBackend.Submit(Default(TLazBleBackendCommand), FTarget);
+  Second := FBackend.Submit(Default(TLazBleBackendCommand), FTarget);
+  FBackend.Cancel(Second); FBackend.Cancel(Second);
+  AssertFalse(FFake.CancellationWasRequested(First));
+  AssertTrue(FFake.CancellationWasRequested(Second));
+  AssertEquals(1, FFake.CancelledOperationCount); AssertEquals(0, FRecorder.Count);
 end;
 
 procedure TLazBleBackendTest.BeginShutdownReturnsAnIdWithoutSynchronousCompletion;
-var
-  ShutdownId: TBleOperationId;
 begin
-  ShutdownId := FBackend.BeginShutdown;
-
-  AssertTrue(ShutdownId <> InvalidBleOperationId);
-  AssertTrue(ShutdownId = FBackendObject.ShutdownOperationId);
-  AssertEquals(0, FEventSinkObject.EventCount);
+  AssertTrue(FBackend.BeginShutdown(FTarget) <> InvalidBleOperationId);
+  AssertEquals(0, FRecorder.Count);
+  AssertTrue(FFake.CompleteShutdown); AssertEquals(1, FRecorder.Count);
 end;
 
-procedure TLazBleBackendTest.TerminalEventKindsAreExplicit;
-var
-  BackendEvent: TLazBleBackendEvent;
+procedure TLazBleBackendTest.FailureStatusIsIndependentOfCodeAndText;
+var Id: TBleOperationId; R: TLazBleRequestResult;
 begin
-  BackendEvent := Default(TLazBleBackendEvent);
-  BackendEvent.Kind := lbekNotification;
-  AssertFalse(LazBleBackendEventIsTerminal(BackendEvent));
+  Id := FBackend.Submit(Default(TLazBleBackendCommand), FTarget);
+  R := Default(TLazBleRequestResult); R.Status := lbrsFailed;
+  AssertTrue(FFake.FinishRequest(Id, R));
+  AssertEquals(Ord(lbrsFailed), Ord(FRecorder.Last.Status));
+  AssertEquals(0, FRecorder.Last.ErrorCode); AssertEquals('', FRecorder.Last.ErrorMessage);
+end;
 
-  BackendEvent.Kind := lbekOperationSucceeded;
-  AssertTrue(LazBleBackendEventIsTerminal(BackendEvent));
-  BackendEvent.Kind := lbekOperationFailed;
-  AssertTrue(LazBleBackendEventIsTerminal(BackendEvent));
-  BackendEvent.Kind := lbekOperationCancelled;
-  AssertTrue(LazBleBackendEventIsTerminal(BackendEvent));
-  BackendEvent.Kind := lbekShutdownCompleted;
-  AssertTrue(LazBleBackendEventIsTerminal(BackendEvent));
+procedure TLazBleBackendTest.SubmitWithoutRecipientIsRejected;
+begin
+  AssertTrue(FBackend.Submit(Default(TLazBleBackendCommand), nil) = InvalidBleOperationId);
+  AssertEquals(0, FFake.CommandCount);
 end;
 
 initialization
   RegisterTest(TLazBleBackendTest);
-
 end.

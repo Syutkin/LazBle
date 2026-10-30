@@ -18,8 +18,7 @@ type
     property Value: TBytes read GetValue;
   end;
 
-  TBleGattOperation = class(TBleOperation, IBleGattOperation,
-    ILazBleRequestCompletion)
+  TBleGattOperation = class(TBleOperation, IBleGattOperation)
   private
     FOperationId: TBleOperationId;
     FGeneration: QWord;
@@ -32,17 +31,11 @@ type
     procedure BindRequest(const AOperationId: TBleOperationId);
     { A local operation that awaits a chained native cleanup. }
     constructor CreatePending(const AKind: TLazBleBackendCommandKind);
-    constructor Create(const AOperationId: TBleOperationId;
-      const AKind: TLazBleBackendCommandKind;
-      const AOnCancel: TLazBleOperationCancelEvent; const AGeneration: QWord = 0);
     constructor CreateCompleted(const AKind: TLazBleBackendCommandKind;
-      const AState: TLazBleOperationState;
-      const AErrorMessage: string = '');
-    procedure HandleBackendEvent(const AEvent: TLazBleBackendEvent);
+      const AState: TLazBleOperationState; const AErrorMessage: string = '');
     procedure CompleteRequest(const AResult: TLazBleRequestResult); override;
     procedure CancelLocally;
     procedure DetachOwner;
-    function MatchesOperationId(const AOperationId: TBleOperationId): Boolean;
     function GetOperationId: TBleOperationId;
     function GetKind: TLazBleBackendCommandKind;
     property OperationGeneration: QWord read FGeneration;
@@ -52,6 +45,15 @@ type
   end;
 
 implementation
+
+constructor TBleGattOperation.CreateCompleted(const AKind: TLazBleBackendCommandKind;
+  const AState: TLazBleOperationState; const AErrorMessage: string);
+begin
+  inherited Create(nil);
+  FKind := AKind;
+  if AState = lbopFailed then Complete(AState, LazBleErrorInvalidState, AErrorMessage)
+  else Complete(AState, 0, AErrorMessage);
+end;
 
 constructor TBleGattOperation.CreateRequest(const AKind: TLazBleBackendCommandKind;
   const AOnCancel: TLazBleOperationCancelEvent; const AGeneration: QWord);
@@ -82,32 +84,6 @@ begin
   FKind := AKind;
 end;
 
-constructor TBleGattOperation.Create(const AOperationId: TBleOperationId;
-  const AKind: TLazBleBackendCommandKind;
-  const AOnCancel: TLazBleOperationCancelEvent; const AGeneration: QWord);
-begin
-  inherited Create(AOnCancel);
-  FOperationId := AOperationId;
-  FGeneration := AGeneration;
-  FKind := AKind;
-  if AOperationId = InvalidBleOperationId then
-    Complete(lbopFailed, LazBleErrorInvalidState,
-      'Could not submit GATT operation');
-end;
-
-constructor TBleGattOperation.CreateCompleted(
-  const AKind: TLazBleBackendCommandKind;
-  const AState: TLazBleOperationState; const AErrorMessage: string);
-begin
-  inherited Create(nil);
-  FOperationId := InvalidBleOperationId;
-  FKind := AKind;
-  if AState = lbopFailed then
-    Complete(AState, LazBleErrorInvalidState, AErrorMessage)
-  else
-    Complete(AState, 0, AErrorMessage);
-end;
-
 destructor TBleGattOperation.Destroy;
 begin
   FValue := nil;
@@ -118,28 +94,6 @@ function TBleGattOperation.GetValue: TBytes;
 begin
   LazBleRequireMainThread;
   Result := FValue;
-end;
-
-procedure TBleGattOperation.HandleBackendEvent(
-  const AEvent: TLazBleBackendEvent);
-begin
-  LazBleRequireMainThread;
-  if (State <> lbopPending) or
-    ((AEvent.Generation <> 0) and (AEvent.Generation <> FGeneration)) or
-    (AEvent.OperationId <> FOperationId) then
-    Exit;
-  case AEvent.Kind of
-    lbekReadResult:
-      begin
-        FValue := AEvent.Value;
-      end;
-    lbekOperationSucceeded:
-      Complete(lbopSucceeded);
-    lbekOperationFailed:
-      Complete(lbopFailed, AEvent.ErrorCode, AEvent.ErrorMessage);
-    lbekOperationCancelled:
-      Complete(lbopCancelled);
-  end;
 end;
 
 procedure TBleGattOperation.CancelLocally;
@@ -153,13 +107,6 @@ begin
   LazBleRequireMainThread;
   DetachCancelHandler;
   OnFinishing := nil;
-end;
-
-function TBleGattOperation.MatchesOperationId(
-  const AOperationId: TBleOperationId): Boolean;
-begin
-  LazBleRequireMainThread;
-  Result := FOperationId = AOperationId;
 end;
 
 function TBleGattOperation.GetOperationId: TBleOperationId;

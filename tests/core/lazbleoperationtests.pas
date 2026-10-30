@@ -28,12 +28,18 @@ type
     destructor Destroy; override;
     procedure Succeed;
     procedure FailNative;
+    procedure SetFinishing(const Handler: TLazBleOperationCompletedEvent);
   end;
 
   TLazBleOperationTest = class(TTestCase)
   private
     FObserved: Integer;
+    FFinishingCount, FDestroyed: Integer;
+    FReleasedOperation: IBleOperation;
     procedure ObserveRead(Sender: TObject);
+    procedure Finishing(Sender: TObject);
+    procedure ObserveCompletion(Sender: TObject);
+    procedure ReleaseOperation(Sender: TObject);
   published
     procedure LateCompletionHandlerRunsExactlyOnce;
     procedure InterfaceOwnsCompletedOperationLifetime;
@@ -43,9 +49,54 @@ type
     procedure AddressedFailureDoesNotDependOnCodeOrText;
     procedure AddressedCancelIsExplicit;
     procedure AddressedEmptyReadIsSuccessful;
+    procedure InternalContinuationPreservesPublicCallback;
+    procedure CompletionMayReleaseLastOwnerReference;
   end;
 
 implementation
+
+procedure TTrackedOperation.SetFinishing(const Handler: TLazBleOperationCompletedEvent);
+begin OnFinishing := Handler; end;
+
+procedure TLazBleOperationTest.Finishing(Sender: TObject);
+begin
+  AssertEquals(Ord(lbopSucceeded), Ord(TBleOperation(Sender).State));
+  Inc(FFinishingCount);
+end;
+
+procedure TLazBleOperationTest.ObserveCompletion(Sender: TObject);
+begin
+  AssertEquals(1, FFinishingCount);
+  Inc(FObserved);
+end;
+
+procedure TLazBleOperationTest.ReleaseOperation(Sender: TObject);
+begin
+  FReleasedOperation := nil;
+  AssertEquals('The operation lives until its callback returns', 0, FDestroyed);
+  AssertEquals(Ord(lbopSucceeded), Ord(TBleOperation(Sender).State));
+  Inc(FObserved);
+end;
+
+procedure TLazBleOperationTest.InternalContinuationPreservesPublicCallback;
+var Instance: TTrackedOperation; Operation: IBleOperation;
+begin
+  Instance := TTrackedOperation.CreateTracked(nil); Operation := Instance;
+  Instance.SetFinishing(@Finishing);
+  Operation.OnCompleted := @ObserveCompletion;
+  Instance.Succeed;
+  AssertEquals(1, FFinishingCount); AssertEquals(1, FObserved);
+end;
+
+procedure TLazBleOperationTest.CompletionMayReleaseLastOwnerReference;
+var Instance: TTrackedOperation;
+begin
+  Instance := TTrackedOperation.CreateTracked(@FDestroyed);
+  FReleasedOperation := Instance;
+  FReleasedOperation.OnCompleted := @ReleaseOperation;
+  Instance.Succeed;
+  AssertEquals(1, FObserved); AssertEquals(1, FDestroyed);
+end;
 
 type
   TPendingRead = class(TBleGattOperation)

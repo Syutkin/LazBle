@@ -283,7 +283,7 @@ begin
 
     AssertNull(Client.LazBle);
     AssertNull(Client.CoreClient);
-    AssertFalse(FBackendObject.HasEventSink);
+    AssertTrue(FBackendObject.ShutdownStarted);
     CheckSynchronize;
   finally
     Client.Free;

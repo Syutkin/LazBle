@@ -346,7 +346,7 @@ begin
   AssertTrue(FBackendObject.CompleteShutdown);
 
   AssertEquals(Ord(lbcsShutdown), Ord(FManager.State));
-  AssertFalse(FBackendObject.HasEventSink);
+  AssertTrue(FBackendObject.ShutdownStarted);
   AssertTrue(FManager.StartScan('hci0', 1000) = InvalidBleOperationId);
 end;
 

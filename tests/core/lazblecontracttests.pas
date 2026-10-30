@@ -24,6 +24,7 @@ type
     FFake: TFakeLazBleBackend;
     FClient: TBleClient;
     FValues: Integer;
+    FCallbackErrors: Integer;
     FNextOperation: IBleOperation;
     FNextRead: IBleGattOperation;
     procedure DisconnectWhenConnected(Sender: TObject);
@@ -35,6 +36,11 @@ type
     procedure Connect;
     function LastId: TBleOperationId;
     procedure Data(Sender: TObject; const Value: TBytes);
+    procedure ScanData(Sender: TObject; const DeviceId, DeviceName: string;
+      const Rssi: SmallInt);
+    procedure RaisingScanData(Sender: TObject; const DeviceId, DeviceName: string;
+      const Rssi: SmallInt);
+    procedure CallbackError(Sender: TObject);
   protected
     procedure SetUp; override;
     procedure TearDown; override;
@@ -79,14 +85,61 @@ type
     procedure LateDisconnectOutcomeDoesNotChangeNewConnection;
     procedure ScanFinalSnapshotCompletesDirectly;
     procedure AvailabilityResultCompletesDirectly;
+    procedure ShutdownScanKeepsSnapshotWithoutDeliveringResults;
+    procedure ScanResultExceptionDoesNotLoseSnapshotOrCompletion;
   end;
 
 implementation
+
+procedure TLazBleContractTest.RaisingScanData(Sender: TObject;
+  const DeviceId, DeviceName: string; const Rssi: SmallInt);
+begin Inc(FValues); raise Exception.Create('test scan handler'); end;
+
+procedure TLazBleContractTest.CallbackError(Sender: TObject);
+begin Inc(FCallbackErrors); end;
+
+procedure TLazBleContractTest.ScanResultExceptionDoesNotLoseSnapshotOrCompletion;
+var Op: IBleScanOperation; R: TLazBleRequestResult; Previous: TNotifyEvent;
+begin
+  Op := FBle.ScanAsync('', 0); Op.OnResult := @RaisingScanData;
+  R := Default(TLazBleRequestResult); R.Status := lbrsSucceeded;
+  SetLength(R.ScanResults, 2);
+  R.ScanResults[0].DeviceId := 'first'; R.ScanResults[1].DeviceId := 'second';
+  Previous := ApplicationHandleException;
+  ApplicationHandleException := @CallbackError;
+  try AssertTrue(FFake.FinishRequest(LastId, R));
+  finally ApplicationHandleException := Previous; end;
+  AssertEquals(Ord(lbopSucceeded), Ord(Op.State));
+  AssertEquals(2, Length(Op.Results)); AssertEquals(2, FValues);
+  AssertEquals(2, FCallbackErrors);
+end;
+
+procedure TLazBleContractTest.ScanData(Sender: TObject;
+  const DeviceId, DeviceName: string; const Rssi: SmallInt);
+begin Inc(FValues); end;
+
+procedure TLazBleContractTest.ShutdownScanKeepsSnapshotWithoutDeliveringResults;
+var Op: IBleScanOperation; Shutdown: IBleOperation;
+  R: TLazBleRequestResult; Id: TBleOperationId;
+begin
+  Op := FBle.ScanAsync('', 0); Id := LastId;
+  Op.OnResult := @ScanData;
+  Shutdown := FBle.ShutdownAsync;
+  R := Default(TLazBleRequestResult); R.Status := lbrsCancelled;
+  SetLength(R.ScanResults, 1); R.ScanResults[0].DeviceId := 'final';
+  AssertTrue(FFake.FinishRequest(Id, R));
+  AssertEquals(0, FValues);
+  AssertEquals(1, Length(Op.Results));
+  AssertEquals('final', Op.Results[0].DeviceId);
+  AssertTrue(FFake.CompleteShutdown);
+  AssertEquals(Ord(lbopSucceeded), Ord(Shutdown.State));
+end;
 
 procedure TLazBleContractTest.ScanFinalSnapshotCompletesDirectly;
 var Op: IBleScanOperation; R: TLazBleRequestResult;
 begin
   Op := FBle.ScanAsync('', 0);
+  Op.OnResult := @ScanData;
   R := Default(TLazBleRequestResult); R.Status := lbrsSucceeded;
   SetLength(R.ScanResults, 2);
   R.ScanResults[0].DeviceId := 'first'; R.ScanResults[0].Rssi := -70;
@@ -96,6 +149,7 @@ begin
   AssertEquals(2, Length(Op.Results));
   AssertEquals('first', Op.Results[0].DeviceId);
   AssertEquals('second', Op.Results[1].DeviceId);
+  AssertEquals(2, FValues);
 end;
 
 procedure TLazBleContractTest.AvailabilityResultCompletesDirectly;
@@ -465,7 +519,7 @@ begin
   AssertTrue(FFake.CompleteShutdown(0,'cleanup invalid argument'));
   AssertEquals(Ord(lbopFailed),Ord(Op.State)); AssertEquals(0,Op.ErrorCode);
   AssertEquals('cleanup invalid argument',Op.ErrorMessage);
-  AssertFalse(FFake.HasEventSink); AssertTrue(Op=FBle.ShutdownAsync);
+  AssertTrue(FFake.ShutdownStarted); AssertTrue(Op=FBle.ShutdownAsync);
 end;
 
 procedure TLazBleContractTest.PendingUnsubscribeWaitsForCancelledNotify;

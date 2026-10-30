@@ -98,6 +98,7 @@ type
 
   TBleScanOperation = class(TBleOperation, IBleScanOperation, ILazBleScanSink)
   private
+    FClosing: Boolean;
     FResults: TBleDeviceInfos;
     FOnResult: TLazBleScanResultEvent;
     function GetResults: TBleDeviceInfos;
@@ -109,6 +110,7 @@ type
       const ARssi: SmallInt);
     procedure CompleteRequest(const AResult: TLazBleRequestResult); override;
     procedure ReceiveScanResult(const ADevice: TBleDeviceInfo);
+    procedure CloseResults;
   public
     destructor Destroy; override;
     property Results: TBleDeviceInfos read GetResults;
@@ -152,19 +154,19 @@ begin
 end;
 
 procedure TBleScanOperation.CompleteRequest(const AResult: TLazBleRequestResult);
-var Device: TBleDeviceInfo; Handler: TLazBleScanResultEvent;
+var Device: TBleDeviceInfo;
 begin
   LazBleRequireMainThread;
   if State <> lbopPending then Exit;
-  Handler := FOnResult;
-  FOnResult := nil;
-  try
-    for Device in AResult.ScanResults do
-      AddOrUpdateResult(Device.DeviceId, Device.DeviceName, Device.Rssi);
-  finally
-    FOnResult := Handler;
-  end;
+  for Device in AResult.ScanResults do
+    AddOrUpdateResult(Device.DeviceId, Device.DeviceName, Device.Rssi);
   inherited CompleteRequest(AResult);
+end;
+
+procedure TBleScanOperation.CloseResults;
+begin
+  LazBleRequireMainThread;
+  FClosing := True;
 end;
 
 procedure TBleAvailabilityOperation.CompleteRequest(const AResult: TLazBleRequestResult);
@@ -385,9 +387,10 @@ begin
     ResultInfo := FResults[Index];
   end;
   Handler := GetOnResult;
-  if Assigned(Handler) then
-    Handler(Self, ResultInfo.DeviceId, ResultInfo.DeviceName,
-      ResultInfo.Rssi);
+  if not FClosing and Assigned(Handler) then
+    try
+      Handler(Self, ResultInfo.DeviceId, ResultInfo.DeviceName, ResultInfo.Rssi);
+    except LazBleReportCallbackException; end;
 end;
 
 function TBleScanOperation.GetResults: TBleDeviceInfos;
