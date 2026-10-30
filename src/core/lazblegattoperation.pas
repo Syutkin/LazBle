@@ -7,6 +7,7 @@ interface
 uses
   SysUtils,
   LazBleTypes,
+  LazBleBackend,
   LazBleOperation;
 
 type
@@ -17,7 +18,8 @@ type
     property Value: TBytes read GetValue;
   end;
 
-  TBleGattOperation = class(TBleOperation, IBleGattOperation)
+  TBleGattOperation = class(TBleOperation, IBleGattOperation,
+    ILazBleRequestCompletion)
   private
     FOperationId: TBleOperationId;
     FGeneration: QWord;
@@ -34,6 +36,7 @@ type
       const AState: TLazBleOperationState;
       const AErrorMessage: string = '');
     procedure HandleBackendEvent(const AEvent: TLazBleBackendEvent);
+    procedure CompleteRequest(const AResult: TLazBleRequestResult);
     procedure CancelLocally;
     procedure DetachOwner;
     function MatchesOperationId(const AOperationId: TBleOperationId): Boolean;
@@ -46,6 +49,18 @@ type
   end;
 
 implementation
+
+procedure TBleGattOperation.CompleteRequest(const AResult: TLazBleRequestResult);
+begin
+  LazBleRequireMainThread;
+  if State <> lbopPending then Exit;
+  FValue := AResult.Value;
+  case AResult.Status of
+    lbrsSucceeded: Complete(lbopSucceeded);
+    lbrsFailed: Complete(lbopFailed, AResult.ErrorCode, AResult.ErrorMessage);
+    lbrsCancelled: Complete(lbopCancelled, AResult.ErrorCode, AResult.ErrorMessage);
+  end;
+end;
 
 constructor TBleGattOperation.CreatePending(const AKind: TLazBleBackendCommandKind);
 begin

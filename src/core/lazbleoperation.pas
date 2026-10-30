@@ -66,6 +66,7 @@ type
     FCancelRequested: Boolean;
     FOnCancel: TLazBleOperationCancelEvent;
     FOnCompleted: TLazBleOperationCompletedEvent;
+    FOnFinishing: TLazBleOperationCompletedEvent;
     FCompletionDelivered: Boolean;
     procedure NotifyCompleted;
   protected
@@ -79,6 +80,8 @@ type
       const AErrorCode: Integer = 0;
       const AErrorMessage: string = ''): Boolean;
     procedure DetachCancelHandler;
+    { Owner bookkeeping/continuation, independent of the public callback. }
+    property OnFinishing: TLazBleOperationCompletedEvent read FOnFinishing write FOnFinishing;
   protected
     constructor Create(const AOnCancel: TLazBleOperationCancelEvent);
   public
@@ -172,6 +175,7 @@ destructor TBleOperation.Destroy;
 begin
   FOnCompleted := nil;
   FOnCancel := nil;
+  FOnFinishing := nil;
   inherited Destroy;
 end;
 
@@ -209,8 +213,10 @@ procedure TBleOperation.SetOnCompleted(
   const AHandler: TLazBleOperationCompletedEvent);
 var
   NotifyNow: Boolean;
+  KeepAlive: IBleOperation;
 begin
   LazBleRequireMainThread;
+  KeepAlive := Self;
   if not SameCompletedHandler(FOnCompleted, AHandler) then
     FCompletionDelivered := False;
   FOnCompleted := AHandler;
@@ -239,8 +245,12 @@ end;
 
 function TBleOperation.Complete(const AState: TLazBleOperationState;
   const AErrorCode: Integer; const AErrorMessage: string): Boolean;
+var
+  KeepAlive: IBleOperation;
+  Finishing: TLazBleOperationCompletedEvent;
 begin
   LazBleRequireMainThread;
+  KeepAlive := Self;
   if AState = lbopPending then
     raise EArgumentException.Create('A terminal operation state is required');
   Result := FState = lbopPending;
@@ -250,6 +260,9 @@ begin
     FErrorCode := AErrorCode;
     FErrorMessage := AErrorMessage;
     FOnCancel := nil;
+    Finishing := FOnFinishing;
+    FOnFinishing := nil;
+    if Assigned(Finishing) then Finishing(Self);
   end;
   if Result then
     NotifyCompleted;

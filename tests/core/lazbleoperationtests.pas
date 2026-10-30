@@ -5,10 +5,11 @@ unit LazBleOperationTests;
 interface
 
 uses
+  SysUtils,
   fpcunit,
   testregistry,
   LazBleTypes,
-  LazBleOperation;
+  LazBleOperation, LazBleBackend, LazBleGattOperation;
 
 type
   TOperationObserver = class
@@ -30,14 +31,96 @@ type
   end;
 
   TLazBleOperationTest = class(TTestCase)
+  private
+    FObserved: Integer;
+    procedure ObserveRead(Sender: TObject);
   published
     procedure LateCompletionHandlerRunsExactlyOnce;
     procedure InterfaceOwnsCompletedOperationLifetime;
     procedure CancelWithoutHandlerWaitsForOutcome;
     procedure CancelDoesNotHideNativeFailure;
+    procedure AddressedReadPublishesOneCompleteResult;
+    procedure AddressedFailureDoesNotDependOnCodeOrText;
+    procedure AddressedCancelIsExplicit;
+    procedure AddressedEmptyReadIsSuccessful;
   end;
 
 implementation
+
+type
+  TPendingRead = class(TBleGattOperation)
+    constructor Create;
+  end;
+
+constructor TPendingRead.Create;
+begin
+  inherited CreatePending(lbckRead);
+end;
+
+procedure TLazBleOperationTest.ObserveRead(Sender: TObject);
+var Op: IBleGattOperation;
+begin
+  AssertTrue(Supports(Sender, IBleGattOperation, Op));
+  AssertEquals(Ord(lbopSucceeded), Ord(Op.State));
+  AssertEquals(42, Op.Value[0]);
+  Inc(FObserved);
+end;
+
+procedure TLazBleOperationTest.AddressedReadPublishesOneCompleteResult;
+var Op: IBleGattOperation; Target: ILazBleRequestCompletion;
+  ResultData: TLazBleRequestResult;
+begin
+  Op := TPendingRead.Create;
+  AssertTrue(Supports(Op, ILazBleRequestCompletion, Target));
+  Op.OnCompleted := @ObserveRead;
+  ResultData := Default(TLazBleRequestResult);
+  ResultData.Status := lbrsSucceeded;
+  ResultData.Value := TBytes.Create(42);
+  Target.CompleteRequest(ResultData);
+  ResultData.Value := TBytes.Create(99);
+  Target.CompleteRequest(ResultData);
+  AssertEquals(1, FObserved);
+  AssertEquals(42, Op.Value[0]);
+end;
+
+procedure TLazBleOperationTest.AddressedFailureDoesNotDependOnCodeOrText;
+var Op: IBleGattOperation; Target: ILazBleRequestCompletion;
+  ResultData: TLazBleRequestResult;
+begin
+  Op := TPendingRead.Create;
+  AssertTrue(Supports(Op, ILazBleRequestCompletion, Target));
+  ResultData := Default(TLazBleRequestResult);
+  ResultData.Status := lbrsFailed;
+  Target.CompleteRequest(ResultData);
+  AssertEquals(Ord(lbopFailed), Ord(Op.State));
+  AssertEquals(0, Op.ErrorCode);
+  AssertEquals('', Op.ErrorMessage);
+end;
+
+procedure TLazBleOperationTest.AddressedCancelIsExplicit;
+var Op: IBleGattOperation; Target: ILazBleRequestCompletion;
+  ResultData: TLazBleRequestResult;
+begin
+  Op := TPendingRead.Create;
+  AssertTrue(Supports(Op, ILazBleRequestCompletion, Target));
+  ResultData := Default(TLazBleRequestResult);
+  ResultData.Status := lbrsCancelled;
+  Target.CompleteRequest(ResultData);
+  AssertEquals(Ord(lbopCancelled), Ord(Op.State));
+end;
+
+procedure TLazBleOperationTest.AddressedEmptyReadIsSuccessful;
+var Op: IBleGattOperation; Target: ILazBleRequestCompletion;
+  ResultData: TLazBleRequestResult;
+begin
+  Op := TPendingRead.Create;
+  AssertTrue(Supports(Op, ILazBleRequestCompletion, Target));
+  ResultData := Default(TLazBleRequestResult);
+  ResultData.Status := lbrsSucceeded;
+  Target.CompleteRequest(ResultData);
+  AssertEquals(Ord(lbopSucceeded), Ord(Op.State));
+  AssertEquals(0, Length(Op.Value));
+end;
 
 procedure TOperationObserver.Completed(Sender: TObject);
 begin

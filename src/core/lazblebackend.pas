@@ -5,9 +5,30 @@ unit LazBleBackend;
 interface
 
 uses
-  LazBleTypes;
+  SysUtils, LazBleTypes;
 
 type
+  TLazBleRequestStatus = (lbrsSucceeded, lbrsFailed, lbrsCancelled);
+
+  { One immutable terminal snapshot. Status, not error code/text, determines
+    the outcome. Payloads are read-only managed data. }
+  TLazBleRequestResult = record
+    Status: TLazBleRequestStatus;
+    ErrorCode: Integer;
+    ErrorMessage: string;
+    Value: TBytes;
+    Services: TLazBleGattServices;
+    ScanResults: TBleDeviceInfos;
+    SubscriptionId: TBleSubscriptionId;
+    Available: Boolean;
+    BackendName, BackendVersion, AdapterId: string;
+  end;
+
+  ILazBleRequestCompletion = interface
+    ['{037F83CB-AF54-4EF2-8578-C20AA20E1A53}']
+    procedure CompleteRequest(const AResult: TLazBleRequestResult);
+  end;
+
   ILazBleBackendEventSink = interface
     ['{1F4A66C4-5739-4428-902D-B09F59039602}']
     procedure HandleBackendEvent(const AEvent: TLazBleBackendEvent);
