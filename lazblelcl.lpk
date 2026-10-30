@@ -28,6 +28,9 @@
       </Item3>
       <Item4>
         <Filename Value="src\lcl\lazbledevicecontrol.pas"/>
+        <ComponentName Value="BleDeviceControl"/>
+        <HasResources Value="True"/>
+        <ResourceBaseClass Value="Frame"/>
         <UnitName Value="LazBleDeviceControl"/>
       </Item4>
       <Item5>

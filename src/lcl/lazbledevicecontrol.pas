@@ -8,8 +8,9 @@ uses
   Classes,
   SysUtils,
   Controls,
-  Graphics,
+  Forms,
   StdCtrls,
+  ExtCtrls,
   LazBleTypes,
   LazBleClient,
   LazBleComponent,
@@ -35,13 +36,17 @@ function LazBleConnectionActionText(
 type
   { Design-time control for selecting a BLE device and toggling connection.
     Assign Client; the control does not own it. }
-  TLazBleDeviceControl = class(TCustomControl)
+  TLazBleDeviceControl = class(TFrame)
+    ButtonPanel: TPanel;
+    TextPanel: TPanel;
+    DeviceLabel: TLabel;
+    StatusLabel: TLabel;
+    SelectButton: TButton;
+    ConnectionButton: TButton;
+    procedure SelectButtonClick(Sender: TObject);
+    procedure ConnectionButtonClick(Sender: TObject);
   private
     FClient: TLazBleLclClient;
-    FDeviceLabel: TLabel;
-    FStatusLabel: TLabel;
-    FSelectButton: TButton;
-    FConnectionButton: TButton;
     FShowSelectButton: Boolean;
     FShowConnectionButton: Boolean;
     FSelectButtonCaption: string;
@@ -64,14 +69,11 @@ type
     procedure SetConnectButtonCaption(const AValue: string);
     procedure SetDisconnectButtonCaption(const AValue: string);
     procedure ClientChanged(Sender: TObject);
-    procedure SelectButtonClick(Sender: TObject);
-    procedure ConnectionButtonClick(Sender: TObject);
     procedure RefreshDisplay;
   protected
     procedure Notification(AComponent: TComponent;
       Operation: TOperation); override;
-    procedure Paint; override;
-    procedure Resize; override;
+    procedure Loaded; override;
     function ExecuteDeviceSelection(out ADevice: TBleDeviceInfo): Boolean;
       virtual;
   public
@@ -121,6 +123,8 @@ type
   end;
 
 implementation
+
+{$R *.lfm}
 
 resourcestring
   SBleNoClient = 'No BLE client assigned';
@@ -226,36 +230,18 @@ end;
 
 constructor TLazBleDeviceControl.Create(AOwner: TComponent);
 begin
-  inherited Create(AOwner);
-  Width := 480;
-  Height := 64;
-  ParentColor := True;
   FShowSelectButton := True;
   FShowConnectionButton := True;
   FSelectButtonCaption := SBleSelect;
   FConnectButtonCaption := SBleConnect;
   FDisconnectButtonCaption := SBleDisconnect;
+  inherited Create(AOwner);
+  RefreshDisplay;
+end;
 
-  FDeviceLabel := TLabel.Create(Self);
-  FDeviceLabel.Parent := Self;
-  FDeviceLabel.AutoSize := False;
-  FDeviceLabel.ParentFont := True;
-
-  FStatusLabel := TLabel.Create(Self);
-  FStatusLabel.Parent := Self;
-  FStatusLabel.AutoSize := False;
-  FStatusLabel.ParentFont := True;
-
-  FSelectButton := TButton.Create(Self);
-  FSelectButton.Parent := Self;
-  FSelectButton.Caption := FSelectButtonCaption;
-  FSelectButton.OnClick := @SelectButtonClick;
-
-  FConnectionButton := TButton.Create(Self);
-  FConnectionButton.Parent := Self;
-  FConnectionButton.OnClick := @ConnectionButtonClick;
-
-  Resize;
+procedure TLazBleDeviceControl.Loaded;
+begin
+  inherited Loaded;
   RefreshDisplay;
 end;
 
@@ -264,8 +250,7 @@ begin
   if AValue = FShowSelectButton then
     Exit;
   FShowSelectButton := AValue;
-  FSelectButton.Visible := AValue;
-  Resize;
+  RefreshDisplay;
 end;
 
 procedure TLazBleDeviceControl.SetShowConnectionButton(const AValue: Boolean);
@@ -273,8 +258,7 @@ begin
   if AValue = FShowConnectionButton then
     Exit;
   FShowConnectionButton := AValue;
-  FConnectionButton.Visible := AValue;
-  Resize;
+  RefreshDisplay;
 end;
 
 procedure TLazBleDeviceControl.SetSelectButtonCaption(const AValue: string);
@@ -282,7 +266,7 @@ begin
   if AValue = FSelectButtonCaption then
     Exit;
   FSelectButtonCaption := AValue;
-  FSelectButton.Caption := AValue;
+  RefreshDisplay;
 end;
 
 procedure TLazBleDeviceControl.SetConnectButtonCaption(const AValue: string);
@@ -388,62 +372,18 @@ end;
 
 procedure TLazBleDeviceControl.RefreshDisplay;
 begin
-  FDeviceLabel.Caption := DeviceText;
-  FStatusLabel.Caption := StatusText;
-  FSelectButton.Caption := FSelectButtonCaption;
-  FSelectButton.Visible := FShowSelectButton;
-  FSelectButton.Enabled := Enabled and CanSelectDevice;
-  FConnectionButton.Visible := FShowConnectionButton;
-  FConnectionButton.Caption := ConnectionActionText;
-  FConnectionButton.Enabled := Enabled and CanToggleConnection;
-  Invalidate;
-end;
-
-procedure TLazBleDeviceControl.Resize;
-const
-  Margin = 8;
-  ButtonGap = 6;
-  SelectButtonWidth = 84;
-  ConnectionButtonWidth = 96;
-var
-  HasVisibleButton: Boolean;
-  ButtonHeight: Integer;
-  LabelWidth: Integer;
-  RightEdge: Integer;
-begin
-  inherited Resize;
-  if not Assigned(FConnectionButton) or not Assigned(FSelectButton) or
-    not Assigned(FDeviceLabel) or not Assigned(FStatusLabel) then
+  if not Assigned(DeviceLabel) or not Assigned(StatusLabel) or
+    not Assigned(SelectButton) or not Assigned(ConnectionButton) then
     Exit;
-  ButtonHeight := 30;
-  HasVisibleButton := FShowConnectionButton or FShowSelectButton;
-  RightEdge := Width - Margin;
-  if FShowConnectionButton then
-  begin
-    FConnectionButton.SetBounds(RightEdge - ConnectionButtonWidth,
-      (Height - ButtonHeight) div 2, ConnectionButtonWidth, ButtonHeight);
-    RightEdge := FConnectionButton.Left - ButtonGap;
-  end;
-  if FShowSelectButton then
-  begin
-    FSelectButton.SetBounds(RightEdge - SelectButtonWidth,
-      (Height - ButtonHeight) div 2, SelectButtonWidth, ButtonHeight);
-    RightEdge := FSelectButton.Left - ButtonGap;
-  end;
-  if HasVisibleButton then
-    LabelWidth := RightEdge + ButtonGap - Margin
-  else
-    LabelWidth := RightEdge - Margin;
-  if LabelWidth < 0 then
-    LabelWidth := 0;
-  FDeviceLabel.SetBounds(Margin, 8, LabelWidth, 22);
-  FStatusLabel.SetBounds(Margin, 34, LabelWidth, 20);
-end;
-
-procedure TLazBleDeviceControl.Paint;
-begin
-  Canvas.Brush.Color := Color;
-  Canvas.FillRect(ClientRect);
+  DeviceLabel.Caption := DeviceText;
+  StatusLabel.Caption := StatusText;
+  SelectButton.Caption := FSelectButtonCaption;
+  SelectButton.Visible := FShowSelectButton;
+  SelectButton.Enabled := Enabled and CanSelectDevice;
+  ConnectionButton.Visible := FShowConnectionButton;
+  ConnectionButton.Caption := ConnectionActionText;
+  ConnectionButton.Enabled := Enabled and CanToggleConnection;
+  Invalidate;
 end;
 
 function TLazBleDeviceControl.ExecuteDeviceSelection(

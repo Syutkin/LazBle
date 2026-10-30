@@ -1,0 +1,86 @@
+object BleDeviceControl: TLazBleDeviceControl
+  Left = 0
+  Height = 64
+  Top = 0
+  Width = 480
+  ClientHeight = 64
+  ClientWidth = 480
+  ParentColor = True
+  TabOrder = 0
+  LCLVersion = '3.4.0.0'
+  object TextPanel: TPanel
+    Left = 8
+    Height = 48
+    Top = 8
+    Width = 270
+    Align = alClient
+    BevelOuter = bvNone
+    BorderSpacing.Around = 8
+    ClientHeight = 48
+    ClientWidth = 270
+    TabOrder = 0
+    object DeviceLabel: TLabel
+      Left = 0
+      Height = 22
+      Top = 0
+      Width = 270
+      Align = alTop
+      AutoSize = False
+      BorderSpacing.Bottom = 4
+      Caption = 'No BLE client assigned'
+      ParentFont = True
+    end
+    object StatusLabel: TLabel
+      Left = 0
+      Height = 20
+      Top = 26
+      Width = 270
+      Align = alTop
+      AutoSize = False
+      ParentFont = True
+    end
+  end
+  object ButtonPanel: TPanel
+    Left = 286
+    Height = 64
+    Top = 0
+    Width = 186
+    Align = alRight
+    AutoSize = True
+    BevelOuter = bvNone
+    BorderSpacing.Right = 8
+    ChildSizing.HorizontalSpacing = 6
+    ChildSizing.EnlargeVertical = crsHomogenousChildResize
+    ChildSizing.Layout = cclLeftToRightThenTopToBottom
+    ChildSizing.ControlsPerLine = 2
+    ClientHeight = 64
+    ClientWidth = 186
+    TabOrder = 1
+    object SelectButton: TButton
+      Left = 0
+      Height = 30
+      Top = 17
+      Width = 84
+      AutoSize = True
+      BorderSpacing.CellAlignVertical = ccaCenter
+      Caption = 'Select...'
+      Constraints.MinHeight = 30
+      Constraints.MinWidth = 84
+      TabOrder = 0
+      OnClick = SelectButtonClick
+    end
+    object ConnectionButton: TButton
+      Left = 90
+      Height = 30
+      Top = 17
+      Width = 96
+      AutoSize = True
+      BorderSpacing.CellAlignVertical = ccaCenter
+      Caption = 'Connect'
+      Constraints.MinHeight = 30
+      Constraints.MinWidth = 96
+      TabOrder = 1
+      OnClick = ConnectionButtonClick
+    end
+  end
+end

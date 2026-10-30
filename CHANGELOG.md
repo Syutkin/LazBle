@@ -22,6 +22,7 @@ and GATT descriptor and indication support.
 
 ### Fixed
 
+- UI layout issues.
 - A delayed stop event from a previous scan no longer interrupts the next scan.
 - A native NotConnected result during shutdown cleanup no longer counts as a failure.
 - Accepted GATT results survive client removal and reconnection of the same device.

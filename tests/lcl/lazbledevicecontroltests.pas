@@ -10,6 +10,7 @@ uses
   FpcUnit,
   TestRegistry,
   LResources,
+  Forms,
   LazBleTypes,
   LazBleBackend,
   LazBleClient,
@@ -71,6 +72,7 @@ type
     procedure ButtonOptionsPreserveDefaultsAndUpdateControls;
     procedure CustomButtonEventsReplaceDefaultActions;
     procedure StreamingRestoresClientBindingWithoutBleWork;
+    procedure InlineFramePreservesChildOverridesAndEvents;
     procedure SelectingDeviceUpdatesExistingClientWithoutConnecting;
     procedure DirectClientSelectionRefreshesControl;
     procedure ConnectActionUsesBoundClient;
@@ -104,11 +106,11 @@ var
   ControlIndex: Integer;
 begin
   ButtonIndex := 0;
-  for ControlIndex := 0 to FControl.ControlCount - 1 do
-    if FControl.Controls[ControlIndex] is TButton then
+  for ControlIndex := 0 to FControl.ComponentCount - 1 do
+    if FControl.Components[ControlIndex] is TButton then
     begin
       if ButtonIndex = AIndex then
-        Exit(TButton(FControl.Controls[ControlIndex]));
+        Exit(TButton(FControl.Components[ControlIndex]));
       Inc(ButtonIndex);
     end;
   Result := nil;
@@ -171,7 +173,10 @@ end;
 procedure TLazBleDeviceControlTest.FindComponentClass(Reader: TReader;
   const AClassName: string; var AClass: TComponentClass);
 begin
-  AClass := TComponentClass(GetClass(AClassName));
+  if AClassName = TForm.ClassName then
+    AClass := TForm
+  else
+    AClass := TComponentClass(GetClass(AClassName));
 end;
 
 function TLazBleDeviceControlTest.Device(const ADeviceId,
@@ -327,6 +332,50 @@ begin
     Owner.Free;
     DeviceControlStreamingBackend := nil;
     Backend := nil;
+  end;
+end;
+
+procedure TLazBleDeviceControlTest.InlineFramePreservesChildOverridesAndEvents;
+const
+  FormResource =
+    'object Host: TForm' + LineEnding +
+    '  inline BleDeviceControl1: TLazBleDeviceControl' + LineEnding +
+    '    SelectButtonCaption = ''Choose''' + LineEnding +
+    '    inherited ButtonPanel: TPanel' + LineEnding +
+    '      inherited SelectButton: TButton' + LineEnding +
+    '        Hint = ''Choose another BLE device''' + LineEnding +
+    '        ShowHint = True' + LineEnding +
+    '      end' + LineEnding +
+    '    end' + LineEnding +
+    '  end' + LineEnding +
+    'end';
+var
+  Loaded: TComponent;
+  LoadedControl: TLazBleDeviceControl;
+  SelectButton: TButton;
+  Stream: TStringStream;
+begin
+  AssertTrue('The control must be a designer-editable frame',
+    TObject(FControl) is TFrame);
+  Loaded := TForm.CreateNew(nil);
+  Stream := TStringStream.Create(FormResource);
+  try
+    ReadComponentFromTextStream(Stream, Loaded, @FindComponentClass);
+    LoadedControl := Loaded.FindComponent('BleDeviceControl1') as
+      TLazBleDeviceControl;
+    AssertNotNull(LoadedControl);
+    SelectButton := LoadedControl.FindComponent('SelectButton') as TButton;
+    AssertNotNull(SelectButton);
+    AssertEquals('Choose another BLE device', SelectButton.Hint);
+    AssertTrue(SelectButton.ShowHint);
+    AssertEquals('Choose', SelectButton.Caption);
+    LoadedControl.OnSelectButtonClick := @SelectButtonClicked;
+    SelectButton.Click;
+    AssertEquals(1, FSelectButtonClickCount);
+    AssertSame(LoadedControl, FLastButtonClickSender);
+  finally
+    Stream.Free;
+    Loaded.Free;
   end;
 end;
 

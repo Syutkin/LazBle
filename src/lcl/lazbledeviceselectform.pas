@@ -24,6 +24,9 @@ type
     ButtonStart: TButton;
     ButtonStop: TButton;
     ButtonPanel: TPanel;
+    ButtonSpacer: TPanel;
+    ScanButtons: TPanel;
+    SelectionButtons: TPanel;
     DeviceGrid: TStringGrid;
     StatusLabel: TLabel;
     procedure ButtonSelectClick(Sender: TObject);

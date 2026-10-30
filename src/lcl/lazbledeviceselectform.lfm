@@ -3,12 +3,13 @@ object BleDeviceSelectForm: TBleDeviceSelectForm
   Height = 420
   Top = 220
   Width = 700
+  AutoSize = True
   BorderIcons = [biSystemMenu, biMaximize]
   Caption = 'Bluetooth devices'
   ClientHeight = 420
   ClientWidth = 700
-  Constraints.MinHeight = 320
-  Constraints.MinWidth = 560
+  Constraints.MinHeight = 420
+  Constraints.MinWidth = 700
   OnCloseQuery = FormCloseQuery
   Position = poScreenCenter
   LCLVersion = '3.4.0.0'
@@ -17,7 +18,11 @@ object BleDeviceSelectForm: TBleDeviceSelectForm
     Height = 17
     Top = 12
     Width = 676
-    Anchors = [akTop, akLeft, akRight]
+    Align = alTop
+    BorderSpacing.Left = 12
+    BorderSpacing.Top = 12
+    BorderSpacing.Right = 12
+    BorderSpacing.Bottom = 8
     Caption = 'Ready to scan'
   end
   object DeviceGrid: TStringGrid
@@ -25,17 +30,20 @@ object BleDeviceSelectForm: TBleDeviceSelectForm
     Height = 326
     Top = 37
     Width = 676
-    Anchors = [akTop, akLeft, akRight, akBottom]
+    Align = alClient
+    BorderSpacing.Left = 12
+    BorderSpacing.Right = 12
+    BorderSpacing.Bottom = 12
     ColCount = 3
-    Columns = <    
+    Columns = <
       item
         Title.Caption = 'Name'
         Width = 220
-      end    
+      end
       item
         Title.Caption = 'Device ID'
         Width = 330
-      end    
+      end
       item
         Title.Alignment = taRightJustify
         Title.Caption = 'RSSI'
@@ -54,49 +62,107 @@ object BleDeviceSelectForm: TBleDeviceSelectForm
     Top = 375
     Width = 700
     Align = alBottom
+    AutoSize = True
     BevelOuter = bvNone
     ClientHeight = 45
     ClientWidth = 700
+    Constraints.MinHeight = 45
     TabOrder = 1
-    object ButtonStart: TButton
+    object ScanButtons: TPanel
       Left = 12
       Height = 30
       Top = 8
-      Width = 72
-      Caption = 'Start'
+      Width = 150
+      Align = alLeft
+      AutoSize = True
+      BevelOuter = bvNone
+      BorderSpacing.Left = 12
+      BorderSpacing.Top = 8
+      BorderSpacing.Bottom = 7
+      ChildSizing.HorizontalSpacing = 6
+      ChildSizing.Layout = cclLeftToRightThenTopToBottom
+      ChildSizing.ControlsPerLine = 2
+      ClientHeight = 30
+      ClientWidth = 150
       TabOrder = 0
-      OnClick = ButtonStartClick
+      object ButtonStart: TButton
+        Left = 0
+        Height = 30
+        Top = 0
+        Width = 72
+        AutoSize = True
+        Caption = 'Start'
+        Constraints.MinHeight = 30
+        Constraints.MinWidth = 72
+        TabOrder = 0
+        OnClick = ButtonStartClick
+      end
+      object ButtonStop: TButton
+        Left = 78
+        Height = 30
+        Top = 0
+        Width = 72
+        AutoSize = True
+        Caption = 'Stop'
+        Constraints.MinHeight = 30
+        Constraints.MinWidth = 72
+        TabOrder = 1
+        OnClick = ButtonStopClick
+      end
     end
-    object ButtonStop: TButton
-      Left = 90
-      Height = 30
-      Top = 8
-      Width = 72
-      Caption = 'Stop'
-      TabOrder = 1
-      OnClick = ButtonStopClick
-    end
-    object ButtonSelect: TButton
+    object SelectionButtons: TPanel
       Left = 532
       Height = 30
       Top = 8
-      Width = 72
-      Anchors = [akTop, akRight]
-      Caption = 'Select'
-      Default = True
-      TabOrder = 2
-      OnClick = ButtonSelectClick
+      Width = 156
+      Align = alRight
+      AutoSize = True
+      BevelOuter = bvNone
+      BorderSpacing.Top = 8
+      BorderSpacing.Right = 12
+      BorderSpacing.Bottom = 7
+      ChildSizing.HorizontalSpacing = 12
+      ChildSizing.Layout = cclLeftToRightThenTopToBottom
+      ChildSizing.ControlsPerLine = 2
+      ClientHeight = 30
+      ClientWidth = 156
+      TabOrder = 1
+      object ButtonSelect: TButton
+        Left = 0
+        Height = 30
+        Top = 0
+        Width = 72
+        AutoSize = True
+        Caption = 'Select'
+        Constraints.MinHeight = 30
+        Constraints.MinWidth = 72
+        Default = True
+        TabOrder = 0
+        OnClick = ButtonSelectClick
+      end
+      object ButtonCancel: TButton
+        Left = 84
+        Height = 30
+        Top = 0
+        Width = 72
+        AutoSize = True
+        Cancel = True
+        Caption = 'Cancel'
+        Constraints.MinHeight = 30
+        Constraints.MinWidth = 72
+        ModalResult = 2
+        TabOrder = 1
+      end
     end
-    object ButtonCancel: TButton
-      Left = 616
-      Height = 30
-      Top = 8
-      Width = 72
-      Anchors = [akTop, akRight]
-      Cancel = True
-      Caption = 'Cancel'
-      ModalResult = 2
-      TabOrder = 3
+    object ButtonSpacer: TPanel
+      Left = 162
+      Height = 45
+      Top = 0
+      Width = 370
+      Align = alClient
+      BevelOuter = bvNone
+      Constraints.MinWidth = 24
+      TabOrder = 2
     end
   end
 end
