@@ -41,6 +41,7 @@ type
     procedure RaisingScanData(Sender: TObject; const DeviceId, DeviceName: string;
       const Rssi: SmallInt);
     procedure CallbackError(Sender: TObject);
+    procedure ObserveSessionClosing(Sender: TObject; const State: TLazBleClientState);
   protected
     procedure SetUp; override;
     procedure TearDown; override;
@@ -87,9 +88,85 @@ type
     procedure AvailabilityResultCompletesDirectly;
     procedure ShutdownScanKeepsSnapshotWithoutDeliveringResults;
     procedure ScanResultExceptionDoesNotLoseSnapshotOrCompletion;
+    procedure RemovedClientDoesNotLoseAcceptedRead;
+    procedure ActiveScanAndAvailabilityKeepTheirIdentityAndExcludeEachOther;
+    procedure GattIsAcceptedDuringScan;
+    procedure ShutdownRemainsPendingWhileClientsClose;
   end;
 
 implementation
+
+procedure TLazBleContractTest.RemovedClientDoesNotLoseAcceptedRead;
+var ReadOp: IBleGattOperation; ReadId: TBleOperationId; R: TLazBleRequestResult;
+begin
+  Connect;
+  ReadOp := FClient.ReadAsync('service', 'value'); ReadId := LastId;
+  Emit(lbekDisconnected, 0);
+  FBle.RemoveClient(FClient); FClient := nil;
+  AssertEquals(Ord(lbopPending), Ord(ReadOp.State));
+  FClient := FBle.CreateClient('peer');
+  Connect;
+  R := Default(TLazBleRequestResult); R.Status := lbrsSucceeded;
+  R.Value := TBytes.Create(91);
+  AssertTrue(FFake.FinishRequest(ReadId, R));
+  AssertEquals(Ord(lbopSucceeded), Ord(ReadOp.State));
+  AssertEquals(91, ReadOp.Value[0]);
+  AssertEquals(Ord(lbcstReady), Ord(FClient.State));
+  AssertTrue('The retained session advances its generation', FFake.Commands[3].Generation > 1);
+end;
+
+procedure TLazBleContractTest.ActiveScanAndAvailabilityKeepTheirIdentityAndExcludeEachOther;
+var Scan: IBleScanOperation; Availability: IBleAvailabilityOperation;
+  R: TLazBleRequestResult;
+begin
+  Scan := FBle.ScanAsync('', 0);
+  AssertTrue(Scan = FBle.ScanAsync('another', 10));
+  Availability := FBle.CheckAvailabilityAsync('');
+  AssertEquals(Ord(lbopFailed), Ord(Availability.State));
+  AssertEquals(1, FFake.CommandCount);
+  AssertTrue(FFake.CompleteOperation(LastId, lbekOperationSucceeded));
+  Availability := FBle.CheckAvailabilityAsync('');
+  AssertTrue(Availability = FBle.CheckAvailabilityAsync('another'));
+  Scan := FBle.ScanAsync('', 10);
+  AssertEquals(Ord(lbopFailed), Ord(Scan.State));
+  AssertEquals(2, FFake.CommandCount);
+  R := Default(TLazBleRequestResult); R.Status := lbrsSucceeded;
+  R.Availability := lbaAvailable;
+  AssertTrue(FFake.FinishRequest(LastId, R));
+  AssertEquals(Ord(lbopSucceeded), Ord(Availability.State));
+end;
+
+procedure TLazBleContractTest.GattIsAcceptedDuringScan;
+var Scan: IBleScanOperation; ReadOp: IBleGattOperation;
+begin
+  Connect;
+  Scan := FBle.ScanAsync('', 0);
+  ReadOp := FClient.ReadAsync('service', 'value');
+  AssertEquals(Ord(lbopPending), Ord(Scan.State));
+  AssertEquals(Ord(lbopPending), Ord(ReadOp.State));
+  AssertEquals(Ord(lbckRead), Ord(FFake.Commands[3].Kind));
+end;
+
+procedure TLazBleContractTest.ObserveSessionClosing(Sender: TObject;
+  const State: TLazBleClientState);
+begin
+  if State <> lbcstDisconnected then Exit;
+  AssertTrue(FNextOperation <> nil);
+  AssertEquals('Shutdown publishes terminal state after session callbacks',
+    Ord(lbopPending), Ord(FNextOperation.State));
+  Inc(FValues);
+end;
+
+procedure TLazBleContractTest.ShutdownRemainsPendingWhileClientsClose;
+begin
+  Connect;
+  FClient.OnStateChanged := @ObserveSessionClosing;
+  FNextOperation := FBle.ShutdownAsync;
+  AssertTrue(FFake.CompleteShutdown);
+  AssertEquals(1, FValues);
+  AssertEquals(Ord(lbcstDisconnected), Ord(FClient.State));
+  AssertEquals(Ord(lbopSucceeded), Ord(FNextOperation.State));
+end;
 
 procedure TLazBleContractTest.RaisingScanData(Sender: TObject;
   const DeviceId, DeviceName: string; const Rssi: SmallInt);
