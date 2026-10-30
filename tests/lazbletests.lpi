@@ -19,7 +19,7 @@
         <PackageName Value="LazBle"/>
       </Item1>
     </RequiredPackages>
-    <Units Count="17">
+    <Units Count="16">
       <Unit0>
         <Filename Value="lazbletests.lpr"/>
         <IsPartOfProject Value="True"/>
@@ -40,70 +40,65 @@
         <UnitName Value="LazBleBackendConformanceTests"/>
       </Unit3>
       <Unit4>
-        <Filename Value="core\lazblecentralmanagertests.pas"/>
-        <IsPartOfProject Value="True"/>
-        <UnitName Value="LazBleCentralManagerTests"/>
-      </Unit4>
-      <Unit5>
         <Filename Value="core\lazblegattsessiontests.pas"/>
         <IsPartOfProject Value="True"/>
         <UnitName Value="LazBleGattSessionTests"/>
-      </Unit5>
-      <Unit6>
+      </Unit4>
+      <Unit5>
         <Filename Value="core\lazblebytechanneltests.pas"/>
         <IsPartOfProject Value="True"/>
         <UnitName Value="LazBleByteChannelTests"/>
-      </Unit6>
-      <Unit7>
+      </Unit5>
+      <Unit6>
         <Filename Value="nus\lazblenustests.pas"/>
         <IsPartOfProject Value="True"/>
         <UnitName Value="LazBleNusTests"/>
-      </Unit7>
-      <Unit8>
+      </Unit6>
+      <Unit7>
         <Filename Value="battery\lazblebatterytests.pas"/>
         <IsPartOfProject Value="True"/>
         <UnitName Value="LazBleBatteryTests"/>
-      </Unit8>
-      <Unit9>
+      </Unit7>
+      <Unit8>
         <Filename Value="backend\lazblesimpleblebackendtests.pas"/>
         <IsPartOfProject Value="True"/>
         <UnitName Value="LazBleSimpleBleBackendTests"/>
-      </Unit9>
-      <Unit10>
+      </Unit8>
+      <Unit9>
         <Filename Value="core\lazbleclienttests.pas"/>
         <IsPartOfProject Value="True"/>
         <UnitName Value="LazBleClientTests"/>
-      </Unit10>
-      <Unit11>
+      </Unit9>
+      <Unit10>
         <Filename Value="core\lazblegattprofiletests.pas"/>
         <IsPartOfProject Value="True"/>
         <UnitName Value="LazBleGattProfileTests"/>
-      </Unit11>
-      <Unit12>
+      </Unit10>
+      <Unit11>
         <Filename Value="core\lazblereconnecttests.pas"/>
         <IsPartOfProject Value="True"/>
         <UnitName Value="LazBleReconnectTests"/>
-      </Unit12>
-      <Unit13>
+      </Unit11>
+      <Unit12>
         <Filename Value="support\fakelazblereconnecttimer.pas"/>
         <IsPartOfProject Value="True"/>
         <UnitName Value="FakeLazBleReconnectTimer"/>
-      </Unit13>
-      <Unit14>
+      </Unit12>
+      <Unit13>
         <Filename Value="core\lazbleoperationtests.pas"/>
         <IsPartOfProject Value="True"/>
         <UnitName Value="LazBleOperationTests"/>
-      </Unit14>
-      <Unit15>
+      </Unit13>
+      <Unit14>
         <Filename Value="support\testlazbleaccess.pas"/>
         <IsPartOfProject Value="True"/>
         <UnitName Value="TestLazBleAccess"/>
-      </Unit15>
-      <Unit16>
+      </Unit14>
+      <Unit15>
         <Filename Value="core\lazblecontracttests.pas"/>
         <IsPartOfProject Value="True"/>
         <UnitName Value="LazBleContractTests"/>
-      </Unit16>
+      </Unit15>
     </Units>
   </ProjectOptions>
   <CompilerOptions>

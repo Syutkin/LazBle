@@ -140,50 +140,6 @@ type
     SubscriptionId: TBleSubscriptionId;
   end;
 
-  TLazBleBackendEventKind = (
-    lbekScanStarted,
-    lbekScanResult,
-    lbekScanStopped,
-    lbekConnected,
-    lbekDisconnected,
-    lbekServicesDiscovered,
-    lbekReadResult,
-    lbekWriteCompleted,
-    lbekSubscribed,
-    lbekNotification,
-    lbekUnsubscribed,
-    lbekAvailabilityResult,
-    lbekOperationSucceeded,
-    lbekOperationFailed,
-    lbekOperationCancelled,
-    lbekShutdownCompleted
-  );
-
-  TLazBleBackendEvent = record
-    Kind: TLazBleBackendEventKind;
-    OperationId: TBleOperationId;
-    SubscriptionId: TBleSubscriptionId;
-    Generation: QWord;
-    BackendName: string;
-    BackendVersion: string;
-    AdapterId: string;
-    DeviceId: string;
-    DeviceName: string;
-    ServiceUuid: string;
-    CharacteristicUuid: string;
-    DescriptorUuid: string;
-    Rssi: SmallInt;
-    Available: Boolean;
-    Value: TBytes;
-    { Explicit flag for ShutdownCompleted: native error 0/empty text is valid. }
-    ShutdownFailed: Boolean;
-    ErrorCode: Integer;
-    ErrorMessage: string;
-    Services: TLazBleGattServices;
-  end;
-
-function LazBleBackendEventIsTerminal(
-  const AEvent: TLazBleBackendEvent): Boolean;
 { Main-thread contract shared by core, profiles, and custom backends. }
 procedure LazBleRequireMainThread;
 
@@ -195,17 +151,6 @@ begin
   Result.InitialDelayMs := AInitialDelayMs;
   Result.MaximumDelayMs := AMaximumDelayMs;
   Result.MaximumAttempts := AMaximumAttempts;
-end;
-
-function LazBleBackendEventIsTerminal(
-  const AEvent: TLazBleBackendEvent): Boolean;
-begin
-  Result := AEvent.Kind in [
-    lbekOperationSucceeded,
-    lbekOperationFailed,
-    lbekOperationCancelled,
-    lbekShutdownCompleted
-  ];
 end;
 
 procedure LazBleRequireMainThread;

@@ -14,7 +14,6 @@ uses
   LazBleGattSubscription,
   LazBleGattSession,
   LazBleGattProfile,
-  LazBleCentralManager,
   LazBleByteChannel,
   LazBleNus,
   LazBleBattery,
@@ -65,7 +64,6 @@ type
   private
     FBackend: ILazBleBackend;
     FBackendObject: TFakeLazBleBackend;
-    FManager: TBleCentralManager;
     FSession: TBleGattSession;
     FProfile: TTestBatteryProfile;
     procedure EmitEvent(const AKind: TLazBleBackendEventKind;
@@ -203,8 +201,7 @@ var
 begin
   FBackendObject := TFakeLazBleBackend.Create;
   FBackend := FBackendObject;
-  FManager := TBleCentralManager.Create(FBackend);
-  FSession := FManager.CreateSession('entime-1');
+  FSession := LazBleTestCreateSession('entime-1', @FBackendObject.Submit, @FBackendObject.Cancel);
   ConnectId := LazBleTestConnect(FSession);
   EmitEvent(lbekConnected, ConnectId, InvalidBleSubscriptionId, []);
   AssertTrue(FBackendObject.CompleteOperation(ConnectId, lbekOperationSucceeded));
@@ -238,8 +235,8 @@ procedure TLazBleBatteryTest.TearDown;
 begin
   FProfile.Free;
   FProfile := nil;
-  FManager.Free;
-  FManager := nil;
+  FSession.Free;
+  FSession := nil;
   FSession := nil;
   FBackend := nil;
   FBackendObject := nil;

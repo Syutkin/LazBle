@@ -14,7 +14,6 @@ uses
   LazBleGattOperation,
   LazBleGattSubscription,
   LazBleGattSession,
-  LazBleCentralManager,
   LazBleByteChannel,
   FakeLazBleBackend,
   TestLazBleAccess;
@@ -34,7 +33,6 @@ type
   private
     FBackend: ILazBleBackend;
     FBackendObject: TFakeLazBleBackend;
-    FManager: TBleCentralManager;
     FSession: TBleGattSession;
     FChannel: TBleByteChannel;
     procedure EmitEvent(const AKind: TLazBleBackendEventKind;
@@ -112,8 +110,7 @@ var
 begin
   FBackendObject := TFakeLazBleBackend.Create;
   FBackend := FBackendObject;
-  FManager := TBleCentralManager.Create(FBackend);
-  FSession := FManager.CreateSession('device-1');
+  FSession := LazBleTestCreateSession('device-1', @FBackendObject.Submit, @FBackendObject.Cancel);
   ConnectId := LazBleTestConnect(FSession);
   EmitEvent(lbekConnected, ConnectId, InvalidBleSubscriptionId, []);
   EmitEvent(lbekServicesDiscovered, FBackendObject.OperationIds[1],
@@ -126,8 +123,8 @@ procedure TLazBleByteChannelTest.TearDown;
 begin
   FChannel.Free;
   FChannel := nil;
-  FManager.Free;
-  FManager := nil;
+  FSession.Free;
+  FSession := nil;
   FSession := nil;
   FBackend := nil;
   FBackendObject := nil;

@@ -9,6 +9,12 @@ uses Classes, SysUtils, fpcunit, testregistry, LazBleTypes, LazBleBackend,
   LazBleClient, LazBleFacade, LazBleSync, FakeLazBleBackend;
 
 type
+  TFakeBackendWithLifetime = class(TFakeLazBleBackend)
+  public
+    Destroyed: PBoolean;
+    destructor Destroy; override;
+  end;
+
   TCleanupProfile = class(TBleGattProfile)
   protected
     procedure DoAttach; override;
@@ -120,9 +126,56 @@ type
     procedure ShutdownStillAcceptsProfileUnsubscribeCleanup;
     procedure DestroyedFacadeIgnoresLateAvailabilityAndShutdown;
     procedure ShutdownClosesDataBeforeProfileDetach;
+    procedure FacadeRetainsBackendAfterShutdownUntilRelease;
+    procedure ReconnectedClientIgnoresOldPhysicalLinkEvents;
   end;
 
 implementation
+
+destructor TFakeBackendWithLifetime.Destroy;
+begin
+  if Destroyed <> nil then Destroyed^ := True;
+  inherited Destroy;
+end;
+
+procedure TLazBleContractTest.FacadeRetainsBackendAfterShutdownUntilRelease;
+var Backend: ILazBleBackend; Fake: TFakeBackendWithLifetime;
+  Ble: TLazBle; Shutdown: IBleOperation; Destroyed: Boolean;
+begin
+  Destroyed := False;
+  Fake := TFakeBackendWithLifetime.Create; Fake.Destroyed := @Destroyed;
+  Backend := Fake; Ble := TLazBle.Create(Backend);
+  try
+    Shutdown := Ble.ShutdownAsync;
+    AssertTrue(Fake.CompleteShutdown);
+    AssertEquals(Ord(lbopSucceeded), Ord(Shutdown.State));
+    Backend := nil;
+    AssertFalse(Destroyed);
+    FreeAndNil(Ble);
+    AssertTrue(Destroyed);
+  finally Ble.Free; Backend := nil; end;
+end;
+
+procedure TLazBleContractTest.ReconnectedClientIgnoresOldPhysicalLinkEvents;
+var Connection, Disconnection: IBleOperation; Id: TBleOperationId;
+  E: TLazBleBackendEvent;
+begin
+  Connect;
+  Disconnection := FClient.DisconnectAsync; Id := LastId;
+  Emit(lbekDisconnected, Id); FFake.CompleteOperation(Id, lbekOperationSucceeded);
+  AssertEquals(Ord(lbopSucceeded), Ord(Disconnection.State));
+  Connection := FClient.ConnectAsync; Id := LastId;
+  E := Default(TLazBleBackendEvent); E.DeviceId := 'peer';
+  E.OperationId := Id; E.Generation := 1;
+  E.Kind := lbekConnected; AssertTrue(FFake.EmitProgress(E));
+  E.Kind := lbekDisconnected; AssertTrue(FFake.EmitProgress(E));
+  AssertEquals(Ord(lbcstConnecting), Ord(FClient.State));
+  AssertEquals(Ord(lbopPending), Ord(Connection.State));
+  AssertEquals('Old link events do not start discovery', 4, FFake.CommandCount);
+  Emit(lbekConnected, Id); FFake.CompleteOperation(Id, lbekOperationSucceeded);
+  Id := LastId; Emit(lbekServicesDiscovered, Id); FFake.CompleteOperation(Id, lbekOperationSucceeded);
+  AssertEquals(Ord(lbopSucceeded), Ord(Connection.State));
+end;
 
 procedure TLazBleContractTest.EmitClosingNotification(Sender: TObject);
 begin Emit(lbekNotification, 0, 7); end;

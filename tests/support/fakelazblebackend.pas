@@ -5,10 +5,53 @@ unit FakeLazBleBackend;
 interface
 
 uses
-  LazBleTypes,
+  SysUtils, LazBleTypes,
   LazBleBackend;
 
 type
+  { Scenario fixtures and observations only; runtime requests use addressed completion. }
+  TLazBleBackendEventKind = (
+    lbekScanStarted,
+    lbekScanResult,
+    lbekScanStopped,
+    lbekConnected,
+    lbekDisconnected,
+    lbekServicesDiscovered,
+    lbekReadResult,
+    lbekWriteCompleted,
+    lbekSubscribed,
+    lbekNotification,
+    lbekUnsubscribed,
+    lbekAvailabilityResult,
+    lbekOperationSucceeded,
+    lbekOperationFailed,
+    lbekOperationCancelled,
+    lbekShutdownCompleted
+  );
+
+  TLazBleBackendEvent = record
+    Kind: TLazBleBackendEventKind;
+    OperationId: TBleOperationId;
+    SubscriptionId: TBleSubscriptionId;
+    Generation: QWord;
+    BackendName: string;
+    BackendVersion: string;
+    AdapterId: string;
+    DeviceId: string;
+    DeviceName: string;
+    ServiceUuid: string;
+    CharacteristicUuid: string;
+    DescriptorUuid: string;
+    Rssi: SmallInt;
+    Available: Boolean;
+    Value: TBytes;
+    { Explicit flag for ShutdownCompleted: native error 0/empty text is valid. }
+    ShutdownFailed: Boolean;
+    ErrorCode: Integer;
+    ErrorMessage: string;
+    Services: TLazBleGattServices;
+  end;
+
   TFakeLazBleOperation = record
     OperationId: TBleOperationId;
     CancellationRequested: Boolean;
@@ -72,7 +115,21 @@ type
     property ShutdownOperationId: TBleOperationId read FShutdownOperationId;
   end;
 
+function LazBleBackendEventIsTerminal(const AEvent: TLazBleBackendEvent): Boolean;
+
 implementation
+
+function LazBleBackendEventIsTerminal(
+  const AEvent: TLazBleBackendEvent): Boolean;
+begin
+  Result := AEvent.Kind in [
+    lbekOperationSucceeded,
+    lbekOperationFailed,
+    lbekOperationCancelled,
+    lbekShutdownCompleted
+  ];
+end;
+
 
 function TFakeLazBleBackend.GetBackendName: string;
 begin

@@ -14,7 +14,6 @@ uses
   LazBleGattOperation,
   LazBleGattSubscription,
   LazBleGattSession,
-  LazBleCentralManager,
   FakeLazBleBackend,
   TestLazBleAccess;
 
@@ -33,7 +32,6 @@ type
   private
     FBackend: ILazBleBackend;
     FBackendObject: TFakeLazBleBackend;
-    FManager: TBleCentralManager;
     FSession: TBleGattSession;
     procedure EmitEvent(const AKind: TLazBleBackendEventKind;
       const AOperationId: TBleOperationId;
@@ -138,8 +136,7 @@ var
 begin
   FBackendObject := TFakeLazBleBackend.Create;
   FBackend := FBackendObject;
-  FManager := TBleCentralManager.Create(FBackend);
-  FSession := FManager.CreateSession('device-1');
+  FSession := LazBleTestCreateSession('device-1', @FBackendObject.Submit, @FBackendObject.Cancel);
   ConnectId := LazBleTestConnect(FSession);
   EmitEvent(lbekConnected, ConnectId, InvalidBleSubscriptionId, []);
   AssertTrue(FBackendObject.CompleteOperation(ConnectId, lbekOperationSucceeded));
@@ -188,8 +185,8 @@ end;
 
 procedure TLazBleGattSessionTest.TearDown;
 begin
-  FManager.Free;
-  FManager := nil;
+  FSession.Free;
+  FSession := nil;
   FSession := nil;
   FBackend := nil;
   FBackendObject := nil;
@@ -229,8 +226,8 @@ begin
   AssertTrue(FBackendObject.CompleteOperation(OperationId,
     lbekOperationSucceeded));
 
-  FManager.Free;
-  FManager := nil;
+  FSession.Free;
+  FSession := nil;
   FSession := nil;
 
   AssertEquals(Ord(lbopSucceeded), Ord(Operation.State));
@@ -243,8 +240,8 @@ var
 begin
   Subscription := Subscribe;
 
-  FManager.Free;
-  FManager := nil;
+  FSession.Free;
+  FSession := nil;
   FSession := nil;
 
   AssertEquals(Ord(lbsubInactive), Ord(Subscription.State));

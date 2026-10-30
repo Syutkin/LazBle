@@ -47,11 +47,6 @@
         <UnitName Value="LazBleByteChannel"/>
       </Item>
       <Item>
-        <Filename Value="src\core\lazblecentralmanager.pas"/>
-        <UnitName Value="LazBleCentralManager"/>
-        <AddToUsesPkgSection Value="False"/>
-      </Item>
-      <Item>
         <Filename Value="src\core\lazbleclient.pas"/>
         <UnitName Value="LazBleClient"/>
       </Item>

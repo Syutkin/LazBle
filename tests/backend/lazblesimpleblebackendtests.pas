@@ -5,7 +5,7 @@ unit LazBleSimpleBleBackendTests;
 interface
 
 uses Classes, SysUtils, fpcunit, testregistry, SimpleDelphiBLE,
-  LazBleTypes, LazBleBackend, LazBleSimpleBleBackend, LazBleFacade,
+  FakeLazBleBackend, LazBleTypes, LazBleBackend, LazBleSimpleBleBackend, LazBleFacade,
   LazBleClient, LazBleOperation, LazBleBattery, LazBleGattProfile, LazBleSync,
   LazBleGattOperation, LazBleGattSubscription;
 
