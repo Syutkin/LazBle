@@ -36,6 +36,8 @@ type
     FReconnectTimerFactory: ILazBleReconnectTimerFactory;
     FDiagnosticInfo: TLazBleDiagnosticInfo;
     FBackendName: string;
+    class function GetLibraryPath: string; static;
+    class procedure SetLibraryPath(const APath: string); static;
     function GetDiagnosticInfo: TLazBleDiagnosticInfo;
     procedure OperationCancelled(Sender: TObject);
     procedure ScanResult(Sender: TObject; const ADeviceId,
@@ -63,6 +65,9 @@ type
     constructor Create(const ABackend: ILazBleBackend;
       const AReconnectTimerFactory: ILazBleReconnectTimerFactory); overload;
   public
+    { Process-wide SimpleDelphiBLE file/directory override. Set before the first
+      native call; empty uses the upstream executable/system search. }
+    class property LibraryPath: string read GetLibraryPath write SetLibraryPath;
     { Static package information; no instance or BLE work is required.
       Keep Version aligned with core/LCL/design package metadata. }
     const Info: TLazBleInfo = (
@@ -99,7 +104,7 @@ type
 implementation
 
 uses
-  LazBleSimpleBleBackend;
+  LazBleSimpleBleBackend, SimpleDelphiBLE;
 
 type
   TBleClientAccess = class(TBleClient)
@@ -352,6 +357,18 @@ begin
   FShutdownOperationObject := nil;
   FReconnectTimerFactory := nil;
   inherited Destroy;
+end;
+
+class function TLazBle.GetLibraryPath: string;
+begin
+  LazBleRequireMainThread;
+  Result := UTF8Encode(TSimpleDelphiBLE.LibraryPath);
+end;
+
+class procedure TLazBle.SetLibraryPath(const APath: string);
+begin
+  LazBleRequireMainThread;
+  TSimpleDelphiBLE.LibraryPath := UTF8Decode(APath);
 end;
 
 function TLazBle.GetDiagnosticInfo: TLazBleDiagnosticInfo;

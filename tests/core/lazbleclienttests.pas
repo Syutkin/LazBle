@@ -18,6 +18,7 @@ uses
   LazBleReconnect,
   LazBleSync,
   LazBleNus,
+  SimpleDelphiBLE,
   FakeLazBleBackend,
   FakeLazBleReconnectTimer;
 
@@ -108,6 +109,7 @@ type
     procedure AvailabilityCheckReturnsTypedResult;
     procedure AvailabilityCheckDoesNotOverlapScan;
     procedure InfoAndDiagnosticsDoNotStartNativeWork;
+    procedure LibraryPathUsesUpstreamSetting;
     procedure ConnectCompletesAfterServiceDiscovery;
     procedure ConnectPreservesBackendError;
     procedure DiscoveryPreservesBackendError;
@@ -1198,6 +1200,23 @@ begin
   AssertTrue(FBackendObject.CompleteShutdown);
   AssertEquals(Ord(lbopSucceeded), Ord(FirstDisconnect.State));
   AssertEquals(Ord(lbopSucceeded), Ord(ShutdownOperation.State));
+end;
+
+procedure TLazBleClientTest.LibraryPathUsesUpstreamSetting;
+var OriginalPath: UnicodeString;
+begin
+  OriginalPath := TSimpleDelphiBLE.LibraryPath;
+  try
+    TLazBle.LibraryPath := '/tmp/lazble/runtime';
+    AssertEquals('/tmp/lazble/runtime', UTF8Encode(TSimpleDelphiBLE.LibraryPath));
+    TSimpleDelphiBLE.LibraryPath := '/tmp/other/runtime';
+    AssertEquals('/tmp/other/runtime', TLazBle.LibraryPath);
+    TLazBle.LibraryPath := '';
+    AssertEquals('', UTF8Encode(TSimpleDelphiBLE.LibraryPath));
+    AssertEquals('Setting a path starts no backend work', 0, FBackendObject.CommandCount);
+  finally
+    TSimpleDelphiBLE.LibraryPath := OriginalPath;
+  end;
 end;
 
 procedure TLazBleClientTest.DefaultFacadeDoesNotLoadNativeLibraryWhenCreated;
