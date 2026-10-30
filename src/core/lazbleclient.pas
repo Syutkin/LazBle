@@ -81,6 +81,7 @@ type
     procedure DisconnectForReconnect;
     function StartConnect(const AManual: Boolean): IBleOperation;
   protected
+    procedure PrepareShutdown;
     procedure CancelForShutdown;
     { Applications obtain clients from TLazBle.CreateClient. }
     constructor Create(const ASession: TBleGattSession;
@@ -702,13 +703,20 @@ begin
     connection or requires another state machine to undo local teardown. }
 end;
 
-procedure TBleClient.CancelForShutdown;
+procedure TBleClient.PrepareShutdown;
 begin
   LazBleRequireMainThread;
+  if FShuttingDown then Exit;
   FShuttingDown := True;
   FManualDisconnect := True;
   FReconnectCycleActive := False;
   FReconnectController.Disable;
+end;
+
+procedure TBleClient.CancelForShutdown;
+begin
+  LazBleRequireMainThread;
+  PrepareShutdown;
   DetachProfiles;
   if State = lbcstWaitingToReconnect then
     SetState(lbcstDisconnected);
@@ -752,6 +760,11 @@ begin
   Result := Operation;
   FConnectOperation := Result;
   FConnectOperationObject := Operation;
+  if FShuttingDown then
+  begin
+    Operation.Finish(lbopFailed, LazBleErrorInvalidState, 'BLE client is shut down');
+    Exit;
+  end;
   if State = lbcstReady then
   begin
     Operation.Finish(lbopSucceeded);

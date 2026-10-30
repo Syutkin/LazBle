@@ -9,6 +9,27 @@ uses Classes, SysUtils, fpcunit, testregistry, LazBleTypes, LazBleBackend,
   LazBleClient, LazBleFacade, LazBleSync, FakeLazBleBackend;
 
 type
+  TCleanupProfile = class(TBleGattProfile)
+  protected
+    procedure DoAttach; override;
+    procedure DoDetach; override;
+  public
+    Token: IBleSubscription;
+    Cleanup: IBleGattOperation;
+  end;
+
+  TAdmissionProfile = class(TBleGattProfile)
+  protected
+    procedure DoAttach; override;
+    procedure DoDetach; override;
+  public
+    Ble: TLazBle;
+    Client: TBleClient;
+    ProbeClosing: Boolean;
+    Rejected: Integer;
+    OnDetachProbe: TNotifyEvent;
+  end;
+
   TDeferredProfile = class(TBleGattProfile)
   protected
     procedure DoAttach; override;
@@ -41,6 +62,9 @@ type
     procedure RaisingScanData(Sender: TObject; const DeviceId, DeviceName: string;
       const Rssi: SmallInt);
     procedure CallbackError(Sender: TObject);
+    procedure AvailabilityCompletedWithDiagnostic(Sender: TObject);
+    procedure LateOwnerCompletion(Sender: TObject);
+    procedure EmitClosingNotification(Sender: TObject);
     procedure ObserveSessionClosing(Sender: TObject; const State: TLazBleClientState);
   protected
     procedure SetUp; override;
@@ -92,9 +116,135 @@ type
     procedure ActiveScanAndAvailabilityKeepTheirIdentityAndExcludeEachOther;
     procedure GattIsAcceptedDuringScan;
     procedure ShutdownRemainsPendingWhileClientsClose;
+    procedure ShutdownRejectsReentrantWorkFromProfileDetach;
+    procedure ShutdownStillAcceptsProfileUnsubscribeCleanup;
+    procedure DestroyedFacadeIgnoresLateAvailabilityAndShutdown;
+    procedure ShutdownClosesDataBeforeProfileDetach;
   end;
 
 implementation
+
+procedure TLazBleContractTest.EmitClosingNotification(Sender: TObject);
+begin Emit(lbekNotification, 0, 7); end;
+
+procedure TLazBleContractTest.ShutdownClosesDataBeforeProfileDetach;
+var Profile: TAdmissionProfile; Token: IBleSubscription; Shutdown: IBleOperation;
+begin
+  Profile := TAdmissionProfile.Create; FClient.AddProfile(Profile);
+  Connect;
+  Token := FClient.SubscribeAsync('service', 'notify');
+  Emit(lbekSubscribed, LastId, 7); FFake.CompleteOperation(LastId, lbekOperationSucceeded);
+  Token.OnData := @Data;
+  Profile.OnDetachProbe := @EmitClosingNotification;
+  Shutdown := FBle.ShutdownAsync;
+  AssertEquals(0, FValues);
+  AssertTrue(FFake.CompleteShutdown);
+  AssertEquals(Ord(lbopSucceeded), Ord(Shutdown.State));
+end;
+
+procedure TCleanupProfile.DoAttach;
+begin MarkReady; end;
+
+procedure TCleanupProfile.DoDetach;
+begin
+  if Token <> nil then Cleanup := Token.Unsubscribe;
+end;
+
+procedure TLazBleContractTest.ShutdownStillAcceptsProfileUnsubscribeCleanup;
+var Profile: TCleanupProfile; Shutdown: IBleOperation; Id: TBleOperationId;
+begin
+  Profile := TCleanupProfile.Create; FClient.AddProfile(Profile);
+  Connect;
+  Profile.Token := FClient.SubscribeAsync('service', 'notify');
+  Emit(lbekSubscribed, LastId, 7); FFake.CompleteOperation(LastId, lbekOperationSucceeded);
+  Shutdown := FBle.ShutdownAsync;
+  AssertTrue(Profile.Cleanup <> nil);
+  AssertEquals(Ord(lbopPending), Ord(Profile.Cleanup.State));
+  AssertEquals(Ord(lbckUnsubscribe), Ord(FFake.Commands[3].Kind));
+  Id := LastId;
+  AssertTrue(FFake.CompleteOperation(Id, lbekOperationSucceeded));
+  AssertEquals(Ord(lbopSucceeded), Ord(Profile.Cleanup.State));
+  AssertEquals('Shutdown does not submit a compensating disconnect', 4, FFake.CommandCount);
+  AssertTrue(FFake.CompleteShutdown);
+  AssertEquals(Ord(lbopSucceeded), Ord(Shutdown.State));
+end;
+
+procedure TLazBleContractTest.LateOwnerCompletion(Sender: TObject);
+begin Inc(FValues); end;
+
+procedure TLazBleContractTest.DestroyedFacadeIgnoresLateAvailabilityAndShutdown;
+var AvailabilityOp: IBleAvailabilityOperation; Shutdown: IBleOperation;
+  Id: TBleOperationId; R: TLazBleRequestResult;
+begin
+  AvailabilityOp := FBle.CheckAvailabilityAsync(''); Id := LastId;
+  AvailabilityOp.OnCompleted := @LateOwnerCompletion;
+  Shutdown := FBle.ShutdownAsync; Shutdown.OnCompleted := @LateOwnerCompletion;
+  FreeAndNil(FBle);
+  AssertEquals(Ord(lbopCancelled), Ord(AvailabilityOp.State));
+  AssertEquals(Ord(lbopCancelled), Ord(Shutdown.State));
+  R := Default(TLazBleRequestResult); R.Status := lbrsSucceeded; R.Availability := lbaAvailable;
+  AssertTrue(FFake.FinishRequest(Id, R));
+  AssertTrue(FFake.CompleteShutdown);
+  AssertEquals(0, FValues);
+  AssertEquals(Ord(lbopCancelled), Ord(Shutdown.State));
+end;
+
+procedure TLazBleContractTest.AvailabilityCompletedWithDiagnostic(Sender: TObject);
+begin
+  AssertEquals(Ord(lbaAvailable), Ord(FBle.DiagnosticInfo.Availability));
+  AssertEquals('adapter', FBle.DiagnosticInfo.AdapterId);
+  AssertEquals('native', FBle.DiagnosticInfo.NativeVersion);
+  Inc(FValues);
+end;
+
+procedure TAdmissionProfile.DoAttach;
+begin MarkReady; end;
+
+procedure TAdmissionProfile.DoDetach;
+var ReadOp: IBleGattOperation; Scan: IBleScanOperation;
+  Availability: IBleAvailabilityOperation;
+  ConnectOp: IBleOperation;
+begin
+  if Assigned(OnDetachProbe) then OnDetachProbe(Self);
+  if not ProbeClosing then Exit;
+  ReadOp := Client.ReadAsync('service', 'value');
+  if ReadOp.State = lbopFailed then Inc(Rejected);
+  try Ble.CreateClient('during-close');
+  except on E: EInvalidOperation do Inc(Rejected); end;
+  Scan := Ble.ScanAsync('', 0);
+  if Scan.State = lbopFailed then Inc(Rejected);
+  Availability := Ble.CheckAvailabilityAsync('');
+  if Availability.State = lbopFailed then Inc(Rejected);
+  ConnectOp := Client.ConnectAsync;
+  if ConnectOp.State = lbopFailed then Inc(Rejected);
+end;
+
+procedure TLazBleContractTest.ShutdownRejectsReentrantWorkFromProfileDetach;
+var Profile: TAdmissionProfile; Shutdown: IBleOperation;
+  Other: TBleClient; Connected: IBleOperation; Id: TBleOperationId;
+  E: TLazBleBackendEvent;
+begin
+  Profile := TAdmissionProfile.Create;
+  Profile.Ble := FBle; Profile.Client := FClient;
+  FClient.AddProfile(Profile);
+  Connect;
+  Other := FBle.CreateClient('other'); Connected := Other.ConnectAsync;
+  Id := LastId;
+  E := Default(TLazBleBackendEvent); E.DeviceId := 'other';
+  E.Kind := lbekConnected; E.OperationId := Id; FFake.EmitProgress(E);
+  FFake.CompleteOperation(Id, lbekOperationSucceeded);
+  E.Kind := lbekServicesDiscovered; E.OperationId := LastId;
+  FFake.EmitProgress(E); FFake.CompleteOperation(E.OperationId, lbekOperationSucceeded);
+  AssertEquals(Ord(lbopSucceeded), Ord(Connected.State));
+  Profile.Client := Other;
+  Profile.ProbeClosing := True;
+  Shutdown := FBle.ShutdownAsync;
+  Profile.ProbeClosing := False;
+  AssertEquals(5, Profile.Rejected);
+  AssertEquals('No new commands are accepted from closing callbacks', 4, FFake.CommandCount);
+  AssertTrue(FFake.CompleteShutdown);
+  AssertEquals(Ord(lbopSucceeded), Ord(Shutdown.State));
+end;
 
 procedure TLazBleContractTest.RemovedClientDoesNotLoseAcceptedRead;
 var ReadOp: IBleGattOperation; ReadId: TBleOperationId; R: TLazBleRequestResult;
@@ -233,6 +383,7 @@ procedure TLazBleContractTest.AvailabilityResultCompletesDirectly;
 var Op: IBleAvailabilityOperation; R: TLazBleRequestResult;
 begin
   Op := FBle.CheckAvailabilityAsync('');
+  Op.OnCompleted := @AvailabilityCompletedWithDiagnostic;
   R := Default(TLazBleRequestResult); R.Status := lbrsSucceeded;
   R.Availability := lbaAvailable; R.AdapterId := 'adapter'; R.BackendVersion := 'native';
   AssertTrue(FFake.FinishRequest(LastId, R));
@@ -240,6 +391,7 @@ begin
   AssertEquals(Ord(lbaAvailable), Ord(Op.Availability));
   AssertEquals('adapter', FBle.DiagnosticInfo.AdapterId);
   AssertEquals('native', FBle.DiagnosticInfo.NativeVersion);
+  AssertEquals(1, FValues);
 end;
 
 procedure TLazBleContractTest.LateDisconnectOutcomeDoesNotChangeNewConnection;

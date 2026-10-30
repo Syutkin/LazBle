@@ -619,7 +619,8 @@ begin
   Entry.Operation := Result;
   FOperations.Add(Entry);
   OperationId := InvalidBleOperationId;
-  if (State = lbssConnected) and not FShuttingDown and Assigned(FSubmitCommand) then
+  if (State = lbssConnected) and Assigned(FSubmitCommand) and
+    (not FShuttingDown or (ACommand.Kind = lbckUnsubscribe)) then
     OperationId := FSubmitCommand(ACommand, Operation);
   Operation.Bind(OperationId);
 end;
