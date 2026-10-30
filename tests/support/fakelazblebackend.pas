@@ -15,6 +15,7 @@ type
     TerminalDelivered: Boolean;
     Completion: ILazBleRequestCompletion;
     ResultData: TLazBleRequestResult;
+    Values: ILazBleValueSink;
   end;
 
   TFakeLazBleBackend = class(TInterfacedObject, ILazBleBackend)
@@ -40,7 +41,8 @@ type
     function GetBackendName: string;
     procedure SetEventSink(const AEventSink: ILazBleBackendEventSink);
     function Submit(const ACommand: TLazBleBackendCommand;
-      const ACompletion: ILazBleRequestCompletion = nil): TBleOperationId;
+      const ACompletion: ILazBleRequestCompletion = nil;
+      const AValues: ILazBleValueSink = nil): TBleOperationId;
     procedure Cancel(const AOperationId: TBleOperationId);
     function BeginShutdown: TBleOperationId;
     procedure Emit(const AEvent: TLazBleBackendEvent);
@@ -153,7 +155,8 @@ end;
 
 function TFakeLazBleBackend.Submit(
   const ACommand: TLazBleBackendCommand;
-  const ACompletion: ILazBleRequestCompletion): TBleOperationId;
+  const ACompletion: ILazBleRequestCompletion;
+  const AValues: ILazBleValueSink): TBleOperationId;
 var
   Index: Integer;
 begin
@@ -171,6 +174,7 @@ begin
   FOperationIds[Index] := Result;
   FOperations[Index].OperationId := Result;
   FOperations[Index].Completion := ACompletion;
+  FOperations[Index].Values := AValues;
 end;
 
 procedure TFakeLazBleBackend.Cancel(const AOperationId: TBleOperationId);
@@ -224,6 +228,14 @@ begin
   end;
   if Result then
   begin
+    if AEvent.Kind = lbekNotification then
+      for Index := 0 to High(FOperations) do
+        if (FOperations[Index].Values <> nil) and
+          (FOperations[Index].ResultData.SubscriptionId = AEvent.SubscriptionId) then
+        begin
+          FOperations[Index].Values.ReceiveValue(AEvent.Value);
+          Exit(True);
+        end;
     if (AEvent.OperationId <> InvalidBleOperationId) and
       (FOperations[Index].Completion <> nil) and
       (AEvent.Kind in [lbekReadResult, lbekServicesDiscovered,
@@ -254,6 +266,7 @@ begin
     (FOperations[Index].Completion <> nil);
   if not Result then Exit;
   FOperations[Index].TerminalDelivered := True;
+  FOperations[Index].ResultData := AResult;
   Completion := FOperations[Index].Completion;
   FOperations[Index].Completion := nil;
   Completion.CompleteRequest(AResult);

@@ -794,6 +794,9 @@ begin
   BackendEvent.DeviceId := Client.DeviceId;
   BackendEvent.Generation := ClientGeneration(Client);
   AssertTrue(FBackendObject.EmitProgress(BackendEvent));
+  AssertEquals(Ord(lbopPending), Ord(Operation.State));
+  AssertTrue(FBackendObject.CompleteOperation(BackendEvent.OperationId,
+    lbekOperationSucceeded));
 
   AssertEquals(Ord(lbcstReady), Ord(Client.State));
   AssertEquals(Ord(lbopSucceeded), Ord(Operation.State));

@@ -4,7 +4,7 @@ unit LazBleGattSubscription;
 
 interface
 
-uses SysUtils, LazBleTypes, LazBleOperation, LazBleGattOperation;
+uses Classes, SysUtils, LazBleTypes, LazBleBackend, LazBleOperation, LazBleGattOperation;
 
 type
   TLazBleSubscriptionState = (lbsubPending, lbsubActive, lbsubUnsubscribing,
@@ -39,7 +39,8 @@ type
   TLazBleUnsubscribe = function(const ASubscription: TBleSubscription):
     IBleGattOperation of object;
 
-  TBleSubscription = class(TInterfacedObject, IBleSubscription)
+  TBleSubscription = class(TInterfacedObject, IBleSubscription,
+    ILazBleRequestCompletion, ILazBleValueSink)
   private
     FOperationId: TBleOperationId;
     FSubscriptionId: TBleSubscriptionId;
@@ -53,6 +54,7 @@ type
     FUnsubscribeObject: TBleGattOperation;
     FOnData: TLazBleDataEvent;
     FOnStateChanged: TLazBleSubscriptionStateChangedEvent;
+    FOnRetired: TNotifyEvent;
     function GetState: TLazBleSubscriptionState;
     function GetErrorCode: Integer;
     function GetErrorMessage: string;
@@ -65,7 +67,14 @@ type
     procedure UnsubscribeCompleted(Sender: TObject);
     procedure FinishUnsubscribe(const AState: TLazBleOperationState;
       const AErrorCode: Integer = 0; const AErrorMessage: string = '');
+    procedure Retire;
+    procedure CleanupFinished(Sender: TObject);
   protected
+    constructor CreateRequest(const AGeneration: QWord;
+      const AUnsubscribe: TLazBleUnsubscribe; const AOnRetired: TNotifyEvent);
+    procedure BindRequest(const AOperationId: TBleOperationId);
+    procedure CompleteRequest(const AResult: TLazBleRequestResult);
+    procedure ReceiveValue(const AValue: TBytes);
     constructor CreateFailed(const AErrorCode: Integer; const AErrorMessage: string);
     constructor Create(const AOperationId: TBleOperationId;
       const AGeneration: QWord; const AUnsubscribe: TLazBleUnsubscribe);
@@ -94,13 +103,14 @@ implementation
 type
   TUnsubscribeOperation = class(TBleGattOperation)
   public
-    constructor Create;
+    constructor Create(const AOnFinishing: TLazBleOperationCompletedEvent);
     procedure Finish(AState: TLazBleOperationState; ACode: Integer; const Text: string);
   end;
 
-constructor TUnsubscribeOperation.Create;
+constructor TUnsubscribeOperation.Create(const AOnFinishing: TLazBleOperationCompletedEvent);
 begin
   inherited CreatePending(lbckUnsubscribe);
+  OnFinishing := AOnFinishing;
 end;
 
 procedure TUnsubscribeOperation.Finish(AState: TLazBleOperationState;
@@ -123,6 +133,70 @@ begin
     FErrorMessage := 'BLE subscription could not be started';
   end
   else FState := lbsubPending;
+end;
+
+constructor TBleSubscription.CreateRequest(const AGeneration: QWord;
+  const AUnsubscribe: TLazBleUnsubscribe; const AOnRetired: TNotifyEvent);
+begin
+  inherited Create;
+  FGeneration := AGeneration;
+  FUnsubscribe := AUnsubscribe;
+  FOnRetired := AOnRetired;
+  FState := lbsubPending;
+end;
+
+procedure TBleSubscription.BindRequest(const AOperationId: TBleOperationId);
+var R: TLazBleRequestResult;
+begin
+  FOperationId := AOperationId;
+  if AOperationId <> InvalidBleOperationId then Exit;
+  R := Default(TLazBleRequestResult);
+  R.Status := lbrsFailed;
+  R.ErrorCode := LazBleErrorInvalidState;
+  R.ErrorMessage := 'BLE subscription could not be started';
+  CompleteRequest(R);
+end;
+
+procedure TBleSubscription.CompleteRequest(const AResult: TLazBleRequestResult);
+var KeepAlive: IBleSubscription;
+begin
+  LazBleRequireMainThread;
+  KeepAlive := Self;
+  if FClosing then Exit;
+  if AResult.Status = lbrsSucceeded then
+  begin
+    FSubscriptionId := AResult.SubscriptionId;
+    if FState = lbsubPending then SetState(lbsubActive)
+    else if FState = lbsubUnsubscribing then StartNativeUnsubscribe;
+  end
+  else if FState = lbsubUnsubscribing then FinishUnsubscribe(lbopSucceeded)
+  else if FState = lbsubPending then
+  begin
+    FErrorCode := AResult.ErrorCode;
+    FErrorMessage := AResult.ErrorMessage;
+    if FErrorMessage = '' then FErrorMessage := 'BLE subscription did not complete';
+    SetState(lbsubFailed);
+  end;
+end;
+
+procedure TBleSubscription.ReceiveValue(const AValue: TBytes);
+var KeepAlive: IBleSubscription;
+begin
+  LazBleRequireMainThread;
+  KeepAlive := Self;
+  if not FClosing and (FState = lbsubActive) and Assigned(FOnData) then
+    FOnData(Self, AValue);
+end;
+
+procedure TBleSubscription.Retire;
+begin
+  if (FState in [lbsubInactive, lbsubFailed]) and not CleanupPending and
+    Assigned(FOnRetired) then FOnRetired(Self);
+end;
+
+procedure TBleSubscription.CleanupFinished(Sender: TObject);
+begin
+  Retire;
 end;
 
 constructor TBleSubscription.CreateFailed(const AErrorCode: Integer;
@@ -156,21 +230,26 @@ procedure TBleSubscription.SetOnStateChanged(const AHandler: TLazBleSubscription
 begin LazBleRequireMainThread; FOnStateChanged := AHandler; end;
 
 procedure TBleSubscription.SetState(const AState: TLazBleSubscriptionState);
+var KeepAlive: IBleSubscription;
 begin
   LazBleRequireMainThread;
+  KeepAlive := Self;
   if FState = AState then Exit;
   FState := AState;
+  Retire;
   if Assigned(FOnStateChanged) then FOnStateChanged(Self, AState);
 end;
 
 function TBleSubscription.Unsubscribe: IBleGattOperation;
 var
   WasPending: Boolean;
+  KeepAlive: IBleSubscription;
 begin
   LazBleRequireMainThread;
+  KeepAlive := Self;
   if FUnsubscribeOperation <> nil then Exit(FUnsubscribeOperation);
   WasPending := FState = lbsubPending;
-  FUnsubscribeObject := TUnsubscribeOperation.Create;
+  FUnsubscribeObject := TUnsubscribeOperation.Create(@CleanupFinished);
   FUnsubscribeOperation := FUnsubscribeObject;
   Result := FUnsubscribeOperation;
   case FState of
@@ -218,8 +297,10 @@ end;
 procedure TBleSubscription.UnsubscribeCompleted(Sender: TObject);
 var
   Operation: IBleGattOperation;
+  KeepAlive: IBleSubscription;
 begin
   LazBleRequireMainThread;
+  KeepAlive := Self;
   Operation := FNativeUnsubscribeOperation;
   if Operation = nil then Exit;
   Operation.OnCompleted := nil;
@@ -298,7 +379,7 @@ begin
 end;
 
 procedure TBleSubscription.DetachOwner;
-begin LazBleRequireMainThread; FUnsubscribe := nil; end;
+begin LazBleRequireMainThread; FUnsubscribe := nil; FOnRetired := nil; end;
 function TBleSubscription.GetOperationId: TBleOperationId;
 begin Result := FOperationId; end;
 function TBleSubscription.GetSubscriptionId: TBleSubscriptionId;

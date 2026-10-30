@@ -72,9 +72,24 @@ type
     procedure QueuedCancelCompletionCanStartNextConnect;
     procedure TwoClientsKeepReadResultsWhenCompletedOutOfOrder;
     procedure ReadCompletionCanBeginShutdown;
+    procedure SubscriptionRegistrationCompletesDirectly;
   end;
 
 implementation
+
+procedure TLazBleContractTest.SubscriptionRegistrationCompletesDirectly;
+var Token: IBleSubscription; ResultData: TLazBleRequestResult;
+begin
+  Connect;
+  Token := FClient.SubscribeAsync('service', 'notify');
+  ResultData := Default(TLazBleRequestResult);
+  ResultData.Status := lbrsSucceeded; ResultData.SubscriptionId := 7;
+  AssertTrue(FFake.FinishRequest(LastId, ResultData));
+  AssertEquals(Ord(lbsubActive), Ord(Token.State));
+  Token.OnData := @Data;
+  Emit(lbekNotification, 0, 7);
+  AssertEquals(1, FValues);
+end;
 
 procedure TLazBleContractTest.ShutdownWhenReadCompletes(Sender: TObject);
 begin

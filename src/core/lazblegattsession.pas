@@ -30,7 +30,8 @@ type
 
   TLazBleSubmitCommand = function(
     const ACommand: TLazBleBackendCommand;
-    const ACompletion: ILazBleRequestCompletion = nil): TBleOperationId of object;
+    const ACompletion: ILazBleRequestCompletion = nil;
+    const AValues: ILazBleValueSink = nil): TBleOperationId of object;
   TLazBleCancelOperation = procedure(
     const AOperationId: TBleOperationId) of object;
 
@@ -72,6 +73,7 @@ type
       const AValue: TBytes): IBleGattOperation;
     procedure OperationCancelled(Sender: TObject);
     procedure GattCompleted(Sender: TObject);
+    procedure SubscriptionRetired(Sender: TObject);
     function UnsubscribeSubscription(
       const ASubscription: TBleSubscription): IBleGattOperation;
     procedure InvalidateGattState(const AForce: Boolean = False);
@@ -150,6 +152,9 @@ type
 
   TBleSubscriptionAccess = class(TBleSubscription)
   public
+    constructor CreateRequestInternal(const AGeneration: QWord;
+      const AUnsubscribe: TLazBleUnsubscribe; const AOnRetired: TNotifyEvent);
+    procedure Bind(const AOperationId: TBleOperationId);
     constructor CreateFailed(const ACode: Integer; const AText: string);
     constructor CreateInternal(const AOperationId: TBleOperationId;
       const AGeneration: QWord; const AUnsubscribe: TLazBleUnsubscribe);
@@ -205,6 +210,15 @@ constructor TBleSubscriptionAccess.CreateFailed(const ACode: Integer; const ATex
 begin
   inherited CreateFailed(ACode, AText);
 end;
+
+constructor TBleSubscriptionAccess.CreateRequestInternal(const AGeneration: QWord;
+  const AUnsubscribe: TLazBleUnsubscribe; const AOnRetired: TNotifyEvent);
+begin
+  inherited CreateRequest(AGeneration, AUnsubscribe, AOnRetired);
+end;
+
+procedure TBleSubscriptionAccess.Bind(const AOperationId: TBleOperationId);
+begin BindRequest(AOperationId); end;
 
 constructor TBleGattOperationAccess.CreateInternal(
   const AOperationId: TBleOperationId;
@@ -650,18 +664,29 @@ begin
   Command.ServiceUuid := AServiceUuid;
   Command.CharacteristicUuid := ACharacteristicUuid;
   Command.SubscriptionMode := AMode;
-  OperationId := InvalidBleOperationId;
-  if (State = lbssConnected) and Assigned(FSubmitCommand) then
-    OperationId := FSubmitCommand(Command);
-  Subscription := TBleSubscriptionAccess.CreateInternal(OperationId,
-    Generation, @UnsubscribeSubscription);
+  Subscription := TBleSubscriptionAccess.CreateRequestInternal(Generation,
+    @UnsubscribeSubscription, @SubscriptionRetired);
   Result := Subscription;
-  if Subscription.State = lbsubFailed then
-    Exit;
   Entry := TBleSubscriptionEntry.Create;
   Entry.Instance := Subscription;
   Entry.Subscription := Result;
   FSubscriptions.Add(Entry);
+  OperationId := FSubmitCommand(Command, Subscription, Subscription);
+  Subscription.Bind(OperationId);
+end;
+
+procedure TBleGattSession.SubscriptionRetired(Sender: TObject);
+var I: Integer; Entry: TBleSubscriptionEntry;
+begin
+  for I := FSubscriptions.Count - 1 downto 0 do
+  begin
+    Entry := TBleSubscriptionEntry(FSubscriptions[I]);
+    if Entry.Instance <> Sender then Continue;
+    TBleSubscriptionAccess(Entry.Instance).DetachFromSession;
+    FSubscriptions.Delete(I);
+    Entry.Free;
+    Exit;
+  end;
 end;
 
 function TBleGattSession.UnsubscribeSubscription(
@@ -819,47 +844,9 @@ end;
 
 procedure TBleGattSession.HandleBackendEvent(
   const AEvent: TLazBleBackendEvent);
-var
-  SubscriptionEntry: TBleSubscriptionEntry;
-  Subscriptions: TBleSubscriptionInterfaces;
-  SubscriptionObjects: TBleSubscriptionObjects;
-  RemoveIndex: Integer;
-  Index: Integer;
 begin
   LazBleRequireMainThread;
-  Subscriptions := nil;
-  SubscriptionObjects := nil;
-  if (AEvent.DeviceId <> '') and (AEvent.DeviceId <> FDeviceId) then
-    Exit;
-
-  SetLength(Subscriptions, FSubscriptions.Count);
-  SetLength(SubscriptionObjects, FSubscriptions.Count);
-  for Index := 0 to FSubscriptions.Count - 1 do
-  begin
-    SubscriptionEntry := TBleSubscriptionEntry(FSubscriptions[Index]);
-    Subscriptions[Index] := SubscriptionEntry.Subscription;
-    SubscriptionObjects[Index] := SubscriptionEntry.Instance;
-  end;
-
-  for Index := 0 to High(SubscriptionObjects) do
-  begin
-    TBleSubscriptionAccess(SubscriptionObjects[Index]).HandleEvent(AEvent);
-    if not (SubscriptionObjects[Index].State in
-      [lbsubInactive, lbsubFailed]) or
-      TBleSubscriptionAccess(SubscriptionObjects[Index]).CleanupPendingInternal then
-      Continue;
-    TBleSubscriptionAccess(SubscriptionObjects[Index]).DetachFromSession;
-    for RemoveIndex := FSubscriptions.Count - 1 downto 0 do
-    begin
-      SubscriptionEntry := TBleSubscriptionEntry(
-        FSubscriptions[RemoveIndex]);
-      if SubscriptionEntry.Instance <> SubscriptionObjects[Index] then
-        Continue;
-      FSubscriptions.Delete(RemoveIndex);
-      SubscriptionEntry.Free;
-      Break;
-    end;
-  end;
+  if (AEvent.DeviceId <> '') and (AEvent.DeviceId <> FDeviceId) then Exit;
 
   { Command IDs/own generations route late results before the current-session
     filter. Reconnecting must not orphan an accepted old command. }

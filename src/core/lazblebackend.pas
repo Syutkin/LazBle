@@ -29,6 +29,11 @@ type
     procedure CompleteRequest(const AResult: TLazBleRequestResult);
   end;
 
+  ILazBleValueSink = interface
+    ['{6B4C326A-B1B5-4D10-8E39-69646003D32B}']
+    procedure ReceiveValue(const AValue: TBytes);
+  end;
+
   ILazBleBackendEventSink = interface
     ['{1F4A66C4-5739-4428-902D-B09F59039602}']
     procedure HandleBackendEvent(const AEvent: TLazBleBackendEvent);
@@ -54,7 +59,8 @@ type
     procedure SetEventSink(const AEventSink: ILazBleBackendEventSink);
     { Return InvalidBleOperationId when a command cannot be started. }
     function Submit(const ACommand: TLazBleBackendCommand;
-      const ACompletion: ILazBleRequestCompletion = nil): TBleOperationId;
+      const ACompletion: ILazBleRequestCompletion = nil;
+      const AValues: ILazBleValueSink = nil): TBleOperationId;
     procedure Cancel(const AOperationId: TBleOperationId);
     { Begin orderly backend shutdown and return its operation ID. }
     function BeginShutdown: TBleOperationId;

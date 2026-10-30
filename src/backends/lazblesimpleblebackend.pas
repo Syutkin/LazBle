@@ -30,6 +30,7 @@ type
       Generation: QWord;
       ServiceUuid, CharacteristicUuid: string;
       Active, Registered: Boolean;
+      Values: ILazBleValueSink;
       procedure ValueReceived(Sender: TBlePeripheral;
         const Service, Characteristic: UnicodeString; const Data: TBytes);
     end;
@@ -38,6 +39,7 @@ type
       Id: TBleOperationId;
       Request: TLazBleBackendCommand;
       Completion: ILazBleRequestCompletion;
+      Values: ILazBleValueSink;
       Role: TCommandRole;
       Parent: TCommand;
       Adapter: TBleAdapter;
@@ -119,7 +121,8 @@ type
     function GetBackendName: string;
     procedure SetEventSink(const AEventSink: ILazBleBackendEventSink);
     function Submit(const ACommand: TLazBleBackendCommand;
-      const ACompletion: ILazBleRequestCompletion = nil): TBleOperationId;
+      const ACompletion: ILazBleRequestCompletion = nil;
+      const AValues: ILazBleValueSink = nil): TBleOperationId;
     procedure Cancel(const AOperationId: TBleOperationId);
     function BeginShutdown: TBleOperationId;
   end;
@@ -255,7 +258,8 @@ begin
 end;
 
 function TLazBleSimpleBleBackend.Submit(const ACommand: TLazBleBackendCommand;
-  const ACompletion: ILazBleRequestCompletion): TBleOperationId;
+  const ACompletion: ILazBleRequestCompletion;
+  const AValues: ILazBleValueSink): TBleOperationId;
 var
   Task: TCommand;
   I: Integer;
@@ -266,6 +270,7 @@ begin
   Task.Id := NewId;
   Task.Request := ACommand;
   Task.Completion := ACompletion;
+  Task.Values := AValues;
   Task.Request.Value := Copy(ACommand.Value);
   FPending.Add(Task);
   Result := Task.Id;
@@ -631,6 +636,7 @@ begin
     Sub.Id := FNextSubscription;
     Sub.Peer := FCurrent.Peer;
     Sub.Generation := FCurrent.Request.Generation;
+    Sub.Values := FCurrent.Values;
     Sub.ServiceUuid := LowerCase(FCurrent.Request.ServiceUuid);
     Sub.CharacteristicUuid := LowerCase(FCurrent.Request.CharacteristicUuid);
     FSubscriptions.Add(Sub);
@@ -969,6 +975,11 @@ var
   Event: TLazBleBackendEvent;
 begin
   if Owner.FStopping or not Active then Exit;
+  if Values <> nil then
+  begin
+    Values.ReceiveValue(Data);
+    Exit;
+  end;
   Event := Default(TLazBleBackendEvent);
   Event.Kind := lbekNotification;
   Event.SubscriptionId := Id;
