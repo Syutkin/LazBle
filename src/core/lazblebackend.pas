@@ -53,7 +53,8 @@ type
       detachment has completed. }
     procedure SetEventSink(const AEventSink: ILazBleBackendEventSink);
     { Return InvalidBleOperationId when a command cannot be started. }
-    function Submit(const ACommand: TLazBleBackendCommand): TBleOperationId;
+    function Submit(const ACommand: TLazBleBackendCommand;
+      const ACompletion: ILazBleRequestCompletion = nil): TBleOperationId;
     procedure Cancel(const AOperationId: TBleOperationId);
     { Begin orderly backend shutdown and return its operation ID. }
     function BeginShutdown: TBleOperationId;

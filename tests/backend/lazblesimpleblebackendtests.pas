@@ -10,6 +10,12 @@ uses Classes, SysUtils, fpcunit, testregistry, SimpleDelphiBLE,
   LazBleGattOperation, LazBleGattSubscription;
 
 type
+  TNativeRequestCompletion = class(TInterfacedObject, ILazBleRequestCompletion)
+    Count: Integer;
+    ResultData: TLazBleRequestResult;
+    procedure CompleteRequest(const AResult: TLazBleRequestResult);
+  end;
+
   TNativeEventSink = class(TInterfacedObject, ILazBleBackendEventSink)
   public
     Events: array of TLazBleBackendEvent;
@@ -82,9 +88,47 @@ type
     procedure GattUsesConnectedPeerWithoutAvailabilityPreflight;
     procedure ShutdownAfterLinkLossRetiresSubscription;
     procedure TwoSubscriptionsKeepTheirOwnIdentity;
+    procedure AddressedAvailabilityHasOneRecipient;
+    procedure AddressedReadReturnsPayloadWithStatus;
   end;
 
 implementation
+
+procedure TNativeRequestCompletion.CompleteRequest(const AResult: TLazBleRequestResult);
+begin
+  ResultData := AResult;
+  Inc(Count);
+end;
+
+procedure TLazBleSimpleBleBackendTest.AddressedAvailabilityHasOneRecipient;
+var Target: ILazBleRequestCompletion; Observer: TNativeRequestCompletion;
+  Id: TBleOperationId; Deadline: QWord;
+begin
+  Observer := TNativeRequestCompletion.Create; Target := Observer;
+  Id := FBackend.Submit(Request(lbckCheckAvailability), Target);
+  AssertEquals(0, Observer.Count);
+  Deadline := GetTickCount64 + 8000;
+  while (Observer.Count = 0) and (GetTickCount64 < Deadline) do CheckSynchronize(10);
+  AssertEquals(1, Observer.Count);
+  AssertEquals(Ord(lbrsSucceeded), Ord(Observer.ResultData.Status));
+  AssertTrue(Observer.ResultData.Available);
+  AssertEquals(0, FEvents.Count(lbekOperationSucceeded, Id));
+  AssertEquals(0, FEvents.Count(lbekAvailabilityResult, Id));
+end;
+
+procedure TLazBleSimpleBleBackendTest.AddressedReadReturnsPayloadWithStatus;
+var Target: ILazBleRequestCompletion; Observer: TNativeRequestCompletion;
+  Deadline: QWord;
+begin
+  Connect;
+  Observer := TNativeRequestCompletion.Create; Target := Observer;
+  FBackend.Submit(Request(lbckRead), Target);
+  Deadline := GetTickCount64 + 8000;
+  while (Observer.Count = 0) and (GetTickCount64 < Deadline) do CheckSynchronize(10);
+  AssertEquals(1, Observer.Count);
+  AssertEquals(Ord(lbrsSucceeded), Ord(Observer.ResultData.Status));
+  AssertTrue(Length(Observer.ResultData.Value) > 0);
+end;
 
 const
   Device = '11:22:33:44:55:66';

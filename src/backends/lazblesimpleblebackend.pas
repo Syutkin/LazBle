@@ -37,6 +37,7 @@ type
     TCommand = class
       Id: TBleOperationId;
       Request: TLazBleBackendCommand;
+      Completion: ILazBleRequestCompletion;
       Role: TCommandRole;
       Parent: TCommand;
       Adapter: TBleAdapter;
@@ -117,7 +118,8 @@ type
     destructor Destroy; override;
     function GetBackendName: string;
     procedure SetEventSink(const AEventSink: ILazBleBackendEventSink);
-    function Submit(const ACommand: TLazBleBackendCommand): TBleOperationId;
+    function Submit(const ACommand: TLazBleBackendCommand;
+      const ACompletion: ILazBleRequestCompletion = nil): TBleOperationId;
     procedure Cancel(const AOperationId: TBleOperationId);
     function BeginShutdown: TBleOperationId;
   end;
@@ -252,7 +254,8 @@ begin
   Result := nil;
 end;
 
-function TLazBleSimpleBleBackend.Submit(const ACommand: TLazBleBackendCommand): TBleOperationId;
+function TLazBleSimpleBleBackend.Submit(const ACommand: TLazBleBackendCommand;
+  const ACompletion: ILazBleRequestCompletion): TBleOperationId;
 var
   Task: TCommand;
   I: Integer;
@@ -262,6 +265,7 @@ begin
   Task := TCommand.Create;
   Task.Id := NewId;
   Task.Request := ACommand;
+  Task.Completion := ACompletion;
   Task.Request.Value := Copy(ACommand.Value);
   FPending.Add(Task);
   Result := Task.Id;
@@ -801,6 +805,7 @@ procedure TLazBleSimpleBleBackend.FinishCurrent(Kind: TLazBleBackendEventKind;
 var
   Task: TCommand;
   Event: TLazBleBackendEvent;
+  ResultData: TLazBleRequestResult;
 begin
   Task := FCurrent;
   FCurrent := nil;
@@ -834,11 +839,34 @@ begin
           if not Task.Peer.DisconnectedReported then ReportPeer(Task.Peer, True);
         if Task.Request.Kind = lbckDisconnect then ReportPeer(Task.Peer, False);
       end;
-      if Task.HasResult and (Kind = lbekOperationSucceeded) then Deliver(Task.ResultEvent);
-      Event := EventFor(Task, Kind);
-      Event.ErrorCode := Code;
-      Event.ErrorMessage := Text;
-      Deliver(Event);
+      if Task.Completion <> nil then
+      begin
+        ResultData := Default(TLazBleRequestResult);
+        case Kind of
+          lbekOperationSucceeded: ResultData.Status := lbrsSucceeded;
+          lbekOperationCancelled: ResultData.Status := lbrsCancelled;
+          else ResultData.Status := lbrsFailed;
+        end;
+        ResultData.ErrorCode := Code;
+        ResultData.ErrorMessage := Text;
+        ResultData.Value := Task.ResultEvent.Value;
+        ResultData.Services := Task.ResultEvent.Services;
+        ResultData.ScanResults := Task.ScanDevices;
+        ResultData.SubscriptionId := Task.ResultEvent.SubscriptionId;
+        ResultData.Available := Task.ResultEvent.Available;
+        ResultData.BackendName := GetBackendName;
+        ResultData.BackendVersion := Task.ResultEvent.BackendVersion;
+        ResultData.AdapterId := Task.AdapterId;
+        Task.Completion.CompleteRequest(ResultData);
+      end
+      else
+      begin
+        if Task.HasResult and (Kind = lbekOperationSucceeded) then Deliver(Task.ResultEvent);
+        Event := EventFor(Task, Kind);
+        Event.ErrorCode := Code;
+        Event.ErrorMessage := Text;
+        Deliver(Event);
+      end;
     end;
     if (Task.Subscription <> nil) and
       ((Task.Request.Kind = lbckUnsubscribe) or
