@@ -24,6 +24,10 @@ and GATT descriptor and indication support.
 
 - A delayed stop event from a previous scan no longer interrupts the next scan.
 - A native NotConnected result during shutdown cleanup no longer counts as a failure.
+- Accepted GATT results survive client removal and reconnection of the same device.
+- Shutdown rejects new application work during profile teardown and completes
+  after all client sessions close, preserving cleanup failures if a state handler raises.
+- Scan state and availability diagnostics are updated before completion handlers run.
 
 ## [2.0.0] - 2026-10-28
 
