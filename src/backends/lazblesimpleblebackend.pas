@@ -37,7 +37,7 @@ type
       Subscription: TSubscriptionContext;
       ResultEvent: TLazBleBackendEvent;
       ScanDevices: TBleDeviceInfos;
-      Cancelled, HasResult, ScanStarted, ScanStopped, TriedScan: Boolean;
+      Cancelled, HasResult, ScanStarted, ScanStopped, TriedScan, StopRequested: Boolean;
     end;
     TStep = (stPrepare, stResolve, stServices, stScanStart, stScanStop,
       stCleanupScan, stCleanupPeer);
@@ -67,7 +67,7 @@ type
     FScanTimer: ILazBleReconnectTimer;
     FNextId: TBleOperationId;
     FNextSubscription: TBleSubscriptionId;
-    FStopping, FDestroying, FQueued, FScanning, FStopRequested: Boolean;
+    FStopping, FDestroying, FQueued, FScanning: Boolean;
     FShutdownId: TBleOperationId;
     FShutdownDone, FShutdownFailed, FCleanupWaiting: Boolean;
     FShutdownErrorCode: Integer;
@@ -253,6 +253,7 @@ end;
 function TLazBleSimpleBleBackend.Submit(const ACommand: TLazBleBackendCommand): TBleOperationId;
 var
   Task: TCommand;
+  I: Integer;
 begin
   LazBleRequireMainThread;
   if FStopping then Exit(InvalidBleOperationId);
@@ -262,7 +263,16 @@ begin
   Task.Request.Value := Copy(ACommand.Value);
   FPending.Add(Task);
   Result := Task.Id;
-  if ACommand.Kind = lbckStopScan then StopCurrentScan;
+  if ACommand.Kind = lbckStopScan then
+  begin
+    { A stop also applies to scans accepted but not yet dispatched. }
+    for I := 0 to FPending.Count - 1 do
+      if TCommand(FPending[I]).Request.Kind = lbckStartScan then
+        TCommand(FPending[I]).StopRequested := True;
+    if (FCurrent <> nil) and (FCurrent.Request.Kind = lbckStartScan) then
+      FCurrent.StopRequested := True;
+    StopCurrentScan;
+  end;
   Schedule;
 end;
 
@@ -495,7 +505,6 @@ begin
             lbckStartScan:
               begin
                 FScan := FCurrent;
-                FStopRequested := False;
                 StartStep(stScanStart);
               end;
             lbckStopScan: FinishCurrent(lbekOperationSucceeded);
@@ -518,7 +527,6 @@ begin
         begin
           FCurrent.TriedScan := True;
           FScan := FCurrent;
-          FStopRequested := False;
           StartStep(stScanStart);
         end
         else raise EBackendError.Create(LazBleErrorDeviceNotFound, 'Bluetooth peripheral not found');
@@ -532,7 +540,7 @@ begin
         begin
           FScanning := True;
           ScanStart(FCurrent.Adapter);
-          if FStopping or FCurrent.Cancelled or FStopRequested then StopCurrentScan
+          if FStopping or FCurrent.Cancelled or FCurrent.StopRequested then StopCurrentScan
           else if FCurrent.Request.Kind = lbckConnect then FScanTimer.Start(5000, @ScanElapsed)
           else if FCurrent.Request.TimeoutMs > 0 then
             FScanTimer.Start(FCurrent.Request.TimeoutMs, @ScanElapsed);
@@ -540,7 +548,6 @@ begin
       stScanStop:
         begin
           FScanning := False;
-          FStopRequested := False;
           FScanTimer.Cancel;
           if (FCurrent.Request.Kind = lbckStartScan) and not FStopping then
           begin
@@ -765,7 +772,7 @@ end;
 procedure TLazBleSimpleBleBackend.StopCurrentScan;
 begin
   if FScan = nil then Exit;
-  FStopRequested := True;
+  FScan.StopRequested := True;
   FScanTimer.Cancel;
   if FScanning and (FStepWorker = nil) then StartStep(stScanStop);
 end;
