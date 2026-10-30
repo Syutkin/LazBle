@@ -39,7 +39,7 @@ type
       const AState: TLazBleOperationState;
       const AErrorMessage: string = '');
     procedure HandleBackendEvent(const AEvent: TLazBleBackendEvent);
-    procedure CompleteRequest(const AResult: TLazBleRequestResult);
+    procedure CompleteRequest(const AResult: TLazBleRequestResult); override;
     procedure CancelLocally;
     procedure DetachOwner;
     function MatchesOperationId(const AOperationId: TBleOperationId): Boolean;
@@ -73,11 +73,7 @@ begin
   LazBleRequireMainThread;
   if State <> lbopPending then Exit;
   FValue := AResult.Value;
-  case AResult.Status of
-    lbrsSucceeded: Complete(lbopSucceeded);
-    lbrsFailed: Complete(lbopFailed, AResult.ErrorCode, AResult.ErrorMessage);
-    lbrsCancelled: Complete(lbopCancelled, AResult.ErrorCode, AResult.ErrorMessage);
-  end;
+  inherited CompleteRequest(AResult);
 end;
 
 constructor TBleGattOperation.CreatePending(const AKind: TLazBleBackendCommandKind);

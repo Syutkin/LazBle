@@ -61,12 +61,12 @@ type
 
   TEventSinkDeliveryThread = class(TThread)
   private
-    FEventSink: ILazBleBackendEventSink;
+    FEventSink: ILazBleRequestCompletion;
     FBackendEvent: TLazBleBackendEvent;
   protected
     procedure Execute; override;
   public
-    constructor Create(const AEventSink: ILazBleBackendEventSink;
+    constructor Create(const AEventSink: ILazBleRequestCompletion;
       const ABackendEvent: TLazBleBackendEvent);
   end;
 
@@ -101,7 +101,7 @@ type
 implementation
 
 constructor TEventSinkDeliveryThread.Create(
-  const AEventSink: ILazBleBackendEventSink;
+  const AEventSink: ILazBleRequestCompletion;
   const ABackendEvent: TLazBleBackendEvent);
 begin
   inherited Create(True);
@@ -112,7 +112,7 @@ end;
 
 procedure TEventSinkDeliveryThread.Execute;
 begin
-  FEventSink.HandleBackendEvent(FBackendEvent);
+  FEventSink.CompleteRequest(Default(TLazBleRequestResult));
 end;
 
 constructor TTrackedFakeLazBleBackend.Create(
@@ -342,7 +342,7 @@ begin
 
   AssertTrue(ShutdownId <> InvalidBleOperationId);
   AssertEquals(Ord(lbcsShuttingDown), Ord(FManager.State));
-  AssertTrue(FBackendObject.HasEventSink);
+  AssertTrue(ShutdownId = FBackendObject.ShutdownOperationId);
   AssertTrue(FBackendObject.CompleteShutdown);
 
   AssertEquals(Ord(lbcsShutdown), Ord(FManager.State));
@@ -435,9 +435,9 @@ end;
 
 procedure TLazBleCentralManagerTest.SinkRejectsOffMainDelivery;
 var Event: TLazBleBackendEvent; Worker: TEventSinkDeliveryThread;
-  Sink: ILazBleBackendEventSink;
+  Sink: ILazBleRequestCompletion;
 begin
-  Sink := TLazBleManagerEventSink.Create(FManager);
+  Sink := TLazBleManagerRequest.Create(FManager, lmrScan, nil);
   Event := Default(TLazBleBackendEvent);
   Worker := TEventSinkDeliveryThread.Create(Sink, Event);
   try

@@ -6,7 +6,7 @@ interface
 
 uses
   SysUtils,
-  LazBleTypes;
+  LazBleTypes, LazBleBackend;
 
 type
   TLazBleOperationState = (
@@ -58,7 +58,7 @@ type
     property Availability: TBleAvailability read GetAvailability;
   end;
 
-  TBleOperation = class(TInterfacedObject, IBleOperation)
+  TBleOperation = class(TInterfacedObject, IBleOperation, ILazBleRequestCompletion)
   private
     FState: TLazBleOperationState;
     FErrorCode: Integer;
@@ -70,6 +70,7 @@ type
     FCompletionDelivered: Boolean;
     procedure NotifyCompleted;
   protected
+    procedure CompleteRequest(const AResult: TLazBleRequestResult); virtual;
     function GetState: TLazBleOperationState;
     function GetErrorCode: Integer;
     function GetErrorMessage: string;
@@ -95,7 +96,7 @@ type
       read GetOnCompleted write SetOnCompleted;
   end;
 
-  TBleScanOperation = class(TBleOperation, IBleScanOperation)
+  TBleScanOperation = class(TBleOperation, IBleScanOperation, ILazBleScanSink)
   private
     FResults: TBleDeviceInfos;
     FOnResult: TLazBleScanResultEvent;
@@ -106,6 +107,8 @@ type
     constructor Create(const AOnCancel: TLazBleOperationCancelEvent);
     procedure AddOrUpdateResult(const ADeviceId, ADeviceName: string;
       const ARssi: SmallInt);
+    procedure CompleteRequest(const AResult: TLazBleRequestResult); override;
+    procedure ReceiveScanResult(const ADevice: TBleDeviceInfo);
   public
     destructor Destroy; override;
     property Results: TBleDeviceInfos read GetResults;
@@ -117,16 +120,69 @@ type
     IBleAvailabilityOperation)
   private
     FAvailability: TBleAvailability;
+    FBackendResult: TLazBleRequestResult;
     function GetAvailability: TBleAvailability;
   protected
     constructor Create(const AOnCancel: TLazBleOperationCancelEvent);
     procedure SetAvailability(const AAvailability: TBleAvailability);
+    procedure CompleteRequest(const AResult: TLazBleRequestResult); override;
+    property BackendResult: TLazBleRequestResult read FBackendResult;
   public
     destructor Destroy; override;
     property Availability: TBleAvailability read GetAvailability;
   end;
 
 implementation
+
+procedure TBleOperation.CompleteRequest(const AResult: TLazBleRequestResult);
+begin
+  LazBleRequireMainThread;
+  case AResult.Status of
+    lbrsSucceeded: Complete(lbopSucceeded);
+    lbrsFailed: Complete(lbopFailed, AResult.ErrorCode, AResult.ErrorMessage);
+    lbrsCancelled: Complete(lbopCancelled, AResult.ErrorCode, AResult.ErrorMessage);
+  end;
+end;
+
+procedure TBleScanOperation.ReceiveScanResult(const ADevice: TBleDeviceInfo);
+begin
+  LazBleRequireMainThread;
+  if State = lbopPending then
+    AddOrUpdateResult(ADevice.DeviceId, ADevice.DeviceName, ADevice.Rssi);
+end;
+
+procedure TBleScanOperation.CompleteRequest(const AResult: TLazBleRequestResult);
+var Device: TBleDeviceInfo; Handler: TLazBleScanResultEvent;
+begin
+  LazBleRequireMainThread;
+  if State <> lbopPending then Exit;
+  Handler := FOnResult;
+  FOnResult := nil;
+  try
+    for Device in AResult.ScanResults do
+      AddOrUpdateResult(Device.DeviceId, Device.DeviceName, Device.Rssi);
+  finally
+    FOnResult := Handler;
+  end;
+  inherited CompleteRequest(AResult);
+end;
+
+procedure TBleAvailabilityOperation.CompleteRequest(const AResult: TLazBleRequestResult);
+begin
+  LazBleRequireMainThread;
+  if State <> lbopPending then Exit;
+  FBackendResult := AResult;
+  if AResult.Status = lbrsSucceeded then
+  begin
+    if not (AResult.Availability in [lbaAvailable, lbaUnavailable]) then
+    begin
+      Complete(lbopFailed, 0, 'BLE backend did not report availability');
+      Exit;
+    end;
+    FAvailability := AResult.Availability;
+  end;
+  inherited CompleteRequest(AResult);
+end;
 
 function SameCompletedHandler(const AFirst,
   ASecond: TLazBleOperationCompletedEvent): Boolean;

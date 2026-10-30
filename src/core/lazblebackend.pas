@@ -20,7 +20,7 @@ type
     Services: TLazBleGattServices;
     ScanResults: TBleDeviceInfos;
     SubscriptionId: TBleSubscriptionId;
-    Available: Boolean;
+    Availability: TBleAvailability;
     BackendName, BackendVersion, AdapterId: string;
   end;
 
@@ -32,6 +32,16 @@ type
   ILazBleValueSink = interface
     ['{6B4C326A-B1B5-4D10-8E39-69646003D32B}']
     procedure ReceiveValue(const AValue: TBytes);
+  end;
+
+  ILazBleScanSink = interface
+    ['{C256C4DA-BABB-45E4-96F3-66B134D5A765}']
+    procedure ReceiveScanResult(const ADevice: TBleDeviceInfo);
+  end;
+
+  ILazBleLinkObserver = interface
+    ['{4A1CBA76-207E-4B90-818F-4D33DF80027C}']
+    procedure LinkChanged(const AConnected: Boolean; const AGeneration: QWord);
   end;
 
   ILazBleBackendEventSink = interface
@@ -60,10 +70,12 @@ type
     { Return InvalidBleOperationId when a command cannot be started. }
     function Submit(const ACommand: TLazBleBackendCommand;
       const ACompletion: ILazBleRequestCompletion = nil;
-      const AValues: ILazBleValueSink = nil): TBleOperationId;
+      const AValues: ILazBleValueSink = nil;
+      const AScan: ILazBleScanSink = nil;
+      const ALink: ILazBleLinkObserver = nil): TBleOperationId;
     procedure Cancel(const AOperationId: TBleOperationId);
     { Begin orderly backend shutdown and return its operation ID. }
-    function BeginShutdown: TBleOperationId;
+    function BeginShutdown(const ACompletion: ILazBleRequestCompletion = nil): TBleOperationId;
   end;
 
 implementation

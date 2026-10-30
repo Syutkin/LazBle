@@ -31,7 +31,9 @@ type
   TLazBleSubmitCommand = function(
     const ACommand: TLazBleBackendCommand;
     const ACompletion: ILazBleRequestCompletion = nil;
-    const AValues: ILazBleValueSink = nil): TBleOperationId of object;
+    const AValues: ILazBleValueSink = nil;
+    const AScan: ILazBleScanSink = nil;
+    const ALink: ILazBleLinkObserver = nil): TBleOperationId of object;
   TLazBleCancelOperation = procedure(
     const AOperationId: TBleOperationId) of object;
 
@@ -39,6 +41,8 @@ type
     current connection as read-only upstream records and are invalidated when it ends. }
   TBleGattSession = class
   private
+    FLink: ILazBleLinkObserver;
+    FLinkObject: TObject;
     FDeviceId: string;
     FState: TLazBleSessionState;
     FShuttingDown: Boolean;
@@ -132,6 +136,12 @@ type
 implementation
 
 type
+  TSessionLink = class(TInterfacedObject, ILazBleLinkObserver)
+    Session: TBleGattSession;
+    constructor Create(ASession: TBleGattSession);
+    procedure LinkChanged(const AConnected: Boolean; const AGeneration: QWord);
+  end;
+
   TSessionWorkflow = class(TBleOperation, ILazBleRequestCompletion)
   private
     FSession: TBleGattSession;
@@ -204,6 +214,23 @@ type
   TBleSubscriptionInterfaces = array of IBleSubscription;
   TBleSubscriptionObjects = array of TBleSubscription;
 
+constructor TSessionLink.Create(ASession: TBleGattSession);
+begin
+  inherited Create;
+  Session := ASession;
+end;
+
+procedure TSessionLink.LinkChanged(const AConnected: Boolean; const AGeneration: QWord);
+var Event: TLazBleBackendEvent;
+begin
+  LazBleRequireMainThread;
+  if Session = nil then Exit;
+  Event := Default(TLazBleBackendEvent);
+  if AConnected then Event.Kind := lbekConnected else Event.Kind := lbekDisconnected;
+  Event.Generation := AGeneration;
+  Session.HandleBackendEvent(Event);
+end;
+
 constructor TSessionWorkflow.Create(ASession: TBleGattSession;
   AKind: TLazBleBackendCommandKind);
 begin
@@ -223,7 +250,7 @@ begin
   Command.Generation := FGeneration;
   FId := InvalidBleOperationId;
   if Assigned(FSession.FSubmitCommand) then
-    FId := FSession.FSubmitCommand(Command, Self);
+    FId := FSession.FSubmitCommand(Command, Self, nil, nil, FSession.FLink);
   if FId = InvalidBleOperationId then
   begin
     R := Default(TLazBleRequestResult);
@@ -601,6 +628,8 @@ constructor TBleGattSession.Create(const ADeviceId: string;
 begin
   inherited Create;
   FDeviceId := ADeviceId;
+  FLinkObject := TSessionLink.Create(Self);
+  FLink := TSessionLink(FLinkObject);
   FSubmitCommand := ASubmitCommand;
   FCancelOperation := ACancelOperation;
   FState := lbssDisconnected;
@@ -611,6 +640,7 @@ end;
 destructor TBleGattSession.Destroy;
 var I: Integer;
 begin
+  TSessionLink(FLinkObject).Session := nil;
   if FConnectWorkflow <> nil then TSessionWorkflow(FConnectWorkflowObject).Detach;
   if FDisconnectWorkflow <> nil then TSessionWorkflow(FDisconnectWorkflowObject).Detach;
   for I := 0 to FOperations.Count - 1 do

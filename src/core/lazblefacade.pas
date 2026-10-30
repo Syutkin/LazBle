@@ -39,17 +39,8 @@ type
     class procedure SetLibraryPath(const APath: string); static;
     function GetDiagnosticInfo: TLazBleDiagnosticInfo;
     procedure OperationCancelled(Sender: TObject);
-    procedure ScanResult(Sender: TObject; const ADeviceId,
-      ADeviceName: string; const ARssi: SmallInt);
-    procedure ScanCompleted(Sender: TObject; const AOutcome: TLazBleBackendEventKind;
-      const AErrorCode: Integer; const AErrorMessage: string);
-    procedure AvailabilityResult(Sender: TObject;
-      const AEvent: TLazBleBackendEvent);
-    procedure AvailabilityCompleted(Sender: TObject;
-      const AOutcome: TLazBleBackendEventKind; const AErrorCode: Integer;
-      const AErrorMessage: string);
-    procedure ManagerStateChanged(Sender: TObject;
-      const AState: TLazBleCentralState);
+    procedure ScanFinished(Sender: TObject);
+    procedure AvailabilityFinished(Sender: TObject);
     procedure CancelPendingOperations;
     function ConnectSessionAsync(const ADeviceId: string):
       IBleOperation;
@@ -269,11 +260,6 @@ begin
   FReconnectTimerFactory := AReconnectTimerFactory;
   FClients := TList.Create;
   FManager := TBleCentralManager.Create(ABackend);
-  FManager.OnScanResult := @ScanResult;
-  FManager.OnScanCompleted := @ScanCompleted;
-  FManager.OnAvailabilityResult := @AvailabilityResult;
-  FManager.OnAvailabilityCompleted := @AvailabilityCompleted;
-  FManager.OnStateChanged := @ManagerStateChanged;
 end;
 
 destructor TLazBle.Destroy;
@@ -345,117 +331,36 @@ begin
   else if Sender = FActiveAvailabilityObject then FManager.CancelAvailabilityCheck;
 end;
 
-procedure TLazBle.ScanResult(Sender: TObject; const ADeviceId,
-  ADeviceName: string; const ARssi: SmallInt);
+procedure TLazBle.ScanFinished(Sender: TObject);
 begin
-  LazBleRequireMainThread;
-  if Assigned(FActiveScan) and (FActiveScan.State = lbopPending) then
-    TBleScanOperationAccess(FActiveScanObject).AddResult(ADeviceId,
-      ADeviceName, ARssi);
-end;
-
-procedure TLazBle.ScanCompleted(Sender: TObject;
-  const AOutcome: TLazBleBackendEventKind; const AErrorCode: Integer;
-  const AErrorMessage: string);
-var
-  Operation: IBleScanOperation;
-  OperationObject: TBleScanOperation;
-begin
-  LazBleRequireMainThread;
-  Operation := FActiveScan;
-  OperationObject := FActiveScanObject;
+  if Sender <> FActiveScanObject then Exit;
   FActiveScan := nil;
   FActiveScanObject := nil;
-  if not Assigned(Operation) then
-    Exit;
-  if AOutcome = lbekOperationCancelled then
-    TBleScanOperationAccess(OperationObject).Finish(lbopCancelled)
-  else if AOutcome = lbekOperationSucceeded then
-    TBleScanOperationAccess(OperationObject).Finish(lbopSucceeded)
-  else
-    TBleScanOperationAccess(OperationObject).Finish(lbopFailed, AErrorCode,
-      AErrorMessage);
 end;
 
-procedure TLazBle.AvailabilityResult(Sender: TObject;
-  const AEvent: TLazBleBackendEvent);
-var
-  Availability: TBleAvailability;
+procedure TLazBle.AvailabilityFinished(Sender: TObject);
+var Operation: TBleAvailabilityOperationAccess; R: TLazBleRequestResult;
 begin
-  LazBleRequireMainThread;
-  if AEvent.Available then
-    Availability := lbaAvailable
-  else
-    Availability := lbaUnavailable;
-  if Assigned(FActiveAvailability) and
-    (FActiveAvailability.State = lbopPending) then
-    TBleAvailabilityOperationAccess(
-      FActiveAvailabilityObject).StoreAvailability(Availability);
-  FDiagnosticInfo.BackendName := FBackendName;
-  if AEvent.BackendName <> '' then
-    FDiagnosticInfo.BackendName := AEvent.BackendName;
-  FDiagnosticInfo.NativeVersion := AEvent.BackendVersion;
-  FDiagnosticInfo.AdapterId := AEvent.AdapterId;
-  FDiagnosticInfo.AvailabilityErrorMessage := '';
-end;
-
-procedure TLazBle.AvailabilityCompleted(Sender: TObject;
-  const AOutcome: TLazBleBackendEventKind; const AErrorCode: Integer;
-  const AErrorMessage: string);
-var
-  Operation: IBleAvailabilityOperation;
-  OperationObject: TBleAvailabilityOperation;
-begin
-  LazBleRequireMainThread;
-  Operation := FActiveAvailability;
-  OperationObject := FActiveAvailabilityObject;
+  if Sender <> FActiveAvailabilityObject then Exit;
+  Operation := TBleAvailabilityOperationAccess(Sender);
+  R := Operation.BackendResult;
   FActiveAvailability := nil;
   FActiveAvailabilityObject := nil;
-  if not Assigned(Operation) then
-    Exit;
-  if AOutcome = lbekOperationCancelled then
-  begin
-    FDiagnosticInfo.Availability := lbaUnknown;
-    FDiagnosticInfo.AvailabilityErrorMessage := '';
-  end
-  else if (AOutcome = lbekOperationSucceeded) and
-    (Operation.Availability in [lbaAvailable, lbaUnavailable]) then
-  begin
-    FDiagnosticInfo.Availability := Operation.Availability;
-    FDiagnosticInfo.AvailabilityErrorMessage := '';
-  end
-  else
-  begin
-    FDiagnosticInfo.Availability := lbaUnavailable;
-    if AOutcome = lbekOperationSucceeded then
-      FDiagnosticInfo.AvailabilityErrorMessage := 'BLE backend did not report availability'
-    else
-      FDiagnosticInfo.AvailabilityErrorMessage := AErrorMessage;
+  FDiagnosticInfo.BackendName := FBackendName;
+  if R.BackendName <> '' then FDiagnosticInfo.BackendName := R.BackendName;
+  FDiagnosticInfo.NativeVersion := R.BackendVersion;
+  FDiagnosticInfo.AdapterId := R.AdapterId;
+  FDiagnosticInfo.AvailabilityErrorMessage := '';
+  case Operation.State of
+    lbopSucceeded: FDiagnosticInfo.Availability := Operation.Availability;
+    lbopCancelled: FDiagnosticInfo.Availability := lbaUnknown;
+    lbopFailed:
+      begin
+        FDiagnosticInfo.Availability := lbaUnavailable;
+        FDiagnosticInfo.AvailabilityErrorMessage := Operation.ErrorMessage;
+      end;
   end;
-  if Assigned(FShutdownOperation) then
-    FDiagnosticInfo.Availability := lbaUnavailable;
-  if AOutcome = lbekOperationCancelled then
-    TBleAvailabilityOperationAccess(OperationObject).Finish(lbopCancelled)
-  else if (AOutcome = lbekOperationSucceeded) and
-    (Operation.Availability in [lbaAvailable, lbaUnavailable]) then
-    TBleAvailabilityOperationAccess(OperationObject).Finish(lbopSucceeded)
-  else if AOutcome = lbekOperationSucceeded then
-    TBleAvailabilityOperationAccess(OperationObject).Finish(lbopFailed, 0,
-      'BLE backend did not report availability')
-  else
-    TBleAvailabilityOperationAccess(OperationObject).Finish(lbopFailed,
-      AErrorCode, AErrorMessage);
-end;
-
-procedure TLazBle.ManagerStateChanged(Sender: TObject;
-  const AState: TLazBleCentralState);
-begin
-  LazBleRequireMainThread;
-  if Assigned(FShutdownOperation) and (AState = lbcsShutdown) then
-    if FManager.ShutdownFailed then
-      TBleOperationAccess(FShutdownOperationObject).Finish(lbopFailed,
-        FManager.ShutdownErrorCode, FManager.ShutdownErrorMessage)
-    else TBleOperationAccess(FShutdownOperationObject).Finish(lbopSucceeded);
+  if FShutdownOperation <> nil then FDiagnosticInfo.Availability := lbaUnavailable;
 end;
 
 procedure TLazBle.CancelPendingOperations;
@@ -495,7 +400,8 @@ begin
   Result := Operation;
   FActiveAvailability := Result;
   FActiveAvailabilityObject := Operation;
-  if FManager.CheckAvailability(AAdapterId) = InvalidBleOperationId then
+  TBleOperationAccess(Operation).OnFinishing := @AvailabilityFinished;
+  if FManager.CheckAvailability(AAdapterId, Operation) = InvalidBleOperationId then
   begin
     FActiveAvailability := nil;
     FActiveAvailabilityObject := nil;
@@ -518,7 +424,8 @@ begin
   Result := Operation;
   FActiveScan := Result;
   FActiveScanObject := Operation;
-  if FManager.StartScan(AAdapterId, ATimeoutMs) = InvalidBleOperationId then
+  TBleOperationAccess(Operation).OnFinishing := @ScanFinished;
+  if FManager.StartScan(AAdapterId, ATimeoutMs, Operation, Operation) = InvalidBleOperationId then
   begin
     FActiveScan := nil;
     FActiveScanObject := nil;
@@ -611,7 +518,7 @@ begin
   CancelPendingOperations;
   if FManager.State = lbcsShutdown then
     Operation.Finish(lbopSucceeded)
-  else if FManager.BeginShutdown = InvalidBleOperationId then
+  else if FManager.BeginShutdown(Operation) = InvalidBleOperationId then
     Operation.Finish(lbopFailed, 0,
       'Could not start BLE shutdown');
   Result := FShutdownOperation;

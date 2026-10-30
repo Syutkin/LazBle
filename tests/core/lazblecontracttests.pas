@@ -77,9 +77,39 @@ type
     procedure ServicesSnapshotWaitsForNativeOutcome;
     procedure DisconnectedEventDoesNotReplaceNativeOutcome;
     procedure LateDisconnectOutcomeDoesNotChangeNewConnection;
+    procedure ScanFinalSnapshotCompletesDirectly;
+    procedure AvailabilityResultCompletesDirectly;
   end;
 
 implementation
+
+procedure TLazBleContractTest.ScanFinalSnapshotCompletesDirectly;
+var Op: IBleScanOperation; R: TLazBleRequestResult;
+begin
+  Op := FBle.ScanAsync('', 0);
+  R := Default(TLazBleRequestResult); R.Status := lbrsSucceeded;
+  SetLength(R.ScanResults, 2);
+  R.ScanResults[0].DeviceId := 'first'; R.ScanResults[0].Rssi := -70;
+  R.ScanResults[1].DeviceId := 'second'; R.ScanResults[1].Rssi := -40;
+  AssertTrue(FFake.FinishRequest(LastId, R));
+  AssertEquals(Ord(lbopSucceeded), Ord(Op.State));
+  AssertEquals(2, Length(Op.Results));
+  AssertEquals('first', Op.Results[0].DeviceId);
+  AssertEquals('second', Op.Results[1].DeviceId);
+end;
+
+procedure TLazBleContractTest.AvailabilityResultCompletesDirectly;
+var Op: IBleAvailabilityOperation; R: TLazBleRequestResult;
+begin
+  Op := FBle.CheckAvailabilityAsync('');
+  R := Default(TLazBleRequestResult); R.Status := lbrsSucceeded;
+  R.Availability := lbaAvailable; R.AdapterId := 'adapter'; R.BackendVersion := 'native';
+  AssertTrue(FFake.FinishRequest(LastId, R));
+  AssertEquals(Ord(lbopSucceeded), Ord(Op.State));
+  AssertEquals(Ord(lbaAvailable), Ord(Op.Availability));
+  AssertEquals('adapter', FBle.DiagnosticInfo.AdapterId);
+  AssertEquals('native', FBle.DiagnosticInfo.NativeVersion);
+end;
 
 procedure TLazBleContractTest.LateDisconnectOutcomeDoesNotChangeNewConnection;
 var DisconnectOp, ConnectOp: IBleOperation; DisconnectId, Id: TBleOperationId;

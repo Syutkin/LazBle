@@ -111,7 +111,7 @@ begin
   while (Observer.Count = 0) and (GetTickCount64 < Deadline) do CheckSynchronize(10);
   AssertEquals(1, Observer.Count);
   AssertEquals(Ord(lbrsSucceeded), Ord(Observer.ResultData.Status));
-  AssertTrue(Observer.ResultData.Available);
+  AssertEquals(Ord(lbaAvailable), Ord(Observer.ResultData.Availability));
   AssertEquals(0, FEvents.Count(lbekOperationSucceeded, Id));
   AssertEquals(0, FEvents.Count(lbekAvailabilityResult, Id));
 end;
