@@ -91,6 +91,7 @@ var
   First, Second: IBleGattOperation;
   Id, FirstId, SecondId: TBleOperationId;
   E: TLazBleBackendEvent;
+  ResultData: TLazBleRequestResult;
 begin
   Connect;
   Other := FBle.CreateClient('other');
@@ -107,15 +108,14 @@ begin
   AssertEquals(Ord(lbopSucceeded), Ord(Connected.State));
   First := FClient.ReadAsync('service', 'value'); FirstId := LastId;
   Second := Other.ReadAsync('service', 'value'); SecondId := LastId;
-  E.OperationId := SecondId; E.Kind := lbekReadResult; E.Value := TBytes.Create(22);
-  FFake.EmitProgress(E);
-  FFake.CompleteOperation(SecondId, lbekOperationSucceeded);
+  ResultData := Default(TLazBleRequestResult);
+  ResultData.Status := lbrsSucceeded; ResultData.Value := TBytes.Create(22);
+  AssertTrue(FFake.FinishRequest(SecondId, ResultData));
   AssertEquals(Ord(lbopPending), Ord(First.State));
   AssertEquals(Ord(lbopSucceeded), Ord(Second.State));
   AssertEquals(22, Second.Value[0]);
-  E.DeviceId := 'peer'; E.OperationId := FirstId; E.Value := TBytes.Create(11);
-  FFake.EmitProgress(E);
-  FFake.CompleteOperation(FirstId, lbekOperationSucceeded);
+  ResultData.Value := TBytes.Create(11);
+  AssertTrue(FFake.FinishRequest(FirstId, ResultData));
   AssertEquals(11, First.Value[0]);
   AssertEquals(22, Second.Value[0]);
 end;

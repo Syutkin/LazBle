@@ -27,6 +27,9 @@ type
     FValue: TBytes;
     function GetValue: TBytes;
   protected
+    constructor CreateRequest(const AKind: TLazBleBackendCommandKind;
+      const AOnCancel: TLazBleOperationCancelEvent; const AGeneration: QWord);
+    procedure BindRequest(const AOperationId: TBleOperationId);
     { A local operation that awaits a chained native cleanup. }
     constructor CreatePending(const AKind: TLazBleBackendCommandKind);
     constructor Create(const AOperationId: TBleOperationId;
@@ -49,6 +52,21 @@ type
   end;
 
 implementation
+
+constructor TBleGattOperation.CreateRequest(const AKind: TLazBleBackendCommandKind;
+  const AOnCancel: TLazBleOperationCancelEvent; const AGeneration: QWord);
+begin
+  inherited Create(AOnCancel);
+  FKind := AKind;
+  FGeneration := AGeneration;
+end;
+
+procedure TBleGattOperation.BindRequest(const AOperationId: TBleOperationId);
+begin
+  FOperationId := AOperationId;
+  if AOperationId = InvalidBleOperationId then
+    Complete(lbopFailed, LazBleErrorInvalidState, 'Could not submit GATT operation');
+end;
 
 procedure TBleGattOperation.CompleteRequest(const AResult: TLazBleRequestResult);
 begin
@@ -138,6 +156,7 @@ procedure TBleGattOperation.DetachOwner;
 begin
   LazBleRequireMainThread;
   DetachCancelHandler;
+  OnFinishing := nil;
 end;
 
 function TBleGattOperation.MatchesOperationId(

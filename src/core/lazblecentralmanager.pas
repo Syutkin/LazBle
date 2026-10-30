@@ -65,7 +65,8 @@ type
     FOnStateChanged: TLazBleCentralStateChangedEvent;
     procedure SetState(const AState: TLazBleCentralState);
     function SubmitCommand(
-      const ACommand: TLazBleBackendCommand): TBleOperationId;
+      const ACommand: TLazBleBackendCommand;
+      const ACompletion: ILazBleRequestCompletion = nil): TBleOperationId;
     procedure CancelOperation(const AOperationId: TBleOperationId);
     procedure HandleBackendEvent(const AEvent: TLazBleBackendEvent);
   protected
@@ -226,13 +227,14 @@ begin
 end;
 
 function TBleCentralManager.SubmitCommand(
-  const ACommand: TLazBleBackendCommand): TBleOperationId;
+  const ACommand: TLazBleBackendCommand;
+  const ACompletion: ILazBleRequestCompletion): TBleOperationId;
 begin
   LazBleRequireMainThread;
   if not Assigned(FBackend) or
     (FState in [lbcsShuttingDown, lbcsShutdown]) then
     Exit(InvalidBleOperationId);
-  Result := FBackend.Submit(ACommand);
+  Result := FBackend.Submit(ACommand, ACompletion);
 end;
 
 function TBleCentralManager.StartScan(const AAdapterId: string;
