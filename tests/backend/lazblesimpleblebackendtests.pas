@@ -107,9 +107,11 @@ type
     procedure AddressedReadReturnsPayloadWithStatus;
     procedure RaisingCompletionDoesNotStrandShutdown;
     procedure BackendReleasesCompletedRecipient;
+    procedure ActiveFacadeReleaseDrainsNativeCleanup;
   end;
 
 implementation
+
 
 type
   { Logs observations from typed callbacks. Payload and status are received
@@ -1119,6 +1121,42 @@ begin
   for E in FEvents.Events do
     if LazBleBackendEventIsTerminal(E) then
       AssertTrue('Cleanup commands are private to the backend', E.OperationId <> 0);
+end;
+
+procedure TLazBleSimpleBleBackendTest.ActiveFacadeReleaseDrainsNativeCleanup;
+var Ble: TLazBle; Client: TBleClient; Op: IBleOperation;
+  Token: IBleSubscription; ReadOp: IBleGattOperation; Deadline: QWord;
+
+  procedure Await(const Operation: IBleOperation);
+  var UntilTick: QWord;
+  begin
+    UntilTick := GetTickCount64 + 8000;
+    while (Operation.State = lbopPending) and (GetTickCount64 < UntilTick) do CheckSynchronize(5);
+    AssertEquals(Operation.ErrorMessage, Ord(lbopSucceeded), Ord(Operation.State));
+  end;
+
+begin
+  Shutdown;
+  Ble := TLazBle.Create;
+  try
+    Op := Ble.ScanAsync('', 1000); Await(Op);
+    Client := Ble.CreateClient(Device);
+    Op := Client.ConnectAsync; Await(Op);
+    Token := Client.SubscribeAsync(BatteryService,
+      BatteryValue);
+    Deadline := GetTickCount64 + 8000;
+    while (Token.State = lbsubPending) and (GetTickCount64 < Deadline) do CheckSynchronize(5);
+    AssertEquals(Ord(lbsubActive), Ord(Token.State));
+    ReadOp := Client.ReadAsync(BatteryService,
+      BatteryValue);
+    FreeAndNil(Ble);
+    AssertEquals(Ord(lbopCancelled), Ord(ReadOp.State));
+    AssertEquals(Ord(lbsubInactive), Ord(Token.State));
+    AssertFalse(Assigned(Token.OnData));
+    AssertEquals(0, Length(TBleAdapter.GetAdapters[0].GetConnectedPeripherals));
+    CheckSynchronize(0);
+    AssertEquals(Ord(lbopSucceeded), Ord(Token.Unsubscribe.State));
+  finally Ble.Free; end;
 end;
 
 initialization

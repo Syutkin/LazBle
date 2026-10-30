@@ -72,6 +72,7 @@ type
     procedure LateOwnerCompletion(Sender: TObject);
     procedure EmitClosingNotification(Sender: TObject);
     procedure ObserveSessionClosing(Sender: TObject; const State: TLazBleClientState);
+    procedure RaiseWhenSessionCloses(Sender: TObject; const State: TLazBleClientState);
   protected
     procedure SetUp; override;
     procedure TearDown; override;
@@ -128,9 +129,44 @@ type
     procedure ShutdownClosesDataBeforeProfileDetach;
     procedure FacadeRetainsBackendAfterShutdownUntilRelease;
     procedure ReconnectedClientIgnoresOldPhysicalLinkEvents;
+    procedure ShutdownKeepsNativeFailureWhenClosingCallbackRaises;
   end;
 
 implementation
+
+procedure TLazBleContractTest.RaiseWhenSessionCloses(Sender: TObject;
+  const State: TLazBleClientState);
+begin
+  if State <> lbcstDisconnected then Exit;
+  AssertEquals(Ord(lbopPending), Ord(FNextOperation.State));
+  raise Exception.Create('test closing callback');
+end;
+
+procedure TLazBleContractTest.ShutdownKeepsNativeFailureWhenClosingCallbackRaises;
+var Other: TBleClient; Connected: IBleOperation; Id: TBleOperationId;
+  E: TLazBleBackendEvent; Previous: TNotifyEvent;
+begin
+  Connect;
+  Other := FBle.CreateClient('other'); Connected := Other.ConnectAsync; Id := LastId;
+  E := Default(TLazBleBackendEvent); E.DeviceId := 'other';
+  E.Kind := lbekConnected; E.OperationId := Id; FFake.EmitProgress(E);
+  FFake.CompleteOperation(Id, lbekOperationSucceeded);
+  E.Kind := lbekServicesDiscovered; E.OperationId := LastId;
+  FFake.EmitProgress(E); FFake.CompleteOperation(E.OperationId, lbekOperationSucceeded);
+  AssertEquals(Ord(lbopSucceeded), Ord(Connected.State));
+  FClient.OnStateChanged := @RaiseWhenSessionCloses;
+  Other.OnStateChanged := @ObserveSessionClosing;
+  FNextOperation := FBle.ShutdownAsync;
+  Previous := ApplicationHandleException; ApplicationHandleException := @CallbackError;
+  try AssertTrue(FFake.CompleteShutdown(0, '', True));
+  finally ApplicationHandleException := Previous; end;
+  AssertEquals(1, FCallbackErrors); AssertEquals(1, FValues);
+  AssertEquals(Ord(lbcstDisconnected), Ord(FClient.State));
+  AssertEquals(Ord(lbcstDisconnected), Ord(Other.State));
+  AssertEquals(Ord(lbopFailed), Ord(FNextOperation.State));
+  AssertEquals(0, FNextOperation.ErrorCode); AssertEquals('', FNextOperation.ErrorMessage);
+  AssertTrue(FNextOperation = FBle.ShutdownAsync);
+end;
 
 destructor TFakeBackendWithLifetime.Destroy;
 begin
