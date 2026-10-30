@@ -29,6 +29,7 @@ type
     procedure DisconnectWhenConnected(Sender: TObject);
     procedure RestartWhenDisconnected(Sender: TObject);
     procedure TryReadAfterUnsubscribeFailure(Sender: TObject);
+    procedure ShutdownWhenReadCompletes(Sender: TObject);
     procedure Emit(Kind: TLazBleBackendEventKind; Id: TBleOperationId;
       Token: TBleSubscriptionId = 0);
     procedure Connect;
@@ -69,9 +70,69 @@ type
     procedure DisconnectCancellationKeepsCleanup;
     procedure DisconnectCancellationDoesNotRestorePartialConnect;
     procedure QueuedCancelCompletionCanStartNextConnect;
+    procedure TwoClientsKeepReadResultsWhenCompletedOutOfOrder;
+    procedure ReadCompletionCanBeginShutdown;
   end;
 
 implementation
+
+procedure TLazBleContractTest.ShutdownWhenReadCompletes(Sender: TObject);
+begin
+  AssertEquals(Ord(lbopSucceeded), Ord(FNextRead.State));
+  AssertEquals(42, FNextRead.Value[0]);
+  Inc(FValues);
+  FNextOperation := FBle.ShutdownAsync;
+end;
+
+procedure TLazBleContractTest.TwoClientsKeepReadResultsWhenCompletedOutOfOrder;
+var
+  Other: TBleClient;
+  Connected: IBleOperation;
+  First, Second: IBleGattOperation;
+  Id, FirstId, SecondId: TBleOperationId;
+  E: TLazBleBackendEvent;
+begin
+  Connect;
+  Other := FBle.CreateClient('other');
+  Connected := Other.ConnectAsync;
+  Id := LastId;
+  E := Default(TLazBleBackendEvent);
+  E.DeviceId := 'other'; E.OperationId := Id; E.Kind := lbekConnected;
+  FFake.EmitProgress(E);
+  FFake.CompleteOperation(Id, lbekOperationSucceeded);
+  Id := LastId;
+  E.OperationId := Id; E.Kind := lbekServicesDiscovered;
+  FFake.EmitProgress(E);
+  FFake.CompleteOperation(Id, lbekOperationSucceeded);
+  AssertEquals(Ord(lbopSucceeded), Ord(Connected.State));
+  First := FClient.ReadAsync('service', 'value'); FirstId := LastId;
+  Second := Other.ReadAsync('service', 'value'); SecondId := LastId;
+  E.OperationId := SecondId; E.Kind := lbekReadResult; E.Value := TBytes.Create(22);
+  FFake.EmitProgress(E);
+  FFake.CompleteOperation(SecondId, lbekOperationSucceeded);
+  AssertEquals(Ord(lbopPending), Ord(First.State));
+  AssertEquals(Ord(lbopSucceeded), Ord(Second.State));
+  AssertEquals(22, Second.Value[0]);
+  E.DeviceId := 'peer'; E.OperationId := FirstId; E.Value := TBytes.Create(11);
+  FFake.EmitProgress(E);
+  FFake.CompleteOperation(FirstId, lbekOperationSucceeded);
+  AssertEquals(11, First.Value[0]);
+  AssertEquals(22, Second.Value[0]);
+end;
+
+procedure TLazBleContractTest.ReadCompletionCanBeginShutdown;
+var Id: TBleOperationId;
+begin
+  Connect;
+  FNextRead := FClient.ReadAsync('service', 'value'); Id := LastId;
+  FNextRead.OnCompleted := @ShutdownWhenReadCompletes;
+  Emit(lbekReadResult, Id);
+  FFake.CompleteOperation(Id, lbekOperationSucceeded);
+  AssertEquals(1, FValues);
+  AssertTrue(FNextOperation <> nil);
+  AssertTrue(FFake.CompleteShutdown);
+  AssertEquals(Ord(lbopSucceeded), Ord(FNextOperation.State));
+end;
 
 type
   TForeignCall = class(TThread)
