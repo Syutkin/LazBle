@@ -1,30 +1,115 @@
 object LazBleDemoForm: TLazBleDemoForm
   Left = 480
-  Height = 160
+  Height = 100
   Top = 260
   Width = 620
+  AutoSize = True
   Caption = 'LazBle LCL Demo'
-  ClientHeight = 160
+  ClientHeight = 100
   ClientWidth = 620
+  Constraints.MinHeight = 100
+  Constraints.MinWidth = 620
+  OnCreate = FormCreate
   OnCloseQuery = FormCloseQuery
   Position = poScreenCenter
   LCLVersion = '3.4.0.0'
-  object BleDeviceControl: TLazBleDeviceControl
+  object DevicePanel: TPanel
     Left = 16
-    Height = 64
-    Top = 48
+    Height = 30
+    Top = 16
     Width = 588
-    Anchors = [akTop, akLeft, akRight]
-    Client = BleClient
+    Align = alTop
+    AutoSize = True
+    BevelOuter = bvNone
+    BorderSpacing.Around = 16
+    ClientHeight = 30
+    ClientWidth = 588
+    Constraints.MinHeight = 30
     TabOrder = 0
+    object DeviceButton: TButton
+      Left = 0
+      Height = 30
+      Top = 0
+      Width = 480
+      Align = alClient
+      AutoSize = True
+      Caption = 'Select a device... ▾'
+      Constraints.MinHeight = 30
+      Constraints.MinWidth = 180
+      ShowHint = True
+      TabOrder = 0
+      OnClick = DeviceButtonClick
+    end
+    object StatusPanel: TPanel
+      Left = 480
+      Height = 30
+      Top = 0
+      Width = 0
+      Align = alRight
+      AutoSize = True
+      BevelOuter = bvNone
+      BorderSpacing.Left = 12
+      ChildSizing.HorizontalSpacing = 6
+      ChildSizing.EnlargeVertical = crsHomogenousChildResize
+      ChildSizing.Layout = cclLeftToRightThenTopToBottom
+      ChildSizing.ControlsPerLine = 2
+      TabOrder = 1
+      Visible = False
+      object StatusIndicator: TShape
+        Left = 0
+        Height = 8
+        Top = 11
+        Width = 8
+        BorderSpacing.CellAlignVertical = ccaCenter
+        Brush.Color = clGray
+        Constraints.MaxHeight = 8
+        Constraints.MaxWidth = 8
+        Pen.Style = psClear
+        Shape = stCircle
+      end
+      object StatusLabel: TLabel
+        Left = 14
+        Height = 17
+        Top = 6
+        Width = 0
+        BorderSpacing.CellAlignVertical = ccaCenter
+      end
+    end
+    object ConnectionButton: TButton
+      Left = 492
+      Height = 30
+      Top = 0
+      Width = 96
+      Align = alRight
+      AutoSize = True
+      BorderSpacing.Left = 12
+      Caption = 'Connect'
+      Constraints.MinHeight = 30
+      Constraints.MinWidth = 96
+      Enabled = False
+      TabOrder = 2
+      OnClick = ConnectionButtonClick
+    end
+  end
+  object ErrorLabel: TLabel
+    Left = 16
+    Height = 17
+    Top = 62
+    Width = 588
+    Align = alTop
+    BorderSpacing.Left = 16
+    BorderSpacing.Right = 16
+    BorderSpacing.Bottom = 16
+    Visible = False
+    WordWrap = True
   end
   object LazBle: TLazBleComponent
     Left = 24
-    Top = 8
+    Top = 64
   end
   object BleClient: TLazBleLclClient
     LazBle = LazBle
     Left = 72
-    Top = 8
+    Top = 64
   end
 end

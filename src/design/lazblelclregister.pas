@@ -11,15 +11,13 @@ implementation
 uses
   Classes,
   LResources,
-  LazBleComponent,
-  LazBleDeviceControl;
+  LazBleComponent;
 
 procedure Register;
 begin
   RegisterComponents('LazBle', [
     TLazBleComponent,
-    TLazBleLclClient,
-    TLazBleDeviceControl
+    TLazBleLclClient
   ]);
 end;
 

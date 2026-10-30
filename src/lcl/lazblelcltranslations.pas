@@ -21,8 +21,6 @@ begin
   LanguageDirectory := IncludeTrailingPathDelimiter(ALanguageDirectory);
   TranslateUnitResourceStrings('lazbledeviceselectform', LanguageDirectory +
     'lazbledeviceselectform.%s.po', ALanguage, AFallbackLanguage);
-  TranslateUnitResourceStrings('lazbledevicecontrol', LanguageDirectory +
-    'lazbledevicecontrol.%s.po', ALanguage, AFallbackLanguage);
 end;
 
 end.

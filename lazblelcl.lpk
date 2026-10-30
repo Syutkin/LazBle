@@ -13,7 +13,7 @@
         <UnitOutputDirectory Value="lib\$(TargetCPU)-$(TargetOS)\lcl"/>
       </SearchPaths>
     </CompilerOptions>
-    <Files Count="5">
+    <Files Count="4">
       <Item1>
         <Filename Value="src\lcl\lazblelclscan.pas"/>
         <UnitName Value="LazBleLclScan"/>
@@ -27,16 +27,9 @@
         <UnitName Value="LazBleDeviceSelectForm"/>
       </Item3>
       <Item4>
-        <Filename Value="src\lcl\lazbledevicecontrol.pas"/>
-        <ComponentName Value="BleDeviceControl"/>
-        <HasResources Value="True"/>
-        <ResourceBaseClass Value="Frame"/>
-        <UnitName Value="LazBleDeviceControl"/>
-      </Item4>
-      <Item5>
         <Filename Value="src\lcl\lazblelcltranslations.pas"/>
         <UnitName Value="LazBleLclTranslations"/>
-      </Item5>
+      </Item4>
     </Files>
     <i18n>
       <EnableI18N Value="True"/>

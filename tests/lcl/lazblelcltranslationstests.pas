@@ -17,9 +17,6 @@ type
     StartButtonCaption: string;
     SelectButtonCaption: string;
     CancelButtonCaption: string;
-    ControlSelectCaption: string;
-    ControlConnectCaption: string;
-    ControlDeviceText: string;
   end;
 
   TLazBleLclTranslationsTest = class(TTestCase)
@@ -34,7 +31,6 @@ uses
   LazFileUtils,
   LazUTF8,
   LazBleDeviceSelectForm,
-  LazBleDeviceControl,
   LazBleLclTranslations;
 
 function LanguageDirectory: string;
@@ -45,11 +41,9 @@ end;
 
 function CaptureLclText: TLazBleLclTextSnapshot;
 var
-  DeviceControl: TLazBleDeviceControl;
   DeviceSelectForm: TBleDeviceSelectForm;
 begin
   DeviceSelectForm := TBleDeviceSelectForm.Create(nil);
-  DeviceControl := TLazBleDeviceControl.Create(nil);
   try
     Result.FormCaption := DeviceSelectForm.Caption;
     Result.NameColumnCaption :=
@@ -60,11 +54,7 @@ begin
     Result.StartButtonCaption := DeviceSelectForm.ButtonStart.Caption;
     Result.SelectButtonCaption := DeviceSelectForm.ButtonSelect.Caption;
     Result.CancelButtonCaption := DeviceSelectForm.ButtonCancel.Caption;
-    Result.ControlSelectCaption := DeviceControl.SelectButtonCaption;
-    Result.ControlConnectCaption := DeviceControl.ConnectButtonCaption;
-    Result.ControlDeviceText := DeviceControl.DeviceText;
   finally
-    DeviceControl.Free;
     DeviceSelectForm.Free;
   end;
 end;
@@ -94,12 +84,6 @@ begin
       TranslatedText.SelectButtonCaption <> EnglishText.SelectButtonCaption);
     AssertTrue('Cancel button was not translated',
       TranslatedText.CancelButtonCaption <> EnglishText.CancelButtonCaption);
-    AssertTrue('Device control select caption was not translated',
-      TranslatedText.ControlSelectCaption <> EnglishText.ControlSelectCaption);
-    AssertTrue('Device control connect caption was not translated',
-      TranslatedText.ControlConnectCaption <> EnglishText.ControlConnectCaption);
-    AssertTrue('Device control status was not translated',
-      TranslatedText.ControlDeviceText <> EnglishText.ControlDeviceText);
   finally
     TranslateLazBleLclResourceStrings(LanguageDirectory, 'en', '');
   end;
@@ -116,12 +100,6 @@ begin
     RestoredText.SelectButtonCaption);
   AssertEquals(EnglishText.CancelButtonCaption,
     RestoredText.CancelButtonCaption);
-  AssertEquals(EnglishText.ControlSelectCaption,
-    RestoredText.ControlSelectCaption);
-  AssertEquals(EnglishText.ControlConnectCaption,
-    RestoredText.ControlConnectCaption);
-  AssertEquals(EnglishText.ControlDeviceText,
-    RestoredText.ControlDeviceText);
 end;
 
 initialization

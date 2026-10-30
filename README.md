@@ -14,7 +14,7 @@ API access and callbacks run on the main thread.
 | Package | Purpose |
 | --- | --- |
 | `lazble.lpk` | Core library, SimpleDelphiBLE backend, NUS and Battery profiles; no LCL dependency |
-| `lazblelcl.lpk` | LCL components, device picker, connection control, and translations |
+| `lazblelcl.lpk` | LCL components, device picker, and translations |
 | `lazblelcldesign.lpk` | Design-time registration on the Lazarus component palette |
 
 The main types are:
@@ -30,7 +30,6 @@ The main types are:
 - `TLazBleComponent`: LCL facade owner, availability checks, and scan controller.
 - `TLazBleLclClient`: persistent LCL wrapper for a selected device.
 - `TBleDeviceSelectForm`: modal device picker using an existing scan controller.
-- `TLazBleDeviceControl`: visual device selector and connection-status control.
 
 ## Dependencies and native libraries
 
@@ -365,7 +364,7 @@ it is pending. Its completion handler schedules `Close` using
 `Application.QueueAsyncCall`. Remove owned queued calls in the destructor.
 See the [LCL demo](examples/lcl/lazblelcldemoform.pas) for the complete pattern.
 
-### Device selection and controls
+### Device selection
 
 `TBleDeviceSelectForm` uses an existing scan controller and returns a selected
 device snapshot:
@@ -384,18 +383,13 @@ end;
 
 The picker keeps discovery order and updates matching rows.
 
-Bind `TLazBleDeviceControl.Client` to an existing LCL client to display its
-device, status, and connection actions. `ShowSelectButton` and
-`ShowConnectionButton` control visibility. Button captions are configurable;
-`OnSelectButtonClick` and `OnConnectionButtonClick` override the built-in actions.
-Custom handlers may call `SelectDevice` or `ToggleConnection` explicitly.
-Binding or streaming a control does not start BLE work.
+The [LCL demo](examples/lcl/lazblelcldemoform.pas) shows how to build device
+selection, connection actions, and status display using `TLazBleLclClient`.
 
 ### Translations
 
-The `languages` directory contains separate catalogues for
-`LazBleDeviceSelectForm` and `LazBleDeviceControl`. Load them after choosing the
-application language and before creating controls:
+The `languages` directory contains catalogues for the device picker. Load them
+after choosing the application language and before creating controls:
 
 ```pascal
 TranslateLazBleLclResourceStrings('languages', Language, FallbackLanguage);

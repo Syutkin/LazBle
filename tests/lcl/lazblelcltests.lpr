@@ -17,7 +17,6 @@ uses
   LazBleComponentClientTests,
   LazBleLclClientReconnectTests,
   LazBleDeviceSelectFormTests,
-  LazBleDeviceControlTests,
   LazBleLclTranslationsTests;
 
 var
