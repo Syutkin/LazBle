@@ -117,6 +117,13 @@ var E: TLazBleBackendEvent;
 begin
   E := Default(TLazBleBackendEvent); E.Kind := Kind; E.OperationId := Id;
   E.DeviceId := 'peer'; E.SubscriptionId := Token; E.Value := TBytes.Create(42);
+  if Kind = lbekServicesDiscovered then
+  begin
+    SetLength(E.Services, 1); E.Services[0].Uuid := 'service';
+    SetLength(E.Services[0].Characteristics, 1);
+    E.Services[0].Characteristics[0].Uuid := 'notify';
+    E.Services[0].Characteristics[0].CanNotify := True;
+  end;
   AssertTrue(FFake.EmitProgress(E));
 end;
 

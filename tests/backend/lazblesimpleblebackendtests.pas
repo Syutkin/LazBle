@@ -6,7 +6,8 @@ interface
 
 uses Classes, SysUtils, fpcunit, testregistry, SimpleDelphiBLE,
   LazBleTypes, LazBleBackend, LazBleSimpleBleBackend, LazBleFacade,
-  LazBleClient, LazBleOperation, LazBleBattery, LazBleGattProfile, LazBleSync;
+  LazBleClient, LazBleOperation, LazBleBattery, LazBleGattProfile, LazBleSync,
+  LazBleGattOperation, LazBleGattSubscription;
 
 type
   TNativeEventSink = class(TInterfacedObject, ILazBleBackendEventSink)
@@ -71,6 +72,11 @@ type
     procedure NativeFacadeReconnectUsesMainThreadTimer;
     procedure NativeSyncPumpsMainThreadEvents;
     procedure IdleFacadeShutdownIsStableAfterRelease;
+    procedure DescriptorRoundTripAndQueuedBuffer;
+    procedure DescriptorNativeErrorsArePreserved;
+    procedure IndicationAndUnsubscribe;
+    procedure IndicationDoesNotFallBackToNotify;
+    procedure ClientDescriptorAndIndicationApi;
   end;
 
 implementation
@@ -82,6 +88,7 @@ const
   TestService = '0000fff0-0000-1000-8000-00805f9b34fb';
   TestValue = '0000fff1-0000-1000-8000-00805f9b34fb';
   ErrorValue = '0000fff2-0000-1000-8000-00805f9b34fb';
+  Description = '00002901-0000-1000-8000-00805f9b34fb';
 
 type
   TClientGenerationAccess = class(TBleClient)
@@ -713,6 +720,91 @@ begin
   Operation.Cancel;
   AssertEquals('Released facade cannot change a completed shutdown',
     Ord(lbopSucceeded), Ord(Operation.State));
+end;
+
+procedure TLazBleSimpleBleBackendTest.DescriptorRoundTripAndQueuedBuffer;
+var C: TLazBleBackendCommand; WriteId, ReadId: TBleOperationId; E: TLazBleBackendEvent;
+begin
+  Connect;
+  C := Request(lbckWriteDescriptor); C.DescriptorUuid := UpperCase(Description);
+  C.Value := TBytes.Create(0, 127, 255);
+  WriteId := FBackend.Submit(C); C.Value[0] := 99;
+  C.Kind := lbckReadDescriptor; ReadId := FBackend.Submit(C);
+  AssertFalse(FEvents.Terminal(WriteId));
+  AssertEquals(Ord(lbekOperationSucceeded), Ord(Wait(WriteId).Kind));
+  AssertEquals(Ord(lbekOperationSucceeded), Ord(Wait(ReadId).Kind));
+  E := FEvents.Last(lbekReadResult, ReadId);
+  AssertEquals(UpperCase(Description), E.DescriptorUuid);
+  AssertEquals(3, Length(E.Value)); AssertEquals(0, E.Value[0]); AssertEquals(255, E.Value[2]);
+end;
+
+procedure TLazBleSimpleBleBackendTest.DescriptorNativeErrorsArePreserved;
+var C: TLazBleBackendCommand; E: TLazBleBackendEvent;
+begin
+  Connect; C := Request(lbckReadDescriptor);
+  C.DescriptorUuid := '00002999-0000-1000-8000-00805f9b34fb';
+  E := Wait(FBackend.Submit(C));
+  AssertEquals(Ord(lbekOperationFailed), Ord(E.Kind));
+  AssertEquals(Ord(ecGattDescriptorNotFound), E.ErrorCode);
+  C.DescriptorUuid := StringOfChar('x', 37);
+  E := Wait(FBackend.Submit(C));
+  AssertEquals(Ord(lbekOperationFailed), Ord(E.Kind));
+  AssertEquals(Ord(ecInvalidArgument), E.ErrorCode);
+end;
+
+procedure TLazBleSimpleBleBackendTest.IndicationAndUnsubscribe;
+var C: TLazBleBackendCommand; Id: TBleOperationId; Token: TBleSubscriptionId; N: Integer;
+begin
+  Connect; C := Request(lbckSubscribe); C.SubscriptionMode := lbsmIndicate;
+  Id := FBackend.Submit(C);
+  AssertEquals(Ord(lbekOperationSucceeded), Ord(Wait(Id).Kind));
+  Token := FEvents.Last(lbekSubscribed, Id).SubscriptionId;
+  WaitForEvent(lbekNotification);
+  AssertEquals(Token, FEvents.Last(lbekNotification).SubscriptionId);
+  C.SubscriptionMode := lbsmNotify;
+  AssertEquals(LazBleErrorInvalidState, Wait(FBackend.Submit(C)).ErrorCode);
+  C.Kind := lbckUnsubscribe; C.SubscriptionId := Token;
+  AssertEquals(Ord(lbekOperationSucceeded), Ord(Wait(FBackend.Submit(C)).Kind));
+  N := FEvents.Count(lbekNotification); Pump(1100);
+  AssertEquals(N, FEvents.Count(lbekNotification));
+end;
+
+procedure TLazBleSimpleBleBackendTest.IndicationDoesNotFallBackToNotify;
+var C: TLazBleBackendCommand; E: TLazBleBackendEvent;
+begin
+  Connect; C := Request(lbckSubscribe);
+  C.ServiceUuid := BatteryService; C.CharacteristicUuid := BatteryValue;
+  C.SubscriptionMode := lbsmIndicate;
+  E := Wait(FBackend.Submit(C));
+  AssertEquals(Ord(lbekOperationFailed), Ord(E.Kind));
+  AssertEquals(Ord(ecOperationNotSupported), E.ErrorCode);
+end;
+
+procedure TLazBleSimpleBleBackendTest.ClientDescriptorAndIndicationApi;
+var Ble: TLazBle; Client: TBleClient; Op: IBleOperation;
+  Gatt: IBleGattOperation; Sub: IBleSubscription; Deadline: QWord;
+
+  procedure Await(const Operation: IBleOperation);
+  begin
+    Deadline := GetTickCount64 + 8000;
+    while (Operation.State = lbopPending) and (GetTickCount64 < Deadline) do CheckSynchronize(5);
+    AssertEquals(Operation.ErrorMessage, Ord(lbopSucceeded), Ord(Operation.State));
+  end;
+
+begin
+  Shutdown; Ble := TLazBle.Create;
+  try
+    Client := Ble.CreateClient(Device); Op := Client.ConnectAsync; Await(Op);
+    Gatt := Client.WriteDescriptorAsync(TestService, TestValue, Description, [1, 2, 3]); Await(Gatt);
+    Gatt := Client.ReadDescriptorAsync(TestService, TestValue, Description); Await(Gatt);
+    AssertEquals(3, Length(Gatt.Value)); AssertEquals(2, Gatt.Value[1]);
+    Sub := Client.SubscribeAsync(TestService, TestValue, lbsmIndicate);
+    Deadline := GetTickCount64 + 8000;
+    while (Sub.State = lbsubPending) and (GetTickCount64 < Deadline) do CheckSynchronize(5);
+    AssertEquals(Sub.ErrorMessage, Ord(lbsubActive), Ord(Sub.State));
+    Gatt := Sub.Unsubscribe; Await(Gatt);
+    Op := Ble.ShutdownAsync; Await(Op);
+  finally Ble.Free; end;
 end;
 
 initialization

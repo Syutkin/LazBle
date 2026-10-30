@@ -66,6 +66,7 @@ type
     procedure FinishUnsubscribe(const AState: TLazBleOperationState;
       const AErrorCode: Integer = 0; const AErrorMessage: string = '');
   protected
+    constructor CreateFailed(const AErrorCode: Integer; const AErrorMessage: string);
     constructor Create(const AOperationId: TBleOperationId;
       const AGeneration: QWord; const AUnsubscribe: TLazBleUnsubscribe);
     procedure HandleBackendEvent(const AEvent: TLazBleBackendEvent);
@@ -122,6 +123,15 @@ begin
     FErrorMessage := 'BLE subscription could not be started';
   end
   else FState := lbsubPending;
+end;
+
+constructor TBleSubscription.CreateFailed(const AErrorCode: Integer;
+  const AErrorMessage: string);
+begin
+  inherited Create;
+  FState := lbsubFailed;
+  FErrorCode := AErrorCode;
+  FErrorMessage := AErrorMessage;
 end;
 
 destructor TBleSubscription.Destroy;

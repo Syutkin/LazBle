@@ -65,6 +65,9 @@ type
     function Submit(const AKind: TLazBleBackendCommandKind): TBleOperationId;
     function SubmitGattCommand(const ACommand: TLazBleBackendCommand):
       IBleGattOperation;
+    function DescriptorCommand(const AKind: TLazBleBackendCommandKind;
+      const AServiceUuid, ACharacteristicUuid, ADescriptorUuid: string;
+      const AValue: TBytes): IBleGattOperation;
     procedure OperationCancelled(Sender: TObject);
     function UnsubscribeSubscription(
       const ASubscription: TBleSubscription): IBleGattOperation;
@@ -94,7 +97,12 @@ type
     function WriteAsync(const AServiceUuid, ACharacteristicUuid: string;
       const AValue: TBytes; const AWriteMode: TLazBleWriteMode):
       IBleGattOperation;
-    function SubscribeAsync(const AServiceUuid, ACharacteristicUuid: string):
+    function ReadDescriptorAsync(const AServiceUuid, ACharacteristicUuid,
+      ADescriptorUuid: string): IBleGattOperation;
+    function WriteDescriptorAsync(const AServiceUuid, ACharacteristicUuid,
+      ADescriptorUuid: string; const AValue: TBytes): IBleGattOperation;
+    function SubscribeAsync(const AServiceUuid, ACharacteristicUuid: string;
+      const AMode: TLazBleSubscriptionMode = lbsmNotify):
       IBleSubscription;
     { Query the currently discovered service tree. }
     function HasService(const AServiceUuid: string): Boolean;
@@ -118,6 +126,8 @@ implementation
 type
   TBleGattOperationAccess = class(TBleGattOperation)
   public
+    constructor CreateFailed(const AKind: TLazBleBackendCommandKind;
+      const ACode: Integer; const AText: string);
     constructor CreateInternal(const AOperationId: TBleOperationId;
       const AKind: TLazBleBackendCommandKind;
       const AOnCancel: TLazBleOperationCancelEvent; const AGeneration: QWord);
@@ -133,6 +143,7 @@ type
 
   TBleSubscriptionAccess = class(TBleSubscription)
   public
+    constructor CreateFailed(const ACode: Integer; const AText: string);
     constructor CreateInternal(const AOperationId: TBleOperationId;
       const AGeneration: QWord; const AUnsubscribe: TLazBleUnsubscribe);
     procedure HandleEvent(const AEvent: TLazBleBackendEvent);
@@ -161,6 +172,18 @@ type
   TBleGattOperationObjects = array of TBleGattOperation;
   TBleSubscriptionInterfaces = array of IBleSubscription;
   TBleSubscriptionObjects = array of TBleSubscription;
+
+constructor TBleGattOperationAccess.CreateFailed(const AKind: TLazBleBackendCommandKind;
+  const ACode: Integer; const AText: string);
+begin
+  inherited CreatePending(AKind);
+  Complete(lbopFailed, ACode, AText);
+end;
+
+constructor TBleSubscriptionAccess.CreateFailed(const ACode: Integer; const AText: string);
+begin
+  inherited CreateFailed(ACode, AText);
+end;
 
 constructor TBleGattOperationAccess.CreateInternal(
   const AOperationId: TBleOperationId;
@@ -518,21 +541,83 @@ begin
   Result := SubmitGattCommand(Command);
 end;
 
+function TBleGattSession.DescriptorCommand(const AKind: TLazBleBackendCommandKind;
+  const AServiceUuid, ACharacteristicUuid, ADescriptorUuid: string;
+  const AValue: TBytes): IBleGattOperation;
+var
+  Command: TLazBleBackendCommand;
+  Characteristic: TLazBleGattCharacteristic;
+  Descriptor: TLazBleGattDescriptor;
+  Found: Boolean;
+begin
+  LazBleRequireMainThread;
+  if (State <> lbssConnected) or FShuttingDown then
+    Exit(TBleGattOperationAccess.CreateFailed(AKind, LazBleErrorInvalidState,
+      'Descriptor operation requires a connected session'));
+  Found := False;
+  if TryGetCharacteristic(AServiceUuid, ACharacteristicUuid, Characteristic) then
+    for Descriptor in Characteristic.Descriptors do
+      if SameText(UTF8Encode(Descriptor), ADescriptorUuid) then
+      begin
+        Found := True;
+        Break;
+      end;
+  if not Found then
+    Exit(TBleGattOperationAccess.CreateFailed(AKind, LazBleErrorGattNotFound,
+      'GATT descriptor not found'));
+  Command := Default(TLazBleBackendCommand);
+  Command.Kind := AKind;
+  Command.Generation := Generation;
+  Command.DeviceId := FDeviceId;
+  Command.ServiceUuid := AServiceUuid;
+  Command.CharacteristicUuid := ACharacteristicUuid;
+  Command.DescriptorUuid := ADescriptorUuid;
+  Command.Value := AValue;
+  Result := SubmitGattCommand(Command);
+end;
+
+function TBleGattSession.ReadDescriptorAsync(const AServiceUuid, ACharacteristicUuid,
+  ADescriptorUuid: string): IBleGattOperation;
+begin
+  Result := DescriptorCommand(lbckReadDescriptor, AServiceUuid,
+    ACharacteristicUuid, ADescriptorUuid, nil);
+end;
+
+function TBleGattSession.WriteDescriptorAsync(const AServiceUuid, ACharacteristicUuid,
+  ADescriptorUuid: string; const AValue: TBytes): IBleGattOperation;
+begin
+  Result := DescriptorCommand(lbckWriteDescriptor, AServiceUuid,
+    ACharacteristicUuid, ADescriptorUuid, AValue);
+end;
+
 function TBleGattSession.SubscribeAsync(
-  const AServiceUuid, ACharacteristicUuid: string): IBleSubscription;
+  const AServiceUuid, ACharacteristicUuid: string;
+  const AMode: TLazBleSubscriptionMode): IBleSubscription;
 var
   Command: TLazBleBackendCommand;
   Entry: TBleSubscriptionEntry;
   OperationId: TBleOperationId;
   Subscription: TBleSubscriptionAccess;
+  Characteristic: TLazBleGattCharacteristic;
 begin
   LazBleRequireMainThread;
+  if (State <> lbssConnected) or FShuttingDown then
+    Exit(TBleSubscriptionAccess.CreateFailed(LazBleErrorInvalidState,
+      'Subscription requires a connected session'));
+  if not TryGetCharacteristic(AServiceUuid, ACharacteristicUuid, Characteristic) then
+    Exit(TBleSubscriptionAccess.CreateFailed(LazBleErrorGattNotFound,
+      'GATT characteristic not found'));
+  if ((AMode = lbsmNotify) and not Characteristic.CanNotify) or
+    ((AMode = lbsmIndicate) and not Characteristic.CanIndicate) then
+    Exit(TBleSubscriptionAccess.CreateFailed(LazBleErrorGattPropertyNotSupported,
+      'GATT characteristic does not support the subscription mode'));
   Command := Default(TLazBleBackendCommand);
   Command.Kind := lbckSubscribe;
   Command.Generation := Generation;
   Command.DeviceId := FDeviceId;
   Command.ServiceUuid := AServiceUuid;
   Command.CharacteristicUuid := ACharacteristicUuid;
+  Command.SubscriptionMode := AMode;
   OperationId := InvalidBleOperationId;
   if (State = lbssConnected) and Assigned(FSubmitCommand) then
     OperationId := FSubmitCommand(Command);

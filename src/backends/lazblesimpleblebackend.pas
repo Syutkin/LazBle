@@ -338,6 +338,7 @@ begin
   Result.DeviceId := Task.Request.DeviceId;
   Result.ServiceUuid := Task.Request.ServiceUuid;
   Result.CharacteristicUuid := Task.Request.CharacteristicUuid;
+  Result.DescriptorUuid := Task.Request.DescriptorUuid;
   Result.SubscriptionId := Task.Request.SubscriptionId;
   Result.AdapterId := Task.AdapterId;
 end;
@@ -668,7 +669,7 @@ end;
 
 procedure TLazBleSimpleBleBackend.InvokeCurrent;
 var
-  Service, Characteristic: UnicodeString;
+  Service, Characteristic, Descriptor: UnicodeString;
 begin
   if FStopping or FCurrent.Cancelled then
   begin
@@ -678,17 +679,25 @@ begin
   FCurrent.ResultEvent := EventFor(FCurrent, lbekOperationSucceeded);
   Service := UTF8Decode(LowerCase(FCurrent.Request.ServiceUuid));
   Characteristic := UTF8Decode(LowerCase(FCurrent.Request.CharacteristicUuid));
+  Descriptor := UTF8Decode(LowerCase(FCurrent.Request.DescriptorUuid));
   try
     case FCurrent.Request.Kind of
       lbckConnect: FCurrent.NativePeer.ConnectAsync(@CommandDone);
       lbckDisconnect: FCurrent.NativePeer.DisconnectAsync(@CommandDone);
       lbckDiscoverServices: StartStep(stServices);
       lbckRead: FCurrent.NativePeer.ReadAsync(Service, Characteristic, @ReadDone);
+      lbckReadDescriptor: FCurrent.NativePeer.ReadDescriptorAsync(Service,
+        Characteristic, Descriptor, @ReadDone);
+      lbckWriteDescriptor: FCurrent.NativePeer.WriteDescriptorAsync(Service,
+        Characteristic, Descriptor, FCurrent.Request.Value, @CommandDone);
       lbckWrite:
         if FCurrent.Request.WriteMode = lbwmCommand then
           FCurrent.NativePeer.WriteCommandAsync(Service, Characteristic, FCurrent.Request.Value, @CommandDone)
         else FCurrent.NativePeer.WriteRequestAsync(Service, Characteristic, FCurrent.Request.Value, @CommandDone);
-      lbckSubscribe: FCurrent.NativePeer.NotifyAsync(Service, Characteristic, @ValueReceived, @CommandDone);
+      lbckSubscribe:
+        if FCurrent.Request.SubscriptionMode = lbsmIndicate then
+          FCurrent.NativePeer.IndicateAsync(Service, Characteristic, @ValueReceived, @CommandDone)
+        else FCurrent.NativePeer.NotifyAsync(Service, Characteristic, @ValueReceived, @CommandDone);
       lbckUnsubscribe: FCurrent.NativePeer.UnsubscribeAsync(
         UTF8Decode(FCurrent.Subscription.ServiceUuid),
         UTF8Decode(FCurrent.Subscription.CharacteristicUuid), @CommandDone);
@@ -718,8 +727,8 @@ begin
     Exit;
   end;
   case FCurrent.Request.Kind of
-    lbckRead: FCurrent.ResultEvent.Kind := lbekReadResult;
-    lbckWrite: FCurrent.ResultEvent.Kind := lbekWriteCompleted;
+    lbckRead, lbckReadDescriptor: FCurrent.ResultEvent.Kind := lbekReadResult;
+    lbckWrite, lbckWriteDescriptor: FCurrent.ResultEvent.Kind := lbekWriteCompleted;
     lbckSubscribe:
       begin
         FCurrent.Subscription.Registered := True;
@@ -729,7 +738,8 @@ begin
       end;
     lbckUnsubscribe: FCurrent.ResultEvent.Kind := lbekUnsubscribed;
   end;
-  FCurrent.HasResult := FCurrent.Request.Kind in [lbckRead, lbckWrite, lbckSubscribe, lbckUnsubscribe];
+  FCurrent.HasResult := FCurrent.Request.Kind in [lbckRead, lbckWrite,
+    lbckReadDescriptor, lbckWriteDescriptor, lbckSubscribe, lbckUnsubscribe];
   FinishCurrent(lbekOperationSucceeded);
 end;
 

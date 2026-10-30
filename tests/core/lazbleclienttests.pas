@@ -1086,13 +1086,12 @@ var
 begin
   Client := FBle.CreateClient('device-a');
   Client.ConnectAsync;
-  CompleteTransportClient(Client);
+  CompleteNusTransportClient(Client);
 
   AssertNotNull(Client.ReadAsync('service-read', 'characteristic-read'));
   AssertNotNull(Client.WriteAsync('service-write', 'characteristic-write',
     [$01, $02], lbwmRequest));
-  AssertNotNull(Client.SubscribeAsync('service-notify',
-    'characteristic-notify'));
+  AssertNotNull(Client.SubscribeAsync(NusServiceUuid, NusTxCharacteristicUuid));
 
   AssertEquals(Ord(lbckRead), Ord(FBackendObject.Commands[2].Kind));
   AssertEquals(Ord(lbckWrite), Ord(FBackendObject.Commands[3].Kind));

@@ -99,6 +99,8 @@ type
     lbwmCommand
   );
 
+  TLazBleSubscriptionMode = (lbsmNotify, lbsmIndicate);
+
   { Aliases of upstream records. Snapshots and their nested arrays are read-only;
     consumers needing mutable data must explicitly copy the arrays they change. }
   TLazBleGattDescriptor = UnicodeString;
@@ -118,7 +120,9 @@ type
     lbckWrite,
     lbckSubscribe,
     lbckUnsubscribe,
-    lbckCheckAvailability
+    lbckCheckAvailability,
+    lbckReadDescriptor,
+    lbckWriteDescriptor
   );
 
   TLazBleBackendCommand = record
@@ -128,8 +132,10 @@ type
     DeviceId: string;
     ServiceUuid: string;
     CharacteristicUuid: string;
+    DescriptorUuid: string;
     TimeoutMs: Cardinal;
     WriteMode: TLazBleWriteMode;
+    SubscriptionMode: TLazBleSubscriptionMode;
     Value: TBytes;
     SubscriptionId: TBleSubscriptionId;
   end;
@@ -165,6 +171,7 @@ type
     DeviceName: string;
     ServiceUuid: string;
     CharacteristicUuid: string;
+    DescriptorUuid: string;
     Rssi: SmallInt;
     Available: Boolean;
     Value: TBytes;

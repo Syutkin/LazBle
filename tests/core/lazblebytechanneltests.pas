@@ -77,6 +77,13 @@ begin
   BackendEvent.SubscriptionId := ASubscriptionId;
   BackendEvent.DeviceId := FSession.DeviceId;
   BackendEvent.Generation := FSession.Generation;
+  if AKind = lbekServicesDiscovered then
+  begin
+    SetLength(BackendEvent.Services, 1); BackendEvent.Services[0].Uuid := 'service-x';
+    SetLength(BackendEvent.Services[0].Characteristics, 1);
+    BackendEvent.Services[0].Characteristics[0].Uuid := 'notify-x';
+    BackendEvent.Services[0].Characteristics[0].CanNotify := True;
+  end;
   SetLength(BackendEvent.Value, Length(AValue));
   for Index := 0 to High(AValue) do
     BackendEvent.Value[Index] := AValue[Index];

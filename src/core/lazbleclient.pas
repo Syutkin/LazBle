@@ -109,8 +109,12 @@ type
     function WriteAsync(const AServiceUuid, ACharacteristicUuid: string;
       const AValue: TBytes; const AWriteMode: TLazBleWriteMode):
       IBleGattOperation;
+    function ReadDescriptorAsync(const AServiceUuid, ACharacteristicUuid,
+      ADescriptorUuid: string): IBleGattOperation;
+    function WriteDescriptorAsync(const AServiceUuid, ACharacteristicUuid,
+      ADescriptorUuid: string; const AValue: TBytes): IBleGattOperation;
     function SubscribeAsync(const AServiceUuid,
-      ACharacteristicUuid: string): IBleSubscription;
+      ACharacteristicUuid: string; const AMode: TLazBleSubscriptionMode = lbsmNotify): IBleSubscription;
     property DeviceId: string read GetDeviceId;
     { Read-only upstream service records for the current connection. }
     property Services: TLazBleGattServices read GetServices;
@@ -811,11 +815,25 @@ begin
     AWriteMode);
 end;
 
-function TBleClient.SubscribeAsync(const AServiceUuid,
-  ACharacteristicUuid: string): IBleSubscription;
+function TBleClient.ReadDescriptorAsync(const AServiceUuid, ACharacteristicUuid,
+  ADescriptorUuid: string): IBleGattOperation;
 begin
   LazBleRequireMainThread;
-  Result := FSession.SubscribeAsync(AServiceUuid, ACharacteristicUuid);
+  Result := FSession.ReadDescriptorAsync(AServiceUuid, ACharacteristicUuid, ADescriptorUuid);
+end;
+
+function TBleClient.WriteDescriptorAsync(const AServiceUuid, ACharacteristicUuid,
+  ADescriptorUuid: string; const AValue: TBytes): IBleGattOperation;
+begin
+  LazBleRequireMainThread;
+  Result := FSession.WriteDescriptorAsync(AServiceUuid, ACharacteristicUuid, ADescriptorUuid, AValue);
+end;
+
+function TBleClient.SubscribeAsync(const AServiceUuid,
+  ACharacteristicUuid: string; const AMode: TLazBleSubscriptionMode): IBleSubscription;
+begin
+  LazBleRequireMainThread;
+  Result := FSession.SubscribeAsync(AServiceUuid, ACharacteristicUuid, AMode);
 end;
 
 end.

@@ -54,6 +54,14 @@ type
     procedure DiscoveryPublishesUpstreamGattRecords;
     procedure CompletedOperationOutlivesSession;
     procedure InvalidatedSubscriptionOutlivesSession;
+    procedure DescriptorReadPublishesValueAndAddress;
+    procedure DescriptorWriteOwnsSubmittedBytes;
+    procedure DescriptorMissingTargetFailsLocally;
+    procedure DescriptorRequiresConnectedSession;
+    procedure DescriptorCancelPreservesActualFailure;
+    procedure DescriptorRejectsOldGenerationResult;
+    procedure IndicateUsesExistingSubscriptionLifecycle;
+    procedure UnsupportedSubscriptionModeFailsLocally;
   end;
 
 implementation
@@ -71,13 +79,15 @@ begin
   SetLength(BackendEvent.Services, 1);
   BackendEvent.Services[0].Uuid := 'service-1';
   BackendEvent.Services[0].Data := [$10, $20];
-  SetLength(BackendEvent.Services[0].Characteristics, 1);
+  SetLength(BackendEvent.Services[0].Characteristics, 2);
   BackendEvent.Services[0].Characteristics[0].Uuid := 'characteristic-1';
   BackendEvent.Services[0].Characteristics[0].CanRead := True;
-BackendEvent.Services[0].Characteristics[0].CanNotify := True;
+  BackendEvent.Services[0].Characteristics[0].CanNotify := True;
   SetLength(BackendEvent.Services[0].Characteristics[0].Descriptors, 1);
   BackendEvent.Services[0].Characteristics[0].Descriptors[0] :=
     'descriptor-1';
+  BackendEvent.Services[0].Characteristics[1].Uuid := 'indicate-1';
+  BackendEvent.Services[0].Characteristics[1].CanIndicate := True;
   AssertTrue(FBackendObject.EmitProgress(BackendEvent));
 end;
 
@@ -112,7 +122,7 @@ function TLazBleGattSessionTest.Subscribe: IBleSubscription;
 var
   OperationId: TBleOperationId;
 begin
-  Result := FSession.SubscribeAsync('service', 'notify');
+  Result := FSession.SubscribeAsync('service-1', 'characteristic-1');
   OperationId := FBackendObject.OperationIds[
     FBackendObject.CommandCount - 1];
   EmitEvent(lbekSubscribed, OperationId, 7, []);
@@ -146,7 +156,7 @@ begin
   AssertEquals(1, Length(Services));
   AssertEquals('service-1', UTF8Encode(Services[0].Uuid));
   AssertEquals(2, Length(Services[0].Data));
-  AssertEquals(1, Length(Services[0].Characteristics));
+  AssertEquals(2, Length(Services[0].Characteristics));
   AssertTrue(Services[0].Characteristics[0].CanRead);
   AssertTrue(Services[0].Characteristics[0].CanNotify);
   AssertEquals('descriptor-1',
@@ -300,7 +310,7 @@ procedure TLazBleGattSessionTest.SubscribeFailureMarksTokenFailed;
 var
   Subscription: IBleSubscription;
 begin
-  Subscription := FSession.SubscribeAsync('service', 'notify');
+  Subscription := FSession.SubscribeAsync('service-1', 'characteristic-1');
 
   AssertTrue(FBackendObject.CompleteOperation(
     FBackendObject.OperationIds[FBackendObject.CommandCount - 1],
@@ -333,6 +343,125 @@ begin
   finally
     Observer.Free;
   end;
+end;
+
+procedure TLazBleGattSessionTest.DescriptorReadPublishesValueAndAddress;
+var Op: IBleGattOperation; Id: TBleOperationId; C: TLazBleBackendCommand;
+begin
+  Op := FSession.ReadDescriptorAsync('SERVICE-1', 'CHARACTERISTIC-1', 'DESCRIPTOR-1');
+  C := FBackendObject.Commands[2]; Id := FBackendObject.OperationIds[2];
+  AssertEquals(Ord(lbckReadDescriptor), Ord(C.Kind));
+  AssertEquals('DESCRIPTOR-1', C.DescriptorUuid);
+  AssertEquals(FSession.Generation, C.Generation);
+  EmitEvent(lbekReadResult, Id, 0, [0, 255]);
+  AssertTrue(FBackendObject.CompleteOperation(Id, lbekOperationSucceeded));
+  AssertEquals(Ord(lbopSucceeded), Ord(Op.State));
+  AssertEquals(2, Length(Op.Value)); AssertEquals(255, Op.Value[1]);
+end;
+
+procedure TLazBleGattSessionTest.DescriptorWriteOwnsSubmittedBytes;
+var Op: IBleGattOperation; Value: TBytes;
+begin
+  Value := TBytes.Create(12, 34);
+  Op := FSession.WriteDescriptorAsync('service-1', 'characteristic-1', 'descriptor-1', Value);
+  Value[0] := 99;
+  AssertEquals(Ord(lbckWriteDescriptor), Ord(FBackendObject.Commands[2].Kind));
+  AssertEquals('descriptor-1', FBackendObject.Commands[2].DescriptorUuid);
+  AssertEquals(12, FBackendObject.Commands[2].Value[0]);
+  AssertTrue(FBackendObject.CompleteOperation(FBackendObject.OperationIds[2], lbekOperationSucceeded));
+  AssertEquals(Ord(lbopSucceeded), Ord(Op.State));
+end;
+
+procedure TLazBleGattSessionTest.DescriptorMissingTargetFailsLocally;
+var Op: IBleGattOperation;
+begin
+  Op := FSession.ReadDescriptorAsync('missing', 'characteristic-1', 'descriptor-1');
+  AssertEquals(Ord(lbopFailed), Ord(Op.State));
+  AssertEquals(LazBleErrorGattNotFound, Op.ErrorCode);
+  Op := FSession.ReadDescriptorAsync('service-1', 'missing', 'descriptor-1');
+  AssertEquals(LazBleErrorGattNotFound, Op.ErrorCode);
+  Op := FSession.WriteDescriptorAsync('service-1', 'characteristic-1', 'missing', [1]);
+  AssertEquals(LazBleErrorGattNotFound, Op.ErrorCode);
+  AssertEquals('Invalid targets never reach the backend', 2, FBackendObject.CommandCount);
+end;
+
+procedure TLazBleGattSessionTest.DescriptorRequiresConnectedSession;
+var Op: IBleGattOperation;
+begin
+  LazBleTestDisconnect(FSession);
+  Op := FSession.ReadDescriptorAsync('service-1', 'characteristic-1', 'descriptor-1');
+  AssertEquals(Ord(lbopFailed), Ord(Op.State));
+  AssertEquals(LazBleErrorInvalidState, Op.ErrorCode);
+  AssertEquals(3, FBackendObject.CommandCount);
+end;
+
+procedure TLazBleGattSessionTest.DescriptorCancelPreservesActualFailure;
+var Op: IBleGattOperation; Id: TBleOperationId;
+begin
+  Op := FSession.ReadDescriptorAsync('service-1', 'characteristic-1', 'descriptor-1');
+  Id := FBackendObject.OperationIds[2]; Op.Cancel;
+  AssertTrue(Op.CancelRequested);
+  AssertTrue(FBackendObject.CancellationWasRequested(Id));
+  AssertEquals(Ord(lbopPending), Ord(Op.State));
+  AssertTrue(FBackendObject.CompleteOperation(Id, lbekOperationFailed, 0, ''));
+  AssertEquals(Ord(lbopFailed), Ord(Op.State));
+  AssertEquals(0, Op.ErrorCode); AssertEquals('', Op.ErrorMessage);
+end;
+
+procedure TLazBleGattSessionTest.DescriptorRejectsOldGenerationResult;
+var Op: IBleGattOperation; E: TLazBleBackendEvent; Id: TBleOperationId;
+begin
+  Op := FSession.ReadDescriptorAsync('service-1', 'characteristic-1', 'descriptor-1');
+  Id := FBackendObject.OperationIds[2];
+  E := Default(TLazBleBackendEvent); E.Kind := lbekReadResult;
+  E.OperationId := Id; E.DeviceId := FSession.DeviceId;
+  E.Generation := FSession.Generation + 1; E.Value := TBytes.Create(99);
+  AssertTrue(FBackendObject.EmitProgress(E));
+  AssertEquals(0, Length(Op.Value));
+  EmitEvent(lbekReadResult, Id, 0, [42]);
+  AssertTrue(FBackendObject.CompleteOperation(Id, lbekOperationSucceeded));
+  AssertEquals(42, Op.Value[0]);
+end;
+
+procedure TLazBleGattSessionTest.IndicateUsesExistingSubscriptionLifecycle;
+var S: IBleSubscription; Observer: TDataObserver;
+  Id: TBleOperationId; Op: IBleGattOperation;
+begin
+  Observer := TDataObserver.Create;
+  try
+    S := FSession.SubscribeAsync('service-1', 'indicate-1', lbsmIndicate);
+    S.OnData := @Observer.DataReceived; Id := FBackendObject.OperationIds[2];
+    AssertEquals(Ord(lbsmIndicate), Ord(FBackendObject.Commands[2].SubscriptionMode));
+    EmitEvent(lbekNotification, 0, 17, [1]);
+    AssertEquals('No values before readiness', 0, Observer.CallCount);
+    EmitEvent(lbekSubscribed, Id, 17, []);
+    AssertTrue(FBackendObject.CompleteOperation(Id, lbekOperationSucceeded));
+    EmitEvent(lbekNotification, 0, 17, [2]);
+    AssertEquals(1, Observer.CallCount);
+    Op := S.Unsubscribe;
+    EmitEvent(lbekNotification, 0, 17, [3]);
+    AssertEquals(1, Observer.CallCount);
+    AssertTrue(FBackendObject.CompleteOperation(FBackendObject.OperationIds[3], lbekOperationSucceeded));
+    AssertEquals(Ord(lbopSucceeded), Ord(Op.State));
+    AssertEquals(Ord(lbsubInactive), Ord(S.State));
+  finally Observer.Free; end;
+end;
+
+procedure TLazBleGattSessionTest.UnsupportedSubscriptionModeFailsLocally;
+var S: IBleSubscription;
+begin
+  S := FSession.SubscribeAsync('service-1', 'characteristic-1', lbsmIndicate);
+  AssertEquals(Ord(lbsubFailed), Ord(S.State));
+  AssertEquals(LazBleErrorGattPropertyNotSupported, S.ErrorCode);
+  AssertEquals(2, FBackendObject.CommandCount);
+  S := FSession.SubscribeAsync('service-1', 'indicate-1');
+  AssertEquals(Ord(lbsubFailed), Ord(S.State));
+  AssertEquals(LazBleErrorGattPropertyNotSupported, S.ErrorCode);
+  AssertEquals(2, FBackendObject.CommandCount);
+  S := FSession.SubscribeAsync('service-1', 'missing');
+  AssertEquals(Ord(lbsubFailed), Ord(S.State));
+  AssertEquals(LazBleErrorGattNotFound, S.ErrorCode);
+  AssertEquals(2, FBackendObject.CommandCount);
 end;
 
 initialization
