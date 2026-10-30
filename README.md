@@ -1,13 +1,13 @@
 # LazBle
 
-LazBle **2.0.0** is an asynchronous BLE Central and GATT client library for
+LazBle is an asynchronous BLE Central and GATT client library for
 Free Pascal and Lazarus. It provides device discovery, connections, GATT
-operations, notifications, typed profiles, optional reconnection, and LCL controls.
+and descriptor operations, notifications and indications, typed profiles,
+optional reconnection, and LCL controls.
 
-The default backend uses the public API of
-[SimpleDelphiBLE 1.3.0](https://github.com/simpleble/simpledelphible/releases/tag/v1.3.0).
-Blocking BLE calls run on a command worker. API access and callbacks run on the
-main thread.
+The default backend uses the public Async API of
+[SimpleDelphiBLE](https://github.com/simpleble/simpledelphible).
+API access and callbacks run on the main thread.
 
 ## Packages and components
 
@@ -36,20 +36,19 @@ The main types are:
 ## Dependencies and native libraries
 
 Use Free Pascal 3.2.2 or later and, for LCL components, Lazarus. The default
-backend requires the official SimpleDelphiBLE 1.3.0 distribution in
-`simpledelphible/`. This entire directory is local and ignored by Git, including
-sources, native libraries, and licenses.
+backend requires the SimpleDelphiBLE 1.3.1 API. Use the official
+[1.3.1-dev.25 distribution](https://github.com/simpleble/simpledelphible/releases/tag/v1.3.1-dev.25)
+in `simpledelphible/`. This entire directory is local and ignored by Git,
+including the upstream package, sources, native library, and licenses.
 
-Download [simpledelphible-1.3.0.zip](https://github.com/simpleble/simpledelphible/releases/download/v1.3.0/simpledelphible-1.3.0.zip),
-extract it, and place its contents in LazBle's `simpledelphible` directory
-(renaming the extracted `simpledelphible-1.3.0` folder to `simpledelphible`):
-
-Archive SHA-256: `6fce6451fec87c67914a8841ffc9945e5af6e852c734ab238d57f4b623bf46c2`.
+Extract the distribution and place its contents in LazBle's `simpledelphible`
+directory:
 
 ```text
 lazble/
   lazble.lpk
   simpledelphible/           # official release contents; entirely ignored by Git
+    SimpleDelphiBLEPackage.lpk
     LICENSE.md
     source/
     lib/
@@ -60,33 +59,42 @@ lazble/
       ...
 ```
 
-| Supported target | Link-time directory | Runtime files |
+| Supported target | Distribution directory | Runtime file |
 | --- | --- | --- |
-| Linux x86_64 | `simpledelphible/lib/linux-x64` | `libsimplecble.so` and `libsimpleble.so` |
-| Windows x86_64 | `simpledelphible/lib/win64` | `simplecble.dll` and `simpleble.dll` |
-| macOS 15.0+ Intel x86_64 | `simpledelphible/lib/macos-x64` | `libsimplecble.dylib` and `libsimpleble.dylib` |
-| macOS 15.0+ Apple Silicon (aarch64) | `simpledelphible/lib/macos-arm64` | `libsimplecble.dylib` and `libsimpleble.dylib` |
+| Linux x86_64 | `simpledelphible/lib/linux-x64` | `libsimplecble.so` |
+| Windows x86_64 | `simpledelphible/lib/win64` | `simplecble.dll` |
+| macOS 15.0+ Intel x86_64 | `simpledelphible/lib/macos-x64` | `libsimplecble.dylib` |
+| macOS 15.0+ Apple Silicon (aarch64) | `simpledelphible/lib/macos-arm64` | `libsimplecble.dylib` |
 
-The official Linux binary uses the SONAME `$ORIGIN/libsimplecble.so` and RUNPATH
-`$ORIGIN`; deploy both libraries beside the executable. On Windows, place both
-DLLs beside the executable. On macOS, place both `.dylib` files beside the
-executable, or in `MyApp.app/Contents/MacOS` for an app bundle. The official
-libraries resolve their dependencies from that location without an added rpath.
+Deploy the matching runtime file beside the executable. For a macOS app bundle,
+use `MyApp.app/Contents/MacOS`. With no explicit path, SimpleDelphiBLE first
+looks in the executable's directory, then uses the system library search.
+On Linux, the runtime can instead be installed in a directory visible to the
+system dynamic loader, or supplied through `LD_LIBRARY_PATH`.
+
+To select a file or directory explicitly, set `TSimpleDelphiBLE.LibraryPath`
+from the `SimpleDelphiBLE` unit before the first native call:
+
+```pascal
+TSimpleDelphiBLE.LibraryPath := '/path/to/native';
+```
+
+The runtime loads on the first native call. Building, starting the application,
+creating the facade or LCL components, and reading package information or
+diagnostics do not require it. A missing runtime fails the BLE operation with
+`LazBleErrorBackendUnavailable`; an availability check also stores the reason in
+`DiagnosticInfo.AvailabilityErrorMessage`. Checking availability includes adapter
+selection and power status, not just library loading.
+
 The application needs [Bluetooth permission](https://docs.simpleble.org/fundamentals/permissions).
-Each test/example executable and a Lazarus IDE with the design package also need
-their native dependencies.
-
-Native libraries are required at link time and process startup, including for
-executables using a fake or custom backend. An availability check reports adapter
-and Bluetooth status; it cannot handle a library missing at process startup.
 
 ### Lazarus
 
-The `LazBle` package compiles the locally supplied official sources directly. Its unit,
-include, and target-specific library paths are already configured; native link
-paths are passed to dependent projects. Only the LazBle packages need registering:
+`LazBle` depends on the official `SimpleDelphiBLEPackage` runtime package.
+Register that package before the LazBle packages:
 
 ```sh
+lazbuild --ws=qt6 --add-package-link simpledelphible/SimpleDelphiBLEPackage.lpk
 lazbuild --ws=qt6 --add-package-link lazble.lpk
 lazbuild --ws=qt6 --add-package-link lazblelcl.lpk
 lazbuild --ws=qt6 lazble.lpk
@@ -94,23 +102,21 @@ lazbuild --ws=qt6 lazblelcl.lpk
 ```
 
 Add `LazBle` to your project's required packages, and `LazBleLCL` when using
-components or controls. Copy the matching runtime libraries to the executable's
-output directory; `lazbuild` does not copy them.
+components or controls. Deploy the matching runtime file to the executable's
+output directory; `lazbuild` does not copy it.
 
 To install the components on the Lazarus palette, open `lazblelcldesign.lpk`
 and choose **Use > Install**. Lazarus rebuilds its IDE executable with the design
-package. Deploy the native libraries beside that executable before restarting it.
+package. Opening the IDE and using the component palette do not require the
+native runtime; it is needed when the IDE process itself performs BLE work.
 
 ### Direct FPC use
 
 Add `src/core`, `src/backends`, and `src/profiles` to `-Fu`. Add the official
-`simpledelphible/source` directory to both `-Fu` and `-Fi`, and the matching
-`simpledelphible/lib` target directory to `-Fl`.
-
-On Linux, `-k-L/path/to/native` can set linker search precedence when other
-library versions are present. Keep compiled units for different targets in
-separate `-FU` directories. Unix console programs must include `cthreads` first
-in their uses clause.
+`simpledelphible/source` directory to both `-Fu` and `-Fi`. Native linker paths
+and rpath options are not required. Keep compiled units for different targets
+in separate `-FU` directories. Unix console programs must include `cthreads`
+first in their uses clause.
 
 ## Console usage
 
@@ -189,13 +195,38 @@ facade or loading an LCL component does not enumerate adapters or start a scan.
 `ScanAsync(AdapterId, DurationMs)` returns `IBleScanOperation`. `OnResult` reports
 new and updated discoveries; `Results` contains deduplicated device snapshots
 in discovery order. Installing a result handler does not replay earlier results.
-Reaching the scan duration normally completes the scan successfully.
+Reaching the scan duration normally completes the scan successfully. Duration 0
+keeps scanning until cancellation or shutdown. Use the scan operation's `Cancel`
+method to stop it and await `lbopCancelled` before starting another scan.
 
 `TLazBle` owns clients created by `CreateClient`. Device IDs must be unique
 within a facade. After successful `AddProfile`, the client owns that profile.
 Required profiles must be Ready before the client enters `lbcstReady`.
 Completed operations, scan snapshots, and inactive subscription tokens remain
 readable after their client/session is released.
+
+### GATT operations
+
+`TBleClient` and `TBleGattSession` expose the same UUID-based requests:
+
+| Request | Result |
+| --- | --- |
+| `ReadAsync(Service, Characteristic)` | `IBleGattOperation`, with bytes in `Value` |
+| `WriteAsync(Service, Characteristic, Value, WriteMode)` | `IBleGattOperation`; `lbwmRequest` or `lbwmCommand` |
+| `ReadDescriptorAsync(Service, Characteristic, Descriptor)` | `IBleGattOperation`, with bytes in `Value` |
+| `WriteDescriptorAsync(Service, Characteristic, Descriptor, Value)` | `IBleGattOperation` |
+| `SubscribeAsync(Service, Characteristic)` | `IBleSubscription` using Notify |
+| `SubscribeAsync(Service, Characteristic, lbsmIndicate)` | `IBleSubscription` using Indicate |
+
+Descriptor requests require a connected session and a descriptor present in the
+discovered service tree. Subscriptions require a connected session, a discovered
+characteristic, and `CanNotify` or `CanIndicate` for the selected mode. Missing
+targets fail with `LazBleErrorGattNotFound`; unsupported subscription modes fail
+with `LazBleErrorGattPropertyNotSupported`. UUID lookup is case-insensitive.
+
+Notify is the default `TLazBleSubscriptionMode` (`lbsmNotify`); Indicate uses
+`lbsmIndicate`. Both modes use the same `OnData`, readiness, and Unsubscribe
+contracts. NUS and Battery profiles use Notify.
 
 ### Reconnection
 
@@ -222,10 +253,11 @@ Create, use, and destroy LazBle objects on the main thread. This includes state
 reads, handler registration, operation submission, cancellation, and profile
 access. Custom backends deliver callbacks on the main thread as well.
 
-The default backend uses SimpleDelphiBLE `edMainThread` delivery and one worker
-for blocking commands. Console applications service `CheckSynchronize`; LCL
-services it through the GUI event loop. Reconnect timers deliver their client
-actions on the main thread.
+The default backend uses SimpleDelphiBLE Async methods and `edMainThread`
+delivery. Commands run sequentially; only metadata and scan calls without an
+upstream Async method use a LazBle background executor. Console applications
+service `CheckSynchronize`; LCL services it through the GUI event loop. Scan
+and reconnect timers deliver their actions on the main thread.
 
 Callbacks may start the next asynchronous operation. Do not run nested BLE waits
 or free the owner inside its callback. Defer destruction with
@@ -234,15 +266,17 @@ immediately when called from the main thread.
 
 Complete `ShutdownAsync` before freeing an active facade or LCL owner. Shutdown
 stops new work and application callbacks, drains accepted commands, removes
-handlers/subscriptions, disconnects, and stops the worker. Inspect its terminal
-result for cleanup failures. A native call can delay shutdown until it returns;
-there is no guaranteed cleanup deadline. Destruction before completed shutdown
-can block and abandons pending logical results.
+handlers/subscriptions, and disconnects. It completes after pending command and
+cleanup callbacks return. Inspect its terminal result for cleanup failures.
+A native call can delay shutdown until it returns; there is no guaranteed
+cleanup deadline. Destruction before completed shutdown can block and abandons
+pending logical results.
 
 Only one default backend may actively own the process-wide upstream objects at
 a time. After orderly cleanup and release, another backend can use them. Do not
 replace the same upstream handlers or change `EventDelivery` while LazBle owns
-them. Adapters and peripherals are owned by SimpleDelphiBLE.
+them. Adapters, peripherals, and the loaded runtime are owned by SimpleDelphiBLE;
+LazBle shutdown does not unload the native library.
 
 ### Cancellation and subscriptions
 
@@ -252,13 +286,13 @@ failure and retains its effects. Cancelling profile attachment does not undo
 the connection. If discovery is cancelled after physical connection, the client
 enters Error and explicit Disconnect remains available.
 
-Notifications are delivered only after successful subscription readiness; early
-values are dropped. A characteristic can have one active subscription per
-default backend. Upstream queued events have no original session token, so
+Notifications and indications are delivered only after successful subscription
+readiness; early values are dropped. A characteristic can have one active
+subscription per default backend. Upstream queued events have no original session token, so
 absolute attribution of notifications across reconnects is not guaranteed.
 
-Unsubscribe immediately closes local delivery. With a pending Notify, cleanup
-waits for its outcome and unsubscribes if registration succeeds. A failed
+Unsubscribe immediately closes local delivery. With a pending Notify or Indicate,
+cleanup waits for its outcome and unsubscribes if registration succeeds. A failed
 Unsubscribe preserves the error, leaves the token inactive, and disconnects the
 affected session; configured reconnection may then run. Unsubscribe and explicit
 Disconnect cleanup continue after a cancellation request.
@@ -273,7 +307,7 @@ GATT types in `LazBleTypes` alias upstream `TBleService` and `TBleCharacteristic
 Use `CanRead`, `CanWriteRequest`, `CanWriteCommand`, `CanNotify`, and `CanIndicate`;
 descriptors are UnicodeString UUIDs.
 
-Services, nested arrays, read values, and notification payloads are managed
+Services, nested arrays, read values, and subscription payloads are managed
 snapshots treated as read-only. Explicitly copy arrays you need to change.
 The backend copies a write buffer when submitting its command.
 
@@ -349,8 +383,8 @@ Deploy the `.po` files with the application. Building `lazblelcl.lpk` updates th
 
 ## Custom profiles and backends
 
-Derive a profile from `TBleGattProfile`. Use its protected Session for Read,
-Write, and Subscribe operations; start work in `DoAttach`, report readiness with
+Derive a profile from `TBleGattProfile`. Use its protected Session for GATT
+operations; start work in `DoAttach`, report readiness with
 `MarkReady` or failure with `MarkError`, and release callbacks/subscriptions in
 `DoDetach`. Register profiles through `TBleClient.AddProfile` before connecting.
 
@@ -366,6 +400,12 @@ events. Each accepted command produces exactly one terminal event. BeginShutdown
 drains pending work, reports cleanup failures with ShutdownFailed, and ends
 backend event delivery. Custom backends also copy submitted write buffers and
 honour the main-thread contract.
+
+Descriptor commands use `lbckReadDescriptor` or `lbckWriteDescriptor` and the
+`DescriptorUuid` field. Reuse `lbekReadResult` or `lbekWriteCompleted` before the
+terminal event. For `lbckSubscribe`, honour `SubscriptionMode` (`lbsmNotify` or
+`lbsmIndicate`) and use the same subscription and notification events for either
+mode.
 
 Application-facing units are `LazBleTypes`, `LazBleBackend`, `LazBleOperation`,
 `LazBleGattOperation`, `LazBleGattSubscription`, `LazBleGattSession`,
@@ -390,31 +430,38 @@ lazbuild --ws=qt6 examples/lcl/lazblelcldemo.lpi
 ```
 
 Console and LCL example executables are written to `examples/bin`; deploy the
-native libraries there. Interactive console input continues servicing callbacks
-while waiting for a line, including partial input and EOF.
+native runtime there or use the loader search described above. Interactive
+console input continues servicing callbacks while waiting for a line, including
+partial input and EOF.
 
 The core/profile/backend suite is in `tests/lazbletests.lpr`. Its native backend
-tests require SimpleDelphiBLE 1.3.0 with the upstream PLAIN implementation; keep
-that runtime separate from the production libraries used by applications.
-Build PLAIN from the matching SimpleBLE 1.3.0 source:
+tests use the real SimpleDelphiBLE bindings with the upstream PLAIN implementation.
+Keep that runtime separate from production libraries. Build PLAIN from the
+SimpleBLE source revision identified in the binding release's description.
+For example, on Linux:
 
 ```sh
 cmake -S /path/to/simpleble/simplecble -B /path/to/plain-build \
-  -DSIMPLEBLE_PLAIN=ON -DBUILD_SHARED_LIBS=ON -DCMAKE_BUILD_TYPE=Release
-cmake --build /path/to/plain-build
+  -DSIMPLEBLE_PLAIN=ON -DBUILD_SHARED_LIBS=ON -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_PLATFORM_NO_VERSIONED_SONAME=ON -DCMAKE_INSTALL_LIBDIR=lib
+cmake --build /path/to/plain-build --config Release --parallel 4
+cmake --install /path/to/plain-build --config Release --prefix /path/to/plain-runtime
 ```
 
-Compile the suite from `tests`, substituting the PLAIN library path:
+Compile the suite from `tests` and place the PLAIN runtime beside its executable:
 
 ```sh
 mkdir -p bin/plain lib/plain
 fpc -Fu../src/core -Fu../src/backends -Fu../src/profiles \
   -Fubackend -Fubattery -Fucore -Funus -Fusupport \
   -Fu../simpledelphible/source -Fi../simpledelphible/source \
-  -Fl/path/to/plain-build/lib -k-L/path/to/plain-build/lib \
   -FUlib/plain -FEbin/plain lazbletests.lpr
-LD_LIBRARY_PATH=/path/to/plain-build/lib bin/plain/lazbletests --all --format=plain
+cp /path/to/plain-runtime/lib/libsimplecble.so bin/plain/
+bin/plain/lazbletests --all --format=plain
 ```
+
+On Windows, use `plain-runtime/bin/simplecble.dll` and run `lazbletests.exe`.
+On macOS, use `plain-runtime/lib/libsimplecble.dylib`.
 
 Build the LCL suite with its package dependencies registered:
 
@@ -422,8 +469,8 @@ Build the LCL suite with its package dependencies registered:
 lazbuild --ws=qt6 tests/lcl/lazblelcltests.lpi
 ```
 
-Deploy the production native libraries to `tests/bin`, then run
-`tests/bin/lazblelcltests --all --format=plain`.
+Run `tests/bin/lazblelcltests --all --format=plain` (`.exe` on Windows).
+The LCL suite uses a fake backend and does not require native BLE libraries.
 
 ## License
 

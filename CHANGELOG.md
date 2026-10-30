@@ -1,5 +1,26 @@
 # Changelog
 
+## [Unreleased]
+
+Official SimpleDelphiBLE package integration, dynamic runtime loading, and GATT
+descriptor and indication support.
+
+### Added
+
+- Descriptor reads and writes through `ReadDescriptorAsync` and `WriteDescriptorAsync`.
+- Indications through `SubscribeAsync(..., lbsmIndicate)` using the existing subscription API.
+
+### Changed
+
+- Requires the SimpleDelphiBLE 1.3.1 API and official Lazarus runtime package.
+- One native SimpleCBLE library, loaded on demand from the executable directory, system search path, or `TSimpleDelphiBLE.LibraryPath`.
+- Missing native runtime is reported as an operation failure; compilation and application startup do not require it.
+- Subscriptions validate the discovered characteristic and its Notify/Indicate capability.
+
+### Fixed
+
+- A delayed stop event from a previous scan no longer interrupts the next scan.
+
 ## [2.0.0] - 2026-10-28
 
 Migration to the official SimpleDelphiBLE 1.3.0 bindings, main-thread API and
@@ -59,5 +80,6 @@ See the [release notes](docs/releases/2.0.0.md) for upgrading from 1.0.0.
 
 - Target SimpleBlePascal and SimpleCBLE 1.1.0.
 
+[Unreleased]: https://github.com/Syutkin/LazBle/compare/v2.0.0...HEAD
 [2.0.0]: https://github.com/Syutkin/LazBle/releases/tag/v2.0.0
 [1.0.0]: https://github.com/Syutkin/LazBle/releases/tag/v1.0.0
