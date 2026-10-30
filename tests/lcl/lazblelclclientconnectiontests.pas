@@ -136,6 +136,7 @@ begin
   BackendEvent.DeviceId := FDeviceId;
   BackendEvent.Generation := FGeneration;
   FBackend.EmitProgress(BackendEvent);
+  FBackend.CompleteOperation(AOperationId, lbekOperationSucceeded);
 end;
 
 procedure TClientBackendThread.Execute;

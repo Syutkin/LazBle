@@ -295,6 +295,10 @@ begin
   BackendEvent.Rssi := ARssi;
   BackendEvent.Generation := AGeneration;
   AssertTrue(FBackendObject.EmitProgress(BackendEvent));
+  if AKind in [lbekConnected, lbekServicesDiscovered] then
+    AssertTrue(FBackendObject.CompleteOperation(AOperationId, lbekOperationSucceeded));
+  if (AKind = lbekDisconnected) and (AOperationId <> InvalidBleOperationId) then
+    FBackendObject.CompleteOperation(AOperationId, lbekOperationSucceeded);
 end;
 
 procedure TLazBleClientTest.CompleteTransportClient(
@@ -339,6 +343,7 @@ begin
     NusTxCharacteristicUuid;
   BackendEvent.Services[0].Characteristics[1].CanNotify := True;
   AssertTrue(FBackendObject.EmitProgress(BackendEvent));
+  AssertTrue(FBackendObject.CompleteOperation(OperationId, lbekOperationSucceeded));
 end;
 
 procedure TLazBleClientTest.UseFakeReconnectTimer;
@@ -1149,7 +1154,7 @@ begin
     AssertTrue(FBackendObject.CompleteOperation(
       FBackendObject.OperationIds[Index], lbekOperationCancelled));
   end;
-  AssertEquals(Ord(lbopPending), Ord(ConnectOperation.State));
+  AssertEquals(Ord(lbopCancelled), Ord(ConnectOperation.State));
   AssertTrue(FBackendObject.CompleteShutdown);
   AssertEquals(Ord(lbopCancelled), Ord(ConnectOperation.State));
   AssertEquals(Ord(lbcstDisconnected), Ord(Client.State));
@@ -1198,7 +1203,7 @@ begin
   EmitEvent(lbekDisconnected, FirstId, FirstClient.DeviceId);
   FBackendObject.CompleteOperation(FirstId, lbekOperationSucceeded);
   FBackendObject.CompleteOperation(SecondId, lbekOperationCancelled);
-  AssertEquals(Ord(lbopPending), Ord(FirstDisconnect.State));
+  AssertEquals(Ord(lbopSucceeded), Ord(FirstDisconnect.State));
   AssertEquals(Ord(lbopCancelled), Ord(SecondDisconnect.State));
   AssertTrue(FBackendObject.CompleteShutdown);
   AssertEquals(Ord(lbopSucceeded), Ord(FirstDisconnect.State));

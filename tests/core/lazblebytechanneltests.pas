@@ -88,6 +88,8 @@ begin
   for Index := 0 to High(AValue) do
     BackendEvent.Value[Index] := AValue[Index];
   AssertTrue(FBackendObject.EmitProgress(BackendEvent));
+  if AKind in [lbekConnected, lbekServicesDiscovered] then
+    AssertTrue(FBackendObject.CompleteOperation(AOperationId, lbekOperationSucceeded));
 end;
 
 procedure TLazBleByteChannelTest.ActivateChannel;

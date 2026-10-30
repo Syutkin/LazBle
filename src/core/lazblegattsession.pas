@@ -46,6 +46,8 @@ type
     FConnectOperationId: TBleOperationId;
     FDiscoveryOperationId: TBleOperationId;
     FDisconnectOperationId: TBleOperationId;
+    FConnectWorkflow, FDisconnectWorkflow: IBleOperation;
+    FConnectWorkflowObject, FDisconnectWorkflowObject: TBleOperation;
     FSubmitCommand: TLazBleSubmitCommand;
     FCancelOperation: TLazBleCancelOperation;
     FOperations: TList;
@@ -77,13 +79,14 @@ type
     function UnsubscribeSubscription(
       const ASubscription: TBleSubscription): IBleGattOperation;
     procedure InvalidateGattState(const AForce: Boolean = False);
-    procedure HandleTerminalEvent(const AEvent: TLazBleBackendEvent);
   protected
     constructor Create(const ADeviceId: string;
       const ASubmitCommand: TLazBleSubmitCommand;
       const ACancelOperation: TLazBleCancelOperation);
     function Connect: TBleOperationId;
     function Disconnect: TBleOperationId;
+    function BeginConnect: IBleOperation;
+    function BeginDisconnect: IBleOperation;
     procedure CancelConnect;
     procedure CancelDisconnect;
     procedure HandleBackendEvent(const AEvent: TLazBleBackendEvent);
@@ -129,6 +132,22 @@ type
 implementation
 
 type
+  TSessionWorkflow = class(TBleOperation, ILazBleRequestCompletion)
+  private
+    FSession: TBleGattSession;
+    FGeneration: QWord;
+    FKind: TLazBleBackendCommandKind;
+    FId: TBleOperationId;
+    procedure CancelRequest(Sender: TObject);
+    procedure Finish(const AResult: TLazBleRequestResult);
+  public
+    constructor Create(ASession: TBleGattSession;
+      AKind: TLazBleBackendCommandKind);
+    procedure Start(AKind: TLazBleBackendCommandKind);
+    procedure CompleteRequest(const AResult: TLazBleRequestResult);
+    procedure Detach;
+  end;
+
   TBleGattOperationAccess = class(TBleGattOperation)
   public
     constructor CreateRequestInternal(const AKind: TLazBleBackendCommandKind;
@@ -184,6 +203,128 @@ type
   TBleGattOperationObjects = array of TBleGattOperation;
   TBleSubscriptionInterfaces = array of IBleSubscription;
   TBleSubscriptionObjects = array of TBleSubscription;
+
+constructor TSessionWorkflow.Create(ASession: TBleGattSession;
+  AKind: TLazBleBackendCommandKind);
+begin
+  inherited Create(@CancelRequest);
+  FSession := ASession;
+  FGeneration := ASession.Generation;
+  FKind := AKind;
+end;
+
+procedure TSessionWorkflow.Start(AKind: TLazBleBackendCommandKind);
+var Command: TLazBleBackendCommand; R: TLazBleRequestResult;
+begin
+  FKind := AKind;
+  Command := Default(TLazBleBackendCommand);
+  Command.Kind := AKind;
+  Command.DeviceId := FSession.DeviceId;
+  Command.Generation := FGeneration;
+  FId := InvalidBleOperationId;
+  if Assigned(FSession.FSubmitCommand) then
+    FId := FSession.FSubmitCommand(Command, Self);
+  if FId = InvalidBleOperationId then
+  begin
+    R := Default(TLazBleRequestResult);
+    R.Status := lbrsFailed; R.ErrorCode := LazBleErrorInvalidState;
+    R.ErrorMessage := 'Could not submit BLE session request';
+    CompleteRequest(R);
+  end;
+end;
+
+procedure TSessionWorkflow.CancelRequest(Sender: TObject);
+begin
+  if (FSession <> nil) and Assigned(FSession.FCancelOperation) then
+    FSession.FCancelOperation(FId);
+end;
+
+procedure TSessionWorkflow.Finish(const AResult: TLazBleRequestResult);
+begin
+  FSession := nil;
+  case AResult.Status of
+    lbrsSucceeded: Complete(lbopSucceeded);
+    lbrsFailed: Complete(lbopFailed, AResult.ErrorCode, AResult.ErrorMessage);
+    lbrsCancelled: Complete(lbopCancelled, AResult.ErrorCode, AResult.ErrorMessage);
+  end;
+end;
+
+procedure TSessionWorkflow.CompleteRequest(const AResult: TLazBleRequestResult);
+var S: TBleGattSession; R: TLazBleRequestResult; KeepAlive: IBleOperation;
+begin
+  LazBleRequireMainThread;
+  KeepAlive := Self;
+  if State <> lbopPending then Exit;
+  S := FSession;
+  R := AResult;
+  if (S = nil) or (FGeneration <> S.Generation) then
+  begin
+    Finish(R);
+    Exit;
+  end;
+  if S.FShuttingDown and (FKind <> lbckDisconnect) then R.Status := lbrsCancelled;
+  S.FLastOperationCancelled := R.Status = lbrsCancelled;
+  S.FLastOperationFailed := R.Status = lbrsFailed;
+  S.FErrorCode := R.ErrorCode;
+  S.FErrorMessage := R.ErrorMessage;
+  if R.Status <> lbrsSucceeded then
+  begin
+    if (FKind <> lbckDisconnect) and (S.State = lbssDisconnecting) then
+    begin
+      { An explicit disconnect owns the current session state. }
+    end
+    else if R.Status = lbrsFailed then S.SetState(lbssError)
+    else if (FKind = lbckDisconnect) and S.FConnectionEstablished then S.SetState(lbssConnected)
+    else if S.FConnectionEstablished then S.SetState(lbssError)
+    else S.SetState(lbssDisconnected);
+    Finish(R);
+    Exit;
+  end;
+  case FKind of
+    lbckConnect:
+      if S.State = lbssConnecting then
+      begin
+        S.FConnectionEstablished := True;
+        Start(lbckDiscoverServices);
+        if State = lbopPending then
+        begin
+          S.FDiscoveryOperationId := FId;
+          S.SetState(lbssDiscovering);
+        end;
+        Exit;
+      end;
+    lbckDiscoverServices:
+      if (S.State = lbssDiscovering) and S.FConnectionEstablished then
+      begin
+        S.FServices := R.Services;
+        S.SetState(lbssConnected);
+        if (S.State = lbssConnected) and (S.Generation = FGeneration) then
+        begin
+          Finish(R);
+          Exit;
+        end;
+      end;
+    lbckDisconnect:
+      begin
+        S.FConnectionEstablished := False;
+        S.InvalidateGattState;
+        S.SetState(lbssDisconnected);
+        Finish(R);
+        Exit;
+      end;
+  end;
+  R.Status := lbrsFailed;
+  R.ErrorCode := LazBleErrorDeviceDisconnected;
+  R.ErrorMessage := 'BLE session ended before connection was ready';
+  Finish(R);
+end;
+
+procedure TSessionWorkflow.Detach;
+begin
+  FSession := nil;
+  OnCompleted := nil;
+  Complete(lbopCancelled);
+end;
 
 constructor TBleGattOperationAccess.CreateFailed(const AKind: TLazBleBackendCommandKind;
   const ACode: Integer; const AText: string);
@@ -470,6 +611,8 @@ end;
 destructor TBleGattSession.Destroy;
 var I: Integer;
 begin
+  if FConnectWorkflow <> nil then TSessionWorkflow(FConnectWorkflowObject).Detach;
+  if FDisconnectWorkflow <> nil then TSessionWorkflow(FDisconnectWorkflowObject).Detach;
   for I := 0 to FOperations.Count - 1 do
     TBleGattOperationEntry(FOperations[I]).Operation.OnCompleted := nil;
   for I := 0 to FSubscriptions.Count - 1 do
@@ -760,47 +903,72 @@ begin
   end;
 end;
 
-function TBleGattSession.Connect: TBleOperationId;
+function TBleGattSession.BeginConnect: IBleOperation;
+var Workflow: TSessionWorkflow;
 begin
   LazBleRequireMainThread;
-  Result := InvalidBleOperationId;
-  if not (State in [lbssDisconnected, lbssError]) then
-    Exit;
-
-  FServices := nil;
-  FErrorCode := 0;
-  FErrorMessage := '';
-  Inc(FGeneration);
-  Result := Submit(lbckConnect);
-  if Result = InvalidBleOperationId then
+  if (FConnectWorkflow <> nil) and (FConnectWorkflow.State = lbopPending) then
+    Exit(FConnectWorkflow);
+  if State in [lbssDisconnected, lbssError] then Inc(FGeneration);
+  Workflow := TSessionWorkflow.Create(Self, lbckConnect);
+  Result := Workflow;
+  FConnectWorkflow := Result;
+  FConnectWorkflowObject := Workflow;
+  if State = lbssConnected then
+    Workflow.Complete(lbopSucceeded)
+  else if not (State in [lbssDisconnected, lbssError]) or FShuttingDown then
+    Workflow.Complete(lbopFailed, LazBleErrorInvalidState, 'Could not start BLE connection')
+  else
   begin
-    SetState(lbssError);
-    Exit;
+    FServices := nil;
+    FErrorCode := 0; FErrorMessage := '';
+    FLastOperationFailed := False; FLastOperationCancelled := False;
+    FConnectionEstablished := False;
+    Workflow.Start(lbckConnect);
+    FConnectOperationId := Workflow.FId;
+    if Workflow.State = lbopPending then SetState(lbssConnecting);
   end;
-  FLastOperationCancelled := False;
-  FLastOperationFailed := False;
-  FConnectionEstablished := False;
-  FConnectOperationId := Result;
-  SetState(lbssConnecting);
+end;
+
+function TBleGattSession.BeginDisconnect: IBleOperation;
+var Workflow: TSessionWorkflow;
+begin
+  LazBleRequireMainThread;
+  if (FDisconnectWorkflow <> nil) and (FDisconnectWorkflow.State = lbopPending) then
+    Exit(FDisconnectWorkflow);
+  Workflow := TSessionWorkflow.Create(Self, lbckDisconnect);
+  Result := Workflow;
+  FDisconnectWorkflow := Result;
+  FDisconnectWorkflowObject := Workflow;
+  if State = lbssDisconnected then
+    Workflow.Complete(lbopSucceeded)
+  else if (State = lbssDisconnecting) or FShuttingDown then
+    Workflow.Complete(lbopFailed, LazBleErrorInvalidState, 'Could not start BLE disconnect')
+  else
+  begin
+    FErrorCode := 0; FErrorMessage := '';
+    FLastOperationFailed := False; FLastOperationCancelled := False;
+    Workflow.Start(lbckDisconnect);
+    FDisconnectOperationId := Workflow.FId;
+    if Workflow.State = lbopPending then SetState(lbssDisconnecting);
+  end;
+end;
+
+function TBleGattSession.Connect: TBleOperationId;
+var Operation: IBleOperation;
+begin
+  if not (State in [lbssDisconnected, lbssError]) then Exit(InvalidBleOperationId);
+  Operation := BeginConnect;
+  Result := FConnectOperationId;
 end;
 
 function TBleGattSession.Disconnect: TBleOperationId;
+var Operation: IBleOperation;
 begin
-  LazBleRequireMainThread;
-  Result := InvalidBleOperationId;
-  if not (State in [lbssConnecting, lbssDiscovering, lbssConnected,
-    lbssError]) then
-    Exit;
-
-  FErrorCode := 0;
-  FErrorMessage := '';
-  Result := Submit(lbckDisconnect);
-  if Result = InvalidBleOperationId then
-    Exit;
-  FLastOperationCancelled := False;
-  FLastOperationFailed := False;
-  FDisconnectOperationId := Result;
-  SetState(lbssDisconnecting);
+  if not (State in [lbssConnecting, lbssDiscovering, lbssConnected, lbssError]) then
+    Exit(InvalidBleOperationId);
+  Operation := BeginDisconnect;
+  Result := FDisconnectOperationId;
 end;
 
 procedure TBleGattSession.CancelConnect;
@@ -818,84 +986,21 @@ begin
     FCancelOperation(FDisconnectOperationId);
 end;
 
-procedure TBleGattSession.HandleTerminalEvent(const AEvent: TLazBleBackendEvent);
+procedure TBleGattSession.HandleBackendEvent(const AEvent: TLazBleBackendEvent);
 begin
   LazBleRequireMainThread;
-  if AEvent.Kind = lbekOperationSucceeded then Exit;
-  if not ((AEvent.OperationId = FConnectOperationId) or
-    (AEvent.OperationId = FDiscoveryOperationId) or
-    (AEvent.OperationId = FDisconnectOperationId)) then Exit;
-  FLastOperationCancelled := AEvent.Kind = lbekOperationCancelled;
-  FLastOperationFailed := AEvent.Kind = lbekOperationFailed;
-  FErrorCode := AEvent.ErrorCode;
-  FErrorMessage := AEvent.ErrorMessage;
-  if FLastOperationCancelled then
-  begin
-    if AEvent.OperationId = FDisconnectOperationId then
-      if FConnectionEstablished then SetState(lbssConnected) else SetState(lbssDisconnected)
-    else if FConnectionEstablished then
-      { Discovery was cancelled, but the native connection remains. An explicit
-        Disconnect is available from Error; do not simulate a disconnect. }
-      SetState(lbssError)
-    else SetState(lbssDisconnected);
-  end
-  else SetState(lbssError);
-end;
-
-procedure TBleGattSession.HandleBackendEvent(
-  const AEvent: TLazBleBackendEvent);
-begin
-  LazBleRequireMainThread;
-  if (AEvent.DeviceId <> '') and (AEvent.DeviceId <> FDeviceId) then Exit;
-
-  { Command IDs/own generations route late results before the current-session
-    filter. Reconnecting must not orphan an accepted old command. }
-  if (AEvent.Generation <> 0) and (AEvent.Generation <> Generation) then Exit;
-  if FShuttingDown then
-  begin
-    { A requested Disconnect still reports a real failure/cancellation. Other
-      session pipelines close at ShutdownCompleted without starting discovery. }
-    if (AEvent.OperationId = FDisconnectOperationId) and
-      (AEvent.Kind in [lbekOperationFailed, lbekOperationCancelled]) then
-      HandleTerminalEvent(AEvent);
-    Exit;
-  end;
+  if FShuttingDown or ((AEvent.DeviceId <> '') and (AEvent.DeviceId <> FDeviceId)) or
+    ((AEvent.Generation <> 0) and (AEvent.Generation <> Generation)) then Exit;
   case AEvent.Kind of
-    lbekConnected:
-      if (State = lbssConnecting) and
-        (AEvent.OperationId = FConnectOperationId) then
-      begin
-        FConnectionEstablished := True;
-        FLastOperationCancelled := False;
-        FLastOperationFailed := False;
-        FDiscoveryOperationId := Submit(lbckDiscoverServices);
-        if FDiscoveryOperationId = InvalidBleOperationId then
-          SetState(lbssError)
-        else
-          SetState(lbssDiscovering);
-      end;
-    lbekServicesDiscovered:
-      if (State = lbssDiscovering) and
-        (AEvent.OperationId = FDiscoveryOperationId) then
-      begin
-        FServices := AEvent.Services;
-        SetState(lbssConnected);
-      end;
+    lbekConnected: FConnectionEstablished := True;
     lbekDisconnected:
       if State <> lbssDisconnected then
       begin
         FConnectionEstablished := False;
-        FLastOperationCancelled := False;
-        FServices := nil;
-        SetState(lbssDisconnected);
         InvalidateGattState;
+        SetState(lbssDisconnected);
       end;
-    lbekOperationSucceeded,
-    lbekOperationFailed,
-    lbekOperationCancelled:
-      HandleTerminalEvent(AEvent);
   end;
-
 end;
 
 procedure TBleGattSession.PrepareShutdown;
@@ -908,10 +1013,14 @@ begin
 end;
 
 procedure TBleGattSession.HandleBackendShutdown;
+var R: TLazBleRequestResult;
 begin
   LazBleRequireMainThread;
   FConnectionEstablished := False;
   InvalidateGattState(True);
+  R := Default(TLazBleRequestResult); R.Status := lbrsCancelled;
+  if FConnectWorkflow <> nil then TSessionWorkflow(FConnectWorkflowObject).CompleteRequest(R);
+  if FDisconnectWorkflow <> nil then TSessionWorkflow(FDisconnectWorkflowObject).CompleteRequest(R);
   FSubmitCommand := nil;
   FCancelOperation := nil;
   SetState(lbssDisconnected);

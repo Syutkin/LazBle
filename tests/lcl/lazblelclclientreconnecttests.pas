@@ -123,12 +123,14 @@ begin
   BackendEvent.DeviceId := FClient.DeviceId;
   BackendEvent.Generation := Generation;
   AssertTrue(FBackendObject.EmitProgress(BackendEvent));
+  AssertTrue(FBackendObject.CompleteOperation(OperationId, lbekOperationSucceeded));
 
   OperationId := FBackendObject.OperationIds[
     FBackendObject.CommandCount - 1];
   BackendEvent.Kind := lbekServicesDiscovered;
   BackendEvent.OperationId := OperationId;
   AssertTrue(FBackendObject.EmitProgress(BackendEvent));
+  AssertTrue(FBackendObject.CompleteOperation(OperationId, lbekOperationSucceeded));
   AssertEquals(Ord(lbcstReady), Ord(FClient.State));
 
   BackendEvent.Kind := lbekDisconnected;

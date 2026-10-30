@@ -142,8 +142,10 @@ begin
   FSession := FManager.CreateSession('device-1');
   ConnectId := LazBleTestConnect(FSession);
   EmitEvent(lbekConnected, ConnectId, InvalidBleSubscriptionId, []);
+  AssertTrue(FBackendObject.CompleteOperation(ConnectId, lbekOperationSucceeded));
   DiscoveryId := FBackendObject.OperationIds[1];
   EmitServicesDiscovered(DiscoveryId);
+  AssertTrue(FBackendObject.CompleteOperation(DiscoveryId, lbekOperationSucceeded));
 end;
 
 procedure TLazBleGattSessionTest.DiscoveryPublishesUpstreamGattRecords;

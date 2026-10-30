@@ -47,6 +47,7 @@ type
     FDisconnectOperationObject: TBleOperation;
     FSessionConnectOperation: IBleOperation;
     FSessionDisconnectOperation: IBleOperation;
+    FDisconnectGeneration: QWord;
     FReconnectController: TLazBleReconnectController;
     FReconnectCycleActive: Boolean;
     FManualDisconnect: Boolean;
@@ -512,6 +513,7 @@ begin
             else
             begin
               DetachProfiles;
+              FDisconnectGeneration := FSession.Generation;
               FSessionDisconnectOperation := FDisconnectSession(FSession);
               SetState(lbcstDisconnecting);
               FSessionDisconnectOperation.OnCompleted :=
@@ -583,9 +585,18 @@ begin
   LazBleRequireMainThread;
   if not Supports(Sender, IBleOperation, Operation) then
     Exit;
+  if FDisconnectGeneration <> FSession.Generation then
+  begin
+    if FDisconnectOperation <> nil then
+      TBleOperationAccess(FDisconnectOperationObject).Finish(Operation.State,
+        Operation.ErrorCode, Operation.ErrorMessage);
+    Exit;
+  end;
   if Operation.State = lbopSucceeded then
   begin
-    SetState(lbcstDisconnected);
+    if FReconnectCycleActive and not FManualDisconnect and not FShuttingDown then
+      ScheduleReconnect
+    else SetState(lbcstDisconnected);
     if Assigned(FDisconnectOperation) then
       TBleOperationAccess(FDisconnectOperationObject).Finish(lbopSucceeded);
   end
@@ -632,7 +643,9 @@ begin
     DetachProfiles;
     SetState(lbcstDisconnected);
     if Assigned(FConnectOperation) and
-      (FConnectOperation.State = lbopPending) then
+      (FConnectOperation.State = lbopPending) and
+      ((FSessionConnectOperation = nil) or
+        (FSessionConnectOperation.State <> lbopPending)) then
       if FSession.LastOperationCancelled or FShuttingDown then
         TBleOperationAccess(FConnectOperationObject).Finish(lbopCancelled)
       else
@@ -681,6 +694,7 @@ procedure TBleClient.DisconnectForReconnect;
 begin
   LazBleRequireMainThread;
   DetachProfiles;
+  FDisconnectGeneration := FSession.Generation;
   FSessionDisconnectOperation := FDisconnectSession(FSession);
   FSessionDisconnectOperation.OnCompleted := @SessionDisconnectCompleted;
 end;
@@ -795,6 +809,7 @@ begin
   end;
   SetState(lbcstDisconnecting);
   DetachProfiles;
+  FDisconnectGeneration := FSession.Generation;
   FSessionDisconnectOperation := FDisconnectSession(FSession);
   FSessionDisconnectOperation.OnCompleted := @SessionDisconnectCompleted;
 end;

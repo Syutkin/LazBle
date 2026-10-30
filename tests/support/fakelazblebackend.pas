@@ -219,9 +219,11 @@ var
   Index: Integer;
 begin
   LazBleRequireMainThread;
+  Index := FindOperation(AEvent.OperationId);
   Result := not FShutdownCompleted and
     not LazBleBackendEventIsTerminal(AEvent);
-  if Result and (AEvent.OperationId <> InvalidBleOperationId) then
+  if Result and (AEvent.OperationId <> InvalidBleOperationId) and
+    not (AEvent.Kind in [lbekConnected, lbekDisconnected]) then
   begin
     Index := FindOperation(AEvent.OperationId);
     Result := (Index >= 0) and not FOperations[Index].TerminalDelivered;
@@ -236,7 +238,7 @@ begin
           FOperations[Index].Values.ReceiveValue(AEvent.Value);
           Exit(True);
         end;
-    if (AEvent.OperationId <> InvalidBleOperationId) and
+    if (Index >= 0) and
       (FOperations[Index].Completion <> nil) and
       (AEvent.Kind in [lbekReadResult, lbekServicesDiscovered,
         lbekAvailabilityResult, lbekSubscribed]) then

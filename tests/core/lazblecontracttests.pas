@@ -73,9 +73,65 @@ type
     procedure TwoClientsKeepReadResultsWhenCompletedOutOfOrder;
     procedure ReadCompletionCanBeginShutdown;
     procedure SubscriptionRegistrationCompletesDirectly;
+    procedure ConnectedEventDoesNotReplaceNativeOutcome;
+    procedure ServicesSnapshotWaitsForNativeOutcome;
+    procedure DisconnectedEventDoesNotReplaceNativeOutcome;
+    procedure LateDisconnectOutcomeDoesNotChangeNewConnection;
   end;
 
 implementation
+
+procedure TLazBleContractTest.LateDisconnectOutcomeDoesNotChangeNewConnection;
+var DisconnectOp, ConnectOp: IBleOperation; DisconnectId, Id: TBleOperationId;
+begin
+  Connect;
+  DisconnectOp := FClient.DisconnectAsync; DisconnectId := LastId;
+  Emit(lbekDisconnected, DisconnectId);
+  ConnectOp := FClient.ConnectAsync; Id := LastId;
+  Emit(lbekConnected, Id); FFake.CompleteOperation(Id, lbekOperationSucceeded);
+  Id := LastId; Emit(lbekServicesDiscovered, Id);
+  FFake.CompleteOperation(Id, lbekOperationSucceeded);
+  AssertEquals(Ord(lbopSucceeded), Ord(ConnectOp.State));
+  FFake.CompleteOperation(DisconnectId, lbekOperationFailed, 4, 'old disconnect');
+  AssertEquals(Ord(lbopFailed), Ord(DisconnectOp.State));
+  AssertEquals(Ord(lbcstReady), Ord(FClient.State));
+end;
+
+procedure TLazBleContractTest.ConnectedEventDoesNotReplaceNativeOutcome;
+var Op: IBleOperation; Id: TBleOperationId;
+begin
+  Op := FClient.ConnectAsync; Id := LastId;
+  Emit(lbekConnected, Id);
+  AssertEquals(1, FFake.CommandCount);
+  AssertEquals(Ord(lbopPending), Ord(Op.State));
+  FFake.CompleteOperation(Id, lbekOperationFailed, 0, 'connect failed');
+  AssertEquals(Ord(lbopFailed), Ord(Op.State));
+  AssertEquals('connect failed', Op.ErrorMessage);
+  AssertEquals(1, FFake.CommandCount);
+end;
+
+procedure TLazBleContractTest.ServicesSnapshotWaitsForNativeOutcome;
+var Op: IBleOperation; Id: TBleOperationId;
+begin
+  Op := FClient.ConnectAsync; Id := LastId;
+  Emit(lbekConnected, Id); FFake.CompleteOperation(Id, lbekOperationSucceeded);
+  Id := LastId; Emit(lbekServicesDiscovered, Id);
+  AssertEquals(Ord(lbopPending), Ord(Op.State));
+  FFake.CompleteOperation(Id, lbekOperationFailed, 4, 'discovery failed');
+  AssertEquals(Ord(lbopFailed), Ord(Op.State));
+  AssertEquals(4, Op.ErrorCode);
+end;
+
+procedure TLazBleContractTest.DisconnectedEventDoesNotReplaceNativeOutcome;
+var Op: IBleOperation; Id: TBleOperationId;
+begin
+  Connect; Op := FClient.DisconnectAsync; Id := LastId;
+  Emit(lbekDisconnected, Id);
+  AssertEquals(Ord(lbopPending), Ord(Op.State));
+  FFake.CompleteOperation(Id, lbekOperationFailed, 4, 'disconnect failed');
+  AssertEquals(Ord(lbopFailed), Ord(Op.State));
+  AssertEquals('disconnect failed', Op.ErrorMessage);
+end;
 
 procedure TLazBleContractTest.SubscriptionRegistrationCompletesDirectly;
 var Token: IBleSubscription; ResultData: TLazBleRequestResult;

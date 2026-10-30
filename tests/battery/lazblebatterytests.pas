@@ -207,6 +207,7 @@ begin
   FSession := FManager.CreateSession('entime-1');
   ConnectId := LazBleTestConnect(FSession);
   EmitEvent(lbekConnected, ConnectId, InvalidBleSubscriptionId, []);
+  AssertTrue(FBackendObject.CompleteOperation(ConnectId, lbekOperationSucceeded));
   BackendEvent := Default(TLazBleBackendEvent);
   BackendEvent.Kind := lbekServicesDiscovered;
   BackendEvent.OperationId := FBackendObject.OperationIds[1];
@@ -228,6 +229,7 @@ BackendEvent.Services[0].Characteristics[0].CanNotify := True;
     NusTxCharacteristicUuid;
   BackendEvent.Services[1].Characteristics[1].CanNotify := True;
   AssertTrue(FBackendObject.EmitProgress(BackendEvent));
+  AssertTrue(FBackendObject.CompleteOperation(BackendEvent.OperationId, lbekOperationSucceeded));
   FProfile := TTestBatteryProfile.Create;
   FProfile.BindToSession(FSession);
 end;

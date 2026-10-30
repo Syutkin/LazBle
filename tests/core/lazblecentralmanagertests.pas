@@ -158,6 +158,7 @@ procedure TLazBleCentralManagerTest.EmitOperationEvent(
   const AGeneration: QWord);
 var
   BackendEvent: TLazBleBackendEvent;
+  I: Integer;
 begin
   BackendEvent := Default(TLazBleBackendEvent);
   BackendEvent.Kind := AKind;
@@ -165,6 +166,14 @@ begin
   BackendEvent.DeviceId := ADeviceId;
   BackendEvent.Generation := AGeneration;
   AssertTrue(FBackendObject.EmitProgress(BackendEvent));
+  if AKind in [lbekConnected, lbekServicesDiscovered, lbekDisconnected] then
+    for I := 0 to FBackendObject.CommandCount - 1 do
+      if (FBackendObject.OperationIds[I] = AOperationId) and
+        (FBackendObject.Commands[I].Generation = AGeneration) then
+      begin
+        FBackendObject.CompleteOperation(AOperationId, lbekOperationSucceeded);
+        Break;
+      end;
 end;
 
 procedure TLazBleCentralManagerTest.ConnectSession(

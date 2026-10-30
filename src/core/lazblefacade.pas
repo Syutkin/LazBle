@@ -25,7 +25,6 @@ type
   TLazBle = class
   private
     FManager: TBleCentralManager;
-    FOperations: TList;
     FClients: TList;
     FActiveScan: IBleScanOperation;
     FActiveScanObject: TBleScanOperation;
@@ -49,14 +48,9 @@ type
     procedure AvailabilityCompleted(Sender: TObject;
       const AOutcome: TLazBleBackendEventKind; const AErrorCode: Integer;
       const AErrorMessage: string);
-    procedure SessionStateChanged(Sender: TObject;
-      const AState: TLazBleSessionState);
     procedure ManagerStateChanged(Sender: TObject;
       const AState: TLazBleCentralState);
     procedure CancelPendingOperations;
-    procedure RemoveSessionOperation(const AOperation: TBleSessionOperation);
-    procedure CompleteSessionOperations(const ASession: TBleGattSession;
-      const AState: TLazBleSessionState);
     function ConnectSessionAsync(const ADeviceId: string):
       IBleOperation;
     function DisconnectSessionAsync(const ASession: TBleGattSession):
@@ -122,8 +116,8 @@ type
 
   TBleGattSessionAccess = class(TBleGattSession)
   public
-    function ConnectInternal: TBleOperationId;
-    function DisconnectInternal: TBleOperationId;
+    function ConnectInternal: IBleOperation;
+    function DisconnectInternal: IBleOperation;
     procedure CancelConnectInternal;
     procedure CancelDisconnectInternal;
   end;
@@ -155,18 +149,6 @@ type
     procedure StoreAvailability(const AAvailability: TBleAvailability);
   end;
 
-  TBleSessionOperationAccess = class(TBleSessionOperation)
-  public
-    procedure Finish(const AState: TLazBleOperationState;
-      const AErrorCode: Integer = 0; const AErrorMessage: string = '');
-  end;
-
-  TBleSessionOperationEntry = class
-  public
-    Operation: IBleOperation;
-    Instance: TBleSessionOperation;
-  end;
-
 constructor TBleClientAccess.CreateInternal(const ASession: TBleGattSession;
   const AConnectSession: TLazBleConnectSessionEvent;
   const ADisconnectSession: TLazBleDisconnectSessionEvent;
@@ -182,16 +164,16 @@ begin
   DetachBackendEvents;
 end;
 
-function TBleGattSessionAccess.ConnectInternal: TBleOperationId;
+function TBleGattSessionAccess.ConnectInternal: IBleOperation;
 begin
   LazBleRequireMainThread;
-  Result := Connect;
+  Result := BeginConnect;
 end;
 
-function TBleGattSessionAccess.DisconnectInternal: TBleOperationId;
+function TBleGattSessionAccess.DisconnectInternal: IBleOperation;
 begin
   LazBleRequireMainThread;
-  Result := Disconnect;
+  Result := BeginDisconnect;
 end;
 
 procedure TBleGattSessionAccess.CancelConnectInternal;
@@ -253,14 +235,6 @@ begin
   Complete(AState, AErrorCode, AErrorMessage);
 end;
 
-procedure TBleSessionOperationAccess.Finish(
-  const AState: TLazBleOperationState; const AErrorCode: Integer;
-  const AErrorMessage: string);
-begin
-  LazBleRequireMainThread;
-  Complete(AState, AErrorCode, AErrorMessage);
-end;
-
 constructor TLazBle.Create;
 var
   Backend: ILazBleBackend;
@@ -293,7 +267,6 @@ begin
   FDiagnosticInfo.BackendName := FBackendName;
   FDiagnosticInfo.Availability := lbaUnknown;
   FReconnectTimerFactory := AReconnectTimerFactory;
-  FOperations := TList.Create;
   FClients := TList.Create;
   FManager := TBleCentralManager.Create(ABackend);
   FManager.OnScanResult := @ScanResult;
@@ -305,7 +278,6 @@ end;
 
 destructor TLazBle.Destroy;
 var
-  Entry: TBleSessionOperationEntry;
   Index: Integer;
 begin
   if Assigned(FManager) then
@@ -336,19 +308,8 @@ begin
   if FClients <> nil then
     for Index := FClients.Count - 1 downto 0 do TObject(FClients[Index]).Free;
   FClients.Free;
-  if FOperations <> nil then
-    for Index := FOperations.Count - 1 downto 0 do
-    begin
-      Entry := TBleSessionOperationEntry(FOperations[Index]);
-      if Assigned(Entry.Instance.Session) then Entry.Instance.Session.OnStateChanged := nil;
-      Entry.Operation.OnCompleted := nil;
-      TBleSessionOperationAccess(Entry.Instance).Finish(lbopCancelled);
-      Entry.Operation := nil;
-      Entry.Free;
-    end;
   FManager.Free;
   FManager := nil;
-  FOperations.Free;
   FActiveScan := nil;
   FActiveScanObject := nil;
   FActiveAvailability := nil;
@@ -378,19 +339,10 @@ begin
 end;
 
 procedure TLazBle.OperationCancelled(Sender: TObject);
-var Operation: TBleSessionOperation;
 begin
   LazBleRequireMainThread;
   if Sender = FActiveScanObject then FManager.CancelScan
-  else if Sender = FActiveAvailabilityObject then FManager.CancelAvailabilityCheck
-  else if Sender is TBleSessionOperation then
-  begin
-    Operation := TBleSessionOperation(Sender);
-    if Operation.Session = nil then Exit;
-    if Operation.Kind = lbsokConnect then
-      TBleGattSessionAccess(Operation.Session).CancelConnectInternal
-    else TBleGattSessionAccess(Operation.Session).CancelDisconnectInternal;
-  end;
+  else if Sender = FActiveAvailabilityObject then FManager.CancelAvailabilityCheck;
 end;
 
 procedure TLazBle.ScanResult(Sender: TObject; const ADeviceId,
@@ -495,75 +447,6 @@ begin
       AErrorCode, AErrorMessage);
 end;
 
-procedure TLazBle.CompleteSessionOperations(const ASession: TBleGattSession;
-  const AState: TLazBleSessionState);
-var
-  Entry: TBleSessionOperationEntry;
-  I, J: Integer;
-  Operations: array of IBleOperation;
-  Instances: array of TBleSessionOperation;
-  Operation: TBleSessionOperation;
-  Outcome: TLazBleOperationState;
-  Code: Integer;
-  Text: string;
-  Cancelled, Failed, ShuttingDown: Boolean;
-begin
-  LazBleRequireMainThread;
-  { Snapshot interfaces retain operations across callbacks that add/finish
-    other requests. Remove an entry BEFORE notifying its user. Session keeps
-    its facade handler for its whole lifetime, including reentrant requests. }
-  Code := ASession.ErrorCode;
-  Text := ASession.ErrorMessage;
-  Cancelled := ASession.LastOperationCancelled;
-  Failed := ASession.LastOperationFailed;
-  ShuttingDown := FManager.State = lbcsShuttingDown;
-  SetLength(Operations, FOperations.Count);
-  SetLength(Instances, FOperations.Count);
-  for I := 0 to FOperations.Count - 1 do
-  begin
-    Entry := TBleSessionOperationEntry(FOperations[I]);
-    Operations[I] := Entry.Operation; Instances[I] := Entry.Instance;
-  end;
-  for I := 0 to High(Instances) do
-  begin
-    Operation := Instances[I];
-    if (Operation.Session <> ASession) or (Operation.State <> lbopPending) then Continue;
-    Outcome := lbopPending;
-    case Operation.Kind of
-      lbsokConnect:
-        if AState = lbssConnected then Outcome := lbopSucceeded
-        else if AState in [lbssDisconnected, lbssError] then
-          if Cancelled or ShuttingDown then Outcome := lbopCancelled
-          else Outcome := lbopFailed;
-      lbsokDisconnect:
-        if Cancelled then Outcome := lbopCancelled
-        else if AState = lbssDisconnected then Outcome := lbopSucceeded
-        else if AState = lbssError then Outcome := lbopFailed;
-    end;
-    if Outcome = lbopPending then Continue;
-    for J := FOperations.Count - 1 downto 0 do
-    begin
-      Entry := TBleSessionOperationEntry(FOperations[J]);
-      if Entry.Instance <> Operation then Continue;
-      FOperations.Delete(J); Entry.Free; Break;
-    end;
-    if (Outcome = lbopFailed) and Failed then
-      TBleSessionOperationAccess(Operation).Finish(Outcome, Code, Text)
-    else if Outcome = lbopFailed then
-      TBleSessionOperationAccess(Operation).Finish(Outcome, LazBleErrorDeviceDisconnected,
-        'BLE session ended before the operation completed')
-    else TBleSessionOperationAccess(Operation).Finish(Outcome);
-  end;
-end;
-
-procedure TLazBle.SessionStateChanged(Sender: TObject;
-  const AState: TLazBleSessionState);
-begin
-  LazBleRequireMainThread;
-  if Sender is TBleGattSession then
-    CompleteSessionOperations(TBleGattSession(Sender), AState);
-end;
-
 procedure TLazBle.ManagerStateChanged(Sender: TObject;
   const AState: TLazBleCentralState);
 begin
@@ -575,41 +458,15 @@ begin
     else TBleOperationAccess(FShutdownOperationObject).Finish(lbopSucceeded);
 end;
 
-procedure TLazBle.RemoveSessionOperation(const AOperation: TBleSessionOperation);
-var I: Integer; Entry: TBleSessionOperationEntry;
-begin
-  for I := FOperations.Count - 1 downto 0 do
-  begin
-    Entry := TBleSessionOperationEntry(FOperations[I]);
-    if Entry.Instance <> AOperation then Continue;
-    FOperations.Delete(I); Entry.Free; Exit;
-  end;
-end;
-
 procedure TLazBle.CancelPendingOperations;
-var
-  Entry: TBleSessionOperationEntry;
-  Index: Integer;
-  Operations: array of IBleOperation;
+var Index: Integer;
 begin
   LazBleRequireMainThread;
-  Operations := nil;
-  if Assigned(FActiveScan) and (FActiveScan.State = lbopPending) then
-    FActiveScan.Cancel;
-  if Assigned(FActiveAvailability) and
-    (FActiveAvailability.State = lbopPending) then
+  if Assigned(FActiveScan) and (FActiveScan.State = lbopPending) then FActiveScan.Cancel;
+  if Assigned(FActiveAvailability) and (FActiveAvailability.State = lbopPending) then
     FActiveAvailability.Cancel;
   for Index := 0 to FClients.Count - 1 do
     TBleClientAccess(FClients[Index]).CancelForShutdown;
-  SetLength(Operations, FOperations.Count);
-  for Index := 0 to High(Operations) do
-  begin
-    Entry := TBleSessionOperationEntry(FOperations[Index]);
-    Operations[Index] := Entry.Operation;
-  end;
-  for Index := 0 to High(Operations) do
-    if Operations[Index].State = lbopPending then
-      Operations[Index].Cancel;
 end;
 
 function TLazBle.CheckAvailabilityAsync(const AAdapterId: string):
@@ -719,74 +576,25 @@ begin
   AClient.Free;
 end;
 
-function TLazBle.ConnectSessionAsync(
-  const ADeviceId: string): IBleOperation;
-var
-  Entry: TBleSessionOperationEntry;
-  Operation: TBleSessionOperation;
-  Session: TBleGattSession;
+function TLazBle.ConnectSessionAsync(const ADeviceId: string): IBleOperation;
+var Session: TBleGattSession; Operation: TBleOperationAccess;
 begin
   LazBleRequireMainThread;
   Session := FManager.CreateSession(ADeviceId);
-  Operation := TBleSessionOperation.Create(Session, lbsokConnect,
-    @OperationCancelled);
+  if Session <> nil then Exit(TBleGattSessionAccess(Session).ConnectInternal);
+  Operation := TBleOperationAccess.CreateInternal(nil);
   Result := Operation;
-  Entry := TBleSessionOperationEntry.Create;
-  Entry.Instance := Operation;
-  Entry.Operation := Result;
-  FOperations.Add(Entry);
-  if not Assigned(Session) then
-  begin
-    TBleSessionOperationAccess(Operation).Finish(lbopFailed, 0,
-      'Could not create BLE session');
-    RemoveSessionOperation(Operation);
-    Exit;
-  end;
-  Session.OnStateChanged := @SessionStateChanged;
-  if Session.State = lbssConnected then
-    TBleSessionOperationAccess(Operation).Finish(lbopSucceeded)
-  else if TBleGattSessionAccess(Session).ConnectInternal =
-    InvalidBleOperationId then
-    TBleSessionOperationAccess(Operation).Finish(lbopFailed, 0,
-      'Could not start BLE connection');
-  if Operation.State <> lbopPending then
-  begin
-    RemoveSessionOperation(Operation);
-  end;
+  Operation.Finish(lbopFailed, LazBleErrorInvalidState, 'Could not create BLE session');
 end;
 
-function TLazBle.DisconnectSessionAsync(const ASession: TBleGattSession):
-  IBleOperation;
-var
-  Entry: TBleSessionOperationEntry;
-  Operation: TBleSessionOperation;
+function TLazBle.DisconnectSessionAsync(const ASession: TBleGattSession): IBleOperation;
+var Operation: TBleOperationAccess;
 begin
   LazBleRequireMainThread;
-  Operation := TBleSessionOperation.Create(ASession, lbsokDisconnect,
-    @OperationCancelled);
+  if ASession <> nil then Exit(TBleGattSessionAccess(ASession).DisconnectInternal);
+  Operation := TBleOperationAccess.CreateInternal(nil);
   Result := Operation;
-  Entry := TBleSessionOperationEntry.Create;
-  Entry.Instance := Operation;
-  Entry.Operation := Result;
-  FOperations.Add(Entry);
-  if not Assigned(ASession) then
-  begin
-    TBleSessionOperationAccess(Operation).Finish(lbopFailed, 0,
-      'BLE session is not assigned');
-    RemoveSessionOperation(Operation);
-    Exit;
-  end;
-  ASession.OnStateChanged := @SessionStateChanged;
-  if ASession.State = lbssDisconnected then
-    TBleSessionOperationAccess(Operation).Finish(lbopSucceeded)
-  else if TBleGattSessionAccess(ASession).DisconnectInternal =
-    InvalidBleOperationId then
-    TBleSessionOperationAccess(Operation).Finish(lbopFailed, 0,
-      'Could not start BLE disconnect');
-  if Operation.State <> lbopPending then
-  begin
-    RemoveSessionOperation(Operation);
-  end;
+  Operation.Finish(lbopFailed, LazBleErrorInvalidState, 'BLE session is not assigned');
 end;
 
 function TLazBle.ShutdownAsync: IBleOperation;

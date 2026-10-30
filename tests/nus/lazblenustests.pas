@@ -99,6 +99,7 @@ begin
     BackendEvent.Services[0].Characteristics[1].CanNotify := True;
   end;
   AssertTrue(FBackendObject.EmitProgress(BackendEvent));
+  AssertTrue(FBackendObject.CompleteOperation(AOperationId, lbekOperationSucceeded));
 end;
 
 procedure TTestNusProfile.AttachProfile;
@@ -164,6 +165,7 @@ begin
   FSession := FManager.CreateSession('entime-1');
   ConnectId := LazBleTestConnect(FSession);
   EmitEvent(lbekConnected, ConnectId, InvalidBleSubscriptionId, []);
+  AssertTrue(FBackendObject.CompleteOperation(ConnectId, lbekOperationSucceeded));
   EmitServicesDiscovered(FBackendObject.OperationIds[1], True);
   FProfile := TTestNusProfile.Create;
   FProfile.BindToSession(FSession);
