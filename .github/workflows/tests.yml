@@ -5,6 +5,12 @@ on:
     branches: [master]
   pull_request:
   workflow_dispatch:
+    inputs:
+      binding_release:
+        description: 'SimpleDelphiBLE release tag (empty: latest stable)'
+        type: string
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -18,7 +24,7 @@ env:
 
 jobs:
   binding:
-    name: Resolve latest SimpleDelphiBLE release
+    name: Resolve SimpleDelphiBLE release
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
@@ -30,9 +36,14 @@ jobs:
         id: release
         env:
           GH_TOKEN: ${{ github.token }}
+          BINDING_RELEASE: ${{ inputs.binding_release }}
         run: |
           set -euo pipefail
-          gh api repos/simpleble/simpledelphible/releases/latest --jq '
+          endpoint=repos/simpleble/simpledelphible/releases/latest
+          if [[ -n "$BINDING_RELEASE" ]]; then
+            endpoint="repos/simpleble/simpledelphible/releases/tags/$BINDING_RELEASE"
+          fi
+          gh api "$endpoint" --jq '
             . as $release |
             (($release.body | capture("simpleble/simpleble@(?<sha>[0-9a-f]{40})").sha)
               // error("Release description does not identify the SimpleBLE source commit")) as $sha |
@@ -54,21 +65,18 @@ jobs:
           - os: ubuntu-24.04
             arch: x64
             fpc: '3.2.2'
-            platform: linux-x64
             toolchain: linux-x64
             widgetset: qt6
             cache-suffix: ''
           - os: windows-2025
             arch: x64
             fpc: '3.2.2'
-            platform: win64
             toolchain: windows-x64
             widgetset: win32
             cache-suffix: ''
           - os: macos-15
             arch: arm64
             fpc: '3.2.4rc1'
-            platform: macos-arm64
             toolchain: macos-arm64
             widgetset: cocoa
             cache-suffix: '-xcode-16.4'
@@ -77,7 +85,6 @@ jobs:
         shell: bash
     env:
       WIDGETSET: ${{ matrix.widgetset }}
-      NATIVE_PLATFORM: ${{ matrix.platform }}
 
     steps:
       - name: Check out LazBle
@@ -454,7 +461,8 @@ jobs:
             Linux) options+=(--opt=-k-lQt6DBus) ;;
             macOS) options+=(--opt="-k-ld_classic -FD$(dirname "$(xcrun --find ld)") -XR$(xcrun --sdk macosx --show-sdk-path)") ;;
           esac
-          lazbuild "${options[@]}" --add-package-link lazble.lpk lazblelcl.lpk
+          lazbuild "${options[@]}" --add-package-link \
+            simpledelphible/SimpleDelphiBLEPackage.lpk lazble.lpk lazblelcl.lpk
           for project in \
             lazble.lpk lazblelcl.lpk lazblelcldesign.lpk \
             tests/lcl/lazblelcltests.lpi \
@@ -473,12 +481,6 @@ jobs:
           set -euo pipefail
           mkdir -p bin/plain lib/plain
           options=()
-          if [[ "$RUNNER_OS" == Windows ]]; then
-            plain_dir=../simpledelphible/plain-runtime/bin
-          else
-            plain_dir="$(cd ../simpledelphible/plain-runtime/lib && pwd)"
-            options+=(-k-rpath "-k$plain_dir")
-          fi
           if [[ "$RUNNER_OS" == macOS ]]; then
             options+=(-k-ld_classic "-FD$(dirname "$(xcrun --find ld)")"
               "-XR$(xcrun --sdk macosx --show-sdk-path)")
@@ -486,23 +488,22 @@ jobs:
           fpc -Fu../src/core -Fu../src/backends -Fu../src/profiles \
             -Fubackend -Fubattery -Fucore -Funus -Fusupport \
             -Fu../simpledelphible/source -Fi../simpledelphible/source \
-            "-Fl$plain_dir" "-k-L$plain_dir" "${options[@]}" \
+            "${options[@]}" \
             -FUlib/plain -FEbin/plain lazbletests.lpr \
             2>&1 | tee ../ci-artifacts/build-core-tests.log
 
-      - name: Copy runtime files for test executables
+      - name: Place PLAIN fixture beside backend tests
         run: |
           set -euo pipefail
           case "$RUNNER_OS" in
             Linux)
-              cp simpledelphible/lib/"$NATIVE_PLATFORM"/*.so tests/bin/
+              cp simpledelphible/plain-runtime/lib/libsimplecble.so tests/bin/plain/
               ;;
             macOS)
-              cp simpledelphible/lib/"$NATIVE_PLATFORM"/*.dylib tests/bin/
+              cp simpledelphible/plain-runtime/lib/libsimplecble.dylib tests/bin/plain/
               ;;
             Windows)
-              cp simpledelphible/lib/"$NATIVE_PLATFORM"/*.dll tests/bin/
-              cp simpledelphible/plain-runtime/bin/*.dll tests/bin/plain/
+              cp simpledelphible/plain-runtime/bin/simplecble.dll tests/bin/plain/
               ;;
           esac
 

@@ -149,7 +149,7 @@ begin
   WriteLn;
   WriteLn('Scans for a BLE device, reads Battery Level (0x2A19), and');
   WriteLn('prints subsequent Battery Service notifications.');
-  WriteLn('Deploy the matching SimpleDelphiBLE native libraries beside the executable.');
+  WriteLn('Deploy the matching SimpleCBLE runtime beside the executable or in the system library path.');
 end;
 
 var

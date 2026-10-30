@@ -198,7 +198,7 @@ begin
   WriteLn;
   WriteLn('Scans for a BLE device and prints its GATT services,');
   WriteLn('characteristics, properties, and descriptors.');
-  WriteLn('Deploy the matching SimpleDelphiBLE native libraries beside the executable.');
+  WriteLn('Deploy the matching SimpleCBLE runtime beside the executable or in the system library path.');
 end;
 
 var

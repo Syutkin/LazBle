@@ -256,7 +256,7 @@ begin
   WriteLn('Received notifications are printed as HEX and ASCII.');
   WriteLn('Input lines are sent as UTF-8 bytes with the selected line ending.');
   WriteLn('Line endings: none (default), lf (\n), or crlf (\r\n).');
-  WriteLn('Deploy the matching SimpleDelphiBLE native libraries beside the executable.');
+  WriteLn('Deploy the matching SimpleCBLE runtime beside the executable or in the system library path.');
 end;
 
 var
