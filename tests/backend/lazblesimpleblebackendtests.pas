@@ -34,6 +34,7 @@ type
     function Wait(Id: TBleOperationId): TLazBleBackendEvent;
     procedure Pump(Ms: Cardinal);
     procedure WaitForEvent(Kind: TLazBleBackendEventKind; Count: Integer = 1);
+    procedure Discover;
     procedure Connect;
     procedure Shutdown;
   protected
@@ -77,6 +78,10 @@ type
     procedure IndicationAndUnsubscribe;
     procedure IndicationDoesNotFallBackToNotify;
     procedure ClientDescriptorAndIndicationApi;
+    procedure UnknownConnectDoesNotStartScan;
+    procedure GattUsesConnectedPeerWithoutAvailabilityPreflight;
+    procedure ShutdownAfterLinkLossRetiresSubscription;
+    procedure TwoSubscriptionsKeepTheirOwnIdentity;
   end;
 
 implementation
@@ -231,9 +236,17 @@ begin
   AssertEquals('Exactly one terminal event', 1, N);
 end;
 
+procedure TLazBleSimpleBleBackendTest.Discover;
+var C: TLazBleBackendCommand;
+begin
+  C := Request(lbckStartScan); C.TimeoutMs := 1000;
+  AssertEquals(Ord(lbekOperationSucceeded), Ord(Wait(FBackend.Submit(C)).Kind));
+end;
+
 procedure TLazBleSimpleBleBackendTest.Connect;
 var Id: TBleOperationId; E: TLazBleBackendEvent;
 begin
+  Discover;
   Id := Send(lbckConnect);
   E := Wait(Id);
   AssertEquals(E.ErrorMessage, Ord(lbekOperationSucceeded), Ord(E.Kind));
@@ -508,6 +521,7 @@ end;
 procedure TLazBleSimpleBleBackendTest.StartedConnectReportsActualOutcome;
 var E: TLazBleBackendEvent;
 begin
+  Discover;
   FEvents.CancelOnConnect := FBackend;
   E := Wait(Send(lbckConnect));
   FEvents.CancelOnConnect := nil;
@@ -619,6 +633,10 @@ begin
   Shutdown;
   Ble := TLazBle.Create;
   try
+    Operation := Ble.ScanAsync('', 1000);
+    Deadline := GetTickCount64 + 8000;
+    while (Operation.State = lbopPending) and (GetTickCount64 < Deadline) do CheckSynchronize(5);
+    AssertEquals(Operation.ErrorMessage, Ord(lbopSucceeded), Ord(Operation.State));
     Client := Ble.CreateClient(Device);
     Battery := TBleBatteryProfile.Create; Client.AddProfile(Battery);
     Operation := Client.ConnectAsync;
@@ -639,6 +657,7 @@ end;
 procedure TLazBleSimpleBleBackendTest.ShutdownWhileNativeConnectCompletes;
 var Id: TBleOperationId;
 begin
+  Discover;
   FEvents.ShutdownBackend := FBackend; FEvents.ShutdownOn := lbekConnected;
   Id := Send(lbckConnect);
   AssertEquals(Ord(lbekOperationSucceeded), Ord(Wait(Id).Kind));
@@ -665,6 +684,9 @@ var Ble: TLazBle; Client: TBleClient; Battery: TBleBatteryProfile;
 begin
   Shutdown; Ble := TLazBle.Create;
   try
+    Op := Ble.ScanAsync('', 1000); Deadline := GetTickCount64 + 8000;
+    while (Op.State = lbopPending) and (GetTickCount64 < Deadline) do CheckSynchronize(5);
+    AssertEquals(Op.ErrorMessage, Ord(lbopSucceeded), Ord(Op.State));
     Client := Ble.CreateClient(Device); Battery := TBleBatteryProfile.Create; Client.AddProfile(Battery);
     Client.ReconnectOptions := TLazBleReconnectOptions.Create(10,20,2); Client.AutoReconnect := True;
     Op := Client.ConnectAsync; Deadline := GetTickCount64+8000;
@@ -794,6 +816,7 @@ var Ble: TLazBle; Client: TBleClient; Op: IBleOperation;
 begin
   Shutdown; Ble := TLazBle.Create;
   try
+    Op := Ble.ScanAsync('', 1000); Await(Op);
     Client := Ble.CreateClient(Device); Op := Client.ConnectAsync; Await(Op);
     Gatt := Client.WriteDescriptorAsync(TestService, TestValue, Description, [1, 2, 3]); Await(Gatt);
     Gatt := Client.ReadDescriptorAsync(TestService, TestValue, Description); Await(Gatt);
@@ -805,6 +828,82 @@ begin
     Gatt := Sub.Unsubscribe; Await(Gatt);
     Op := Ble.ShutdownAsync; Await(Op);
   finally Ble.Free; end;
+end;
+
+procedure TLazBleSimpleBleBackendTest.UnknownConnectDoesNotStartScan;
+var C: TLazBleBackendCommand; Id: TBleOperationId; Deadline: QWord;
+begin
+  C := Request(lbckConnect); C.DeviceId := '99:88:77:66:55:44';
+  Id := FBackend.Submit(C);
+  AssertFalse('Failure is deferred until after Submit', FEvents.Terminal(Id));
+  Deadline := GetTickCount64 + 1000;
+  while not FEvents.Terminal(Id) and (GetTickCount64 < Deadline) do CheckSynchronize(5);
+  AssertTrue('An unknown device does not wait for an implicit scan', FEvents.Terminal(Id));
+  AssertEquals(LazBleErrorDeviceNotKnown, Wait(Id).ErrorCode);
+  AssertFalse(TBleAdapter.GetAdapters[0].ScanIsActive);
+end;
+
+procedure TLazBleSimpleBleBackendTest.GattUsesConnectedPeerWithoutAvailabilityPreflight;
+var Id: TBleOperationId; E: TLazBleBackendEvent;
+begin
+  Connect;
+  TBleAdapter.GetAdapters[0].PowerOff;
+  try
+    Id := Send(lbckRead); E := Wait(Id);
+    AssertTrue('GATT keeps the native result instead of repeating availability checks',
+      E.ErrorCode <> LazBleErrorBluetoothDisabled);
+  finally TBleAdapter.GetAdapters[0].PowerOn; end;
+end;
+
+procedure TLazBleSimpleBleBackendTest.ShutdownAfterLinkLossRetiresSubscription;
+var Worker: TNativeDisconnect; N: Integer;
+begin
+  Connect; Wait(Send(lbckSubscribe));
+  Worker := TNativeDisconnect.Create(True);
+  Worker.Peer := TBleAdapter.GetAdapters[0].GetConnectedPeripherals[0];
+  try Worker.Start; Worker.WaitFor; finally Worker.Free; end;
+  WaitForEvent(lbekDisconnected);
+  Shutdown;
+  N := Length(FEvents.Events); Pump(1100);
+  AssertEquals(N, Length(FEvents.Events));
+end;
+
+procedure TLazBleSimpleBleBackendTest.TwoSubscriptionsKeepTheirOwnIdentity;
+var C: TLazBleBackendCommand; Id: TBleOperationId; BatteryToken, TestToken: TBleSubscriptionId;
+  E: TLazBleBackendEvent; Deadline: QWord; BatterySeen, TestSeen: Boolean;
+begin
+  Connect;
+  C := Request(lbckSubscribe); C.ServiceUuid := BatteryService; C.CharacteristicUuid := BatteryValue;
+  Id := FBackend.Submit(C); Wait(Id);
+  BatteryToken := FEvents.Last(lbekSubscribed, Id).SubscriptionId;
+  C := Request(lbckSubscribe); C.SubscriptionMode := lbsmIndicate;
+  Id := FBackend.Submit(C); Wait(Id);
+  TestToken := FEvents.Last(lbekSubscribed, Id).SubscriptionId;
+  Deadline := GetTickCount64 + 8000;
+  repeat
+    CheckSynchronize(5);
+    BatterySeen := False; TestSeen := False;
+    for E in FEvents.Events do
+      if E.Kind = lbekNotification then
+        if E.SubscriptionId = BatteryToken then
+        begin
+          BatterySeen := True;
+          AssertEquals(BatteryService, E.ServiceUuid);
+          AssertEquals(BatteryValue, E.CharacteristicUuid);
+          AssertEquals(100, E.Value[0]);
+        end
+        else if E.SubscriptionId = TestToken then
+        begin
+          TestSeen := True;
+          AssertEquals(TestService, E.ServiceUuid);
+          AssertEquals(TestValue, E.CharacteristicUuid);
+        end;
+  until (BatterySeen and TestSeen) or (GetTickCount64 >= Deadline);
+  AssertTrue(BatterySeen and TestSeen);
+  Shutdown;
+  for E in FEvents.Events do
+    if LazBleBackendEventIsTerminal(E) then
+      AssertTrue('Cleanup commands are private to the backend', E.OperationId <> 0);
 end;
 
 initialization
