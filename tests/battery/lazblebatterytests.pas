@@ -10,6 +10,7 @@ uses
   testregistry,
   LazBleTypes,
   LazBleBackend,
+  LazBleOperation,
   LazBleGattOperation,
   LazBleGattSubscription,
   LazBleGattSession,
@@ -66,6 +67,8 @@ type
     FBackendObject: TFakeLazBleBackend;
     FSession: TBleGattSession;
     FProfile: TTestBatteryProfile;
+    FServices: TLazBleGattServices;
+    procedure CreateFixture;
     procedure EmitEvent(const AKind: TLazBleBackendEventKind;
       const AOperationId: TBleOperationId;
       const ASubscriptionId: TBleSubscriptionId;
@@ -84,6 +87,10 @@ type
     procedure DetachCancelsPendingSubscription;
     procedure DetachUnsubscribesAndSetsUnknown;
     procedure NusAndBatteryShareOneSession;
+    procedure ReadOnlyBatteryBecomesReady;
+    procedure RefreshReadsWithoutResubscribing;
+    procedure RefreshRejectsBusyAndDetached;
+    procedure RefreshCancelAndDetach;
   end;
 
 implementation
@@ -195,13 +202,34 @@ begin
 end;
 
 procedure TLazBleBatteryTest.SetUp;
+begin
+  FServices := nil;
+  SetLength(FServices, 2);
+  FServices[0].Uuid := BatteryServiceUuid;
+  SetLength(FServices[0].Characteristics, 1);
+  FServices[0].Characteristics[0].Uuid := BatteryLevelCharacteristicUuid;
+  FServices[0].Characteristics[0].CanRead := True;
+  FServices[0].Characteristics[0].CanNotify := True;
+  FServices[1].Uuid := NusServiceUuid;
+  SetLength(FServices[1].Characteristics, 2);
+  FServices[1].Characteristics[0].Uuid := NusRxCharacteristicUuid;
+  FServices[1].Characteristics[0].CanWriteCommand := True;
+  FServices[1].Characteristics[1].Uuid := NusTxCharacteristicUuid;
+  FServices[1].Characteristics[1].CanNotify := True;
+  CreateFixture;
+end;
+
+procedure TLazBleBatteryTest.CreateFixture;
 var
   BackendEvent: TLazBleBackendEvent;
   ConnectId: TBleOperationId;
 begin
+  FreeAndNil(FProfile);
+  FreeAndNil(FSession);
+  FBackend := nil;
   FBackendObject := TFakeLazBleBackend.Create;
   FBackend := FBackendObject;
-  FSession := LazBleTestCreateSession('entime-1', @FBackendObject.Submit, @FBackendObject.Cancel);
+  FSession := LazBleTestCreateSession('ble-device', @FBackendObject.Submit, @FBackendObject.Cancel);
   ConnectId := LazBleTestConnect(FSession);
   EmitEvent(lbekConnected, ConnectId, InvalidBleSubscriptionId, []);
   AssertTrue(FBackendObject.CompleteOperation(ConnectId, lbekOperationSucceeded));
@@ -210,21 +238,7 @@ begin
   BackendEvent.OperationId := FBackendObject.OperationIds[1];
   BackendEvent.DeviceId := FSession.DeviceId;
   BackendEvent.Generation := FSession.Generation;
-  SetLength(BackendEvent.Services, 2);
-  BackendEvent.Services[0].Uuid := BatteryServiceUuid;
-  SetLength(BackendEvent.Services[0].Characteristics, 1);
-  BackendEvent.Services[0].Characteristics[0].Uuid :=
-    BatteryLevelCharacteristicUuid;
-  BackendEvent.Services[0].Characteristics[0].CanRead := True;
-BackendEvent.Services[0].Characteristics[0].CanNotify := True;
-  BackendEvent.Services[1].Uuid := NusServiceUuid;
-  SetLength(BackendEvent.Services[1].Characteristics, 2);
-  BackendEvent.Services[1].Characteristics[0].Uuid :=
-    NusRxCharacteristicUuid;
-  BackendEvent.Services[1].Characteristics[0].CanWriteCommand := True;
-  BackendEvent.Services[1].Characteristics[1].Uuid :=
-    NusTxCharacteristicUuid;
-  BackendEvent.Services[1].Characteristics[1].CanNotify := True;
+  BackendEvent.Services := FServices;
   AssertTrue(FBackendObject.EmitProgress(BackendEvent));
   AssertTrue(FBackendObject.CompleteOperation(BackendEvent.OperationId, lbekOperationSucceeded));
   FProfile := TTestBatteryProfile.Create;
@@ -273,7 +287,7 @@ begin
 
     AssertEquals(64, FProfile.LevelPercent);
     AssertEquals(2, Observer.CallCount);
-    AssertEquals('entime-1', Observer.DeviceId);
+    AssertEquals('ble-device', Observer.DeviceId);
     AssertEquals(64, Observer.LevelPercent);
   finally
     Observer.Free;
@@ -383,6 +397,67 @@ begin
     NusObserver.Free;
     NusProfile.Free;
   end;
+end;
+
+procedure TLazBleBatteryTest.ReadOnlyBatteryBecomesReady;
+begin
+  FServices[0].Characteristics[0].CanNotify := False;
+  CreateFixture;
+  FProfile.AttachProfile;
+  CompleteRead([42]);
+  AssertTrue(FProfile.Ready);
+  AssertEquals(42, FProfile.LevelPercent);
+  AssertEquals(3, FBackendObject.CommandCount);
+end;
+
+procedure TLazBleBatteryTest.RefreshReadsWithoutResubscribing;
+var
+  Operation: IBleOperation;
+begin
+  ActivateProfile(75);
+  Operation := FProfile.RefreshAsync;
+  AssertEquals(Ord(lbopPending), Ord(Operation.State));
+  AssertEquals(Ord(lbckRead), Ord(FBackendObject.Commands[4].Kind));
+  CompleteRead([64]);
+  AssertEquals(Ord(lbopSucceeded), Ord(Operation.State));
+  AssertEquals(64, FProfile.LevelPercent);
+  AssertTrue(FProfile.Ready);
+  AssertEquals(5, FBackendObject.CommandCount);
+end;
+
+procedure TLazBleBatteryTest.RefreshRejectsBusyAndDetached;
+var
+  First, Rejected: IBleOperation;
+begin
+  Rejected := FProfile.RefreshAsync;
+  AssertEquals(Ord(lbopFailed), Ord(Rejected.State));
+  ActivateProfile(75);
+  First := FProfile.RefreshAsync;
+  Rejected := FProfile.RefreshAsync;
+  AssertEquals(Ord(lbopFailed), Ord(Rejected.State));
+  CompleteRead([64]);
+  AssertEquals(Ord(lbopSucceeded), Ord(First.State));
+end;
+
+procedure TLazBleBatteryTest.RefreshCancelAndDetach;
+var
+  Operation: IBleOperation;
+  ReadId: TBleOperationId;
+begin
+  ActivateProfile(75);
+  Operation := FProfile.RefreshAsync;
+  ReadId := FBackendObject.OperationIds[FBackendObject.CommandCount - 1];
+  Operation.Cancel;
+  AssertTrue(FBackendObject.CancellationWasRequested(ReadId));
+  AssertTrue(FBackendObject.CompleteOperation(ReadId, lbekOperationCancelled));
+  AssertEquals(Ord(lbopCancelled), Ord(Operation.State));
+  AssertTrue(FProfile.Ready);
+  Operation := FProfile.RefreshAsync;
+  ReadId := FBackendObject.OperationIds[FBackendObject.CommandCount - 1];
+  FProfile.DetachProfile;
+  AssertEquals(Ord(lbopCancelled), Ord(Operation.State));
+  AssertTrue(FBackendObject.CompleteOperation(ReadId, lbekOperationSucceeded));
+  AssertEquals(UnknownBatteryLevel, FProfile.LevelPercent);
 end;
 
 initialization

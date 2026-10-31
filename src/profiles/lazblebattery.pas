@@ -29,7 +29,9 @@ type
     TLazBleBatteryPhase = (
       lbbpDetached,
       lbbpReading,
-      lbbpSubscribing
+      lbbpSubscribing,
+      lbbpReady,
+      lbbpRefreshing
     );
   private
     FPhase: TLazBleBatteryPhase;
@@ -37,6 +39,8 @@ type
     FReadOperation: IBleGattOperation;
     FSubscription: IBleSubscription;
     FDetachOperation: IBleGattOperation;
+    FRefreshOperation: IBleOperation;
+    FRefreshObject: TBleOperation;
     FOnLevelChanged: TLazBleBatteryLevelEvent;
     procedure ReadCompleted(Sender: TObject);
     procedure NotificationReceived(Sender: TObject; const AValue: TBytes);
@@ -48,6 +52,9 @@ type
     function GetLevelPercent: Integer;
     function GetOnLevelChanged: TLazBleBatteryLevelEvent;
     procedure SetOnLevelChanged(const AHandler: TLazBleBatteryLevelEvent);
+    procedure RefreshCancelled(Sender: TObject);
+    procedure FinishRefresh(const AState: TLazBleOperationState;
+      const ACode: Integer = 0; const AMessage: string = '');
   protected
     procedure DoAttach; override;
     procedure DoDetach; override;
@@ -58,6 +65,7 @@ type
   public
     constructor Create;
     destructor Destroy; override;
+    function RefreshAsync: IBleOperation;
     { Last valid level (0..100), or UnknownBatteryLevel before a reading. }
     property LevelPercent: Integer read GetLevelPercent;
     property OnLevelChanged: TLazBleBatteryLevelEvent read GetOnLevelChanged
@@ -65,6 +73,66 @@ type
   end;
 
 implementation
+
+type
+  TBatteryRefreshOperation = class(TBleOperation)
+  public
+    constructor Create(const ACancel: TLazBleOperationCancelEvent);
+    procedure Finish(const AState: TLazBleOperationState;
+      const ACode: Integer; const AMessage: string);
+  end;
+
+constructor TBatteryRefreshOperation.Create(const ACancel: TLazBleOperationCancelEvent);
+begin
+  inherited Create(ACancel);
+end;
+
+procedure TBatteryRefreshOperation.Finish(const AState: TLazBleOperationState;
+  const ACode: Integer; const AMessage: string);
+begin
+  Complete(AState, ACode, AMessage);
+end;
+
+function TBleBatteryProfile.RefreshAsync: IBleOperation;
+var
+  Operation: TBatteryRefreshOperation;
+begin
+  LazBleRequireMainThread;
+  Operation := TBatteryRefreshOperation.Create(@RefreshCancelled);
+  Result := Operation;
+  if (CurrentState <> lbgpsReady) or Assigned(FRefreshOperation) or
+    (FPhase = lbbpDetached) then
+  begin
+    Operation.Finish(lbopFailed, LazBleErrorInvalidState,
+      'Battery profile is not ready or a refresh is already pending');
+    Exit;
+  end;
+  FRefreshOperation := Result;
+  FRefreshObject := Operation;
+  FPhase := lbbpRefreshing;
+  FReadOperation := Session.ReadAsync(BatteryServiceUuid, BatteryLevelCharacteristicUuid);
+  FReadOperation.OnCompleted := @ReadCompleted;
+end;
+
+procedure TBleBatteryProfile.RefreshCancelled(Sender: TObject);
+begin
+  if Assigned(FReadOperation) then FReadOperation.Cancel;
+end;
+
+procedure TBleBatteryProfile.FinishRefresh(const AState: TLazBleOperationState;
+  const ACode: Integer; const AMessage: string);
+var
+  KeepAlive: IBleOperation;
+  Operation: TBatteryRefreshOperation;
+begin
+  if not Assigned(FRefreshOperation) then Exit;
+  KeepAlive := FRefreshOperation;
+  Operation := TBatteryRefreshOperation(FRefreshObject);
+  FRefreshOperation := nil;
+  FRefreshObject := nil;
+  if FPhase = lbbpRefreshing then FPhase := lbbpReady;
+  Operation.Finish(AState, ACode, AMessage);
+end;
 
 constructor TBleBatteryProfile.Create;
 begin
@@ -130,20 +198,48 @@ begin
 end;
 
 procedure TBleBatteryProfile.ReadCompleted(Sender: TObject);
+var
+  Characteristic: TLazBleGattCharacteristic;
+  Operation: IBleGattOperation;
+  Refreshing: Boolean;
 begin
   LazBleRequireMainThread;
-  if (FPhase <> lbbpReading) or
-    (CurrentState <> lbgpsAttaching) then
+  Refreshing := FPhase = lbbpRefreshing;
+  if not (FPhase in [lbbpReading, lbbpRefreshing]) then
     Exit;
-  FReadOperation.OnCompleted := nil;
+  Operation := FReadOperation;
+  Operation.OnCompleted := nil;
 
-  if FReadOperation.State <> lbopSucceeded then
+  if Operation.State <> lbopSucceeded then
   begin
-    SetProfileError('Could not read Battery Level', FReadOperation.ErrorCode);
+    if Refreshing and (Operation.State = lbopCancelled) then
+      FinishRefresh(lbopCancelled)
+    else
+    begin
+      SetProfileError('Could not read Battery Level', Operation.ErrorCode);
+      FinishRefresh(lbopFailed, Operation.ErrorCode, 'Could not read Battery Level');
+    end;
     Exit;
   end;
-  if not AcceptLevel(FReadOperation.Value) then
+  if not AcceptLevel(Operation.Value) then
+  begin
+    FinishRefresh(lbopFailed, LazBleErrorInvalidProfileData, 'Invalid Battery Level');
     Exit;
+  end;
+  if FPhase = lbbpDetached then Exit;
+  if Refreshing then
+  begin
+    FinishRefresh(lbopSucceeded);
+    Exit;
+  end;
+
+  if Session.TryGetCharacteristic(BatteryServiceUuid,
+    BatteryLevelCharacteristicUuid, Characteristic) and not Characteristic.CanNotify then
+  begin
+    FPhase := lbbpReady;
+    MarkReady;
+    Exit;
+  end;
 
   FSubscription := Session.SubscribeAsync(BatteryServiceUuid,
     BatteryLevelCharacteristicUuid);
@@ -196,13 +292,12 @@ begin
   FReadOperation := Session.ReadAsync(BatteryServiceUuid,
     BatteryLevelCharacteristicUuid);
   FReadOperation.OnCompleted := @ReadCompleted;
-  if FReadOperation.State <> lbopPending then
-    ReadCompleted(nil);
 end;
 
 procedure TBleBatteryProfile.DoDetach;
 begin
   LazBleRequireMainThread;
+  FPhase := lbbpDetached;
   if Assigned(FReadOperation) and
     (FReadOperation.State = lbopPending) then
   begin
@@ -218,7 +313,7 @@ begin
   end;
 
   FLevelPercent := UnknownBatteryLevel;
-  FPhase := lbbpDetached;
+  FinishRefresh(lbopCancelled);
 end;
 
 end.
