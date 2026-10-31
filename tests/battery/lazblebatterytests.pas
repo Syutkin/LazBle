@@ -44,9 +44,11 @@ type
     FCallCount: Integer;
     FDeviceId: string;
     FLevelPercent: Integer;
+    FUpdatedCount: Integer;
   public
     procedure LevelChanged(Sender: TObject; const ADeviceId: string;
       const ALevelPercent: Integer);
+    procedure Updated(Sender: TObject);
     property CallCount: Integer read FCallCount;
     property DeviceId: string read FDeviceId;
     property LevelPercent: Integer read FLevelPercent;
@@ -69,6 +71,9 @@ type
     FProfile: TTestBatteryProfile;
     FServices: TLazBleGattServices;
     procedure CreateFixture;
+    procedure AddCharacteristic(const AUuid: string;
+      const ANotify, AIndicate: Boolean);
+    procedure CompleteSubscription(const AToken: TBleSubscriptionId);
     procedure EmitEvent(const AKind: TLazBleBackendEventKind;
       const AOperationId: TBleOperationId;
       const ASubscriptionId: TBleSubscriptionId;
@@ -91,6 +96,10 @@ type
     procedure RefreshReadsWithoutResubscribing;
     procedure RefreshRejectsBusyAndDetached;
     procedure RefreshCancelAndDetach;
+    procedure ExtendedStatusesUseTheirDeclaredModes;
+    procedure LevelStatusMergesOptionalFields;
+    procedure InvalidStatusDoesNotPartiallyApply;
+    procedure CriticalStatusRequiresLevelStatusAndIndicate;
   end;
 
 implementation
@@ -146,6 +155,35 @@ begin
   Inc(FCallCount);
   FDeviceId := ADeviceId;
   FLevelPercent := ALevelPercent;
+end;
+
+procedure TBatteryObserver.Updated(Sender: TObject);
+begin
+  Inc(FUpdatedCount);
+end;
+
+procedure TLazBleBatteryTest.AddCharacteristic(const AUuid: string;
+  const ANotify, AIndicate: Boolean);
+var
+  Index: Integer;
+begin
+  Index := Length(FServices[0].Characteristics);
+  SetLength(FServices[0].Characteristics, Index + 1);
+  FServices[0].Characteristics[Index].Uuid := AUuid;
+  FServices[0].Characteristics[Index].CanRead := True;
+  FServices[0].Characteristics[Index].CanNotify := ANotify;
+  FServices[0].Characteristics[Index].CanIndicate := AIndicate;
+end;
+
+procedure TLazBleBatteryTest.CompleteSubscription(const AToken: TBleSubscriptionId);
+var
+  Id: TBleOperationId;
+begin
+  Id := FBackendObject.OperationIds[FBackendObject.CommandCount - 1];
+  AssertEquals(Ord(lbckSubscribe),
+    Ord(FBackendObject.Commands[FBackendObject.CommandCount - 1].Kind));
+  EmitEvent(lbekSubscribed, Id, AToken, []);
+  AssertTrue(FBackendObject.CompleteOperation(Id, lbekOperationSucceeded));
 end;
 
 procedure TNusObserver.DataReceived(Sender: TObject; const ADeviceId: string;
@@ -458,6 +496,88 @@ begin
   AssertEquals(Ord(lbopCancelled), Ord(Operation.State));
   AssertTrue(FBackendObject.CompleteOperation(ReadId, lbekOperationSucceeded));
   AssertEquals(UnknownBatteryLevel, FProfile.LevelPercent);
+end;
+
+procedure TLazBleBatteryTest.ExtendedStatusesUseTheirDeclaredModes;
+var
+  Observer: TBatteryObserver;
+begin
+  AddCharacteristic(BatteryLevelStatusCharacteristicUuid, True, True);
+  AddCharacteristic(BatteryCriticalStatusCharacteristicUuid, False, True);
+  CreateFixture;
+  Observer := TBatteryObserver.Create;
+  try
+    FProfile.OnUpdated := @Observer.Updated;
+    FProfile.AttachProfile;
+    CompleteRead([75]);
+    CompleteSubscription(41);
+    CompleteRead([7, $A3, $12, $34, $12, 75, 5]);
+    AssertEquals(Ord(lbsmIndicate),
+      Ord(FBackendObject.Commands[FBackendObject.CommandCount - 1].SubscriptionMode));
+    CompleteSubscription(42);
+    CompleteRead([3]);
+    AssertFalse(FProfile.Ready);
+    CompleteSubscription(43);
+    AssertTrue(FProfile.Ready);
+    AssertTrue(bbcCriticalStatus in FProfile.AvailableCharacteristics);
+    AssertTrue(FProfile.Data.LevelStatus.BatteryPresent);
+    AssertEquals(Ord(bbcsCharging), Ord(FProfile.Data.LevelStatus.ChargeState));
+    AssertEquals($1234, FProfile.Data.LevelStatus.Identifier);
+    AssertEquals(75, FProfile.Data.LevelStatus.LevelPercent);
+    AssertEquals(Ord(bbsrTrue), Ord(FProfile.Data.LevelStatus.ServiceRequired));
+    AssertTrue(FProfile.Data.CriticalStatus.ImmediateServiceRequired);
+    AssertEquals(3, Observer.FUpdatedCount);
+  finally
+    FProfile.OnUpdated := nil;
+    Observer.Free;
+  end;
+end;
+
+procedure TLazBleBatteryTest.LevelStatusMergesOptionalFields;
+begin
+  AddCharacteristic(BatteryLevelStatusCharacteristicUuid, True, False);
+  CreateFixture;
+  FProfile.AttachProfile;
+  CompleteRead([75]);
+  CompleteSubscription(41);
+  CompleteRead([7, 1, 0, $34, $12, 75, 2]);
+  CompleteSubscription(42);
+  EmitEvent(lbekNotification, InvalidBleOperationId, 42, [0, $21, 0]);
+  AssertTrue(FProfile.Data.LevelStatus.HasIdentifier);
+  AssertTrue(FProfile.Data.LevelStatus.HasLevelPercent);
+  AssertEquals($1234, FProfile.Data.LevelStatus.Identifier);
+  AssertEquals(75, FProfile.Data.LevelStatus.LevelPercent);
+  AssertEquals(Ord(bbcsCharging), Ord(FProfile.Data.LevelStatus.ChargeState));
+  AssertEquals(Ord(bbsrUnknown), Ord(FProfile.Data.LevelStatus.ServiceRequired));
+end;
+
+procedure TLazBleBatteryTest.InvalidStatusDoesNotPartiallyApply;
+begin
+  AddCharacteristic(BatteryLevelStatusCharacteristicUuid, True, False);
+  CreateFixture;
+  FProfile.AttachProfile;
+  CompleteRead([75]);
+  CompleteSubscription(41);
+  CompleteRead([2, 1, 0, 75]);
+  CompleteSubscription(42);
+  EmitEvent(lbekNotification, InvalidBleOperationId, 42, [2, $21, 0, 101]);
+  AssertEquals(Ord(lbgpsError), Ord(FProfile.State));
+  AssertEquals(75, FProfile.Data.LevelStatus.LevelPercent);
+  AssertEquals(Ord(bbcsUnknown), Ord(FProfile.Data.LevelStatus.ChargeState));
+end;
+
+procedure TLazBleBatteryTest.CriticalStatusRequiresLevelStatusAndIndicate;
+begin
+  AddCharacteristic(BatteryCriticalStatusCharacteristicUuid, False, True);
+  CreateFixture;
+  FProfile.AttachProfile;
+  AssertEquals(Ord(lbgpsError), Ord(FProfile.State));
+  AssertEquals(2, FBackendObject.CommandCount);
+  AddCharacteristic(BatteryLevelStatusCharacteristicUuid, True, False);
+  FServices[0].Characteristics[1].CanIndicate := False;
+  CreateFixture;
+  FProfile.AttachProfile;
+  AssertEquals(Ord(lbgpsError), Ord(FProfile.State));
 end;
 
 initialization
