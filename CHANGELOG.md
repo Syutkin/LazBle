@@ -3,13 +3,15 @@
 ## [Unreleased]
 
 Official SimpleDelphiBLE package integration, configurable runtime loading,
-and GATT descriptor and indication support.
+GATT descriptor and indication support, and an expanded Battery profile.
 
 ### Added
 
 - Descriptor reads and writes through `ReadDescriptorAsync` and `WriteDescriptorAsync`.
 - Indications through `SubscribeAsync(..., lbsmIndicate)` using the existing subscription API.
 - Process-wide runtime path configuration through `TLazBle.LibraryPath`.
+- Battery Service 1.1 status, energy, time, health, and identity data through
+  `TBleBatteryProfile.Data`, with `OnUpdated` and explicit `RefreshAsync`.
 
 ### Changed
 
@@ -22,6 +24,7 @@ and GATT descriptor and indication support.
 
 ### Fixed
 
+- Read-only Battery Level no longer requires notification support.
 - UI layout issues.
 - A delayed stop event from a previous scan no longer interrupts the next scan.
 - A native NotConnected result during shutdown cleanup no longer counts as a failure.

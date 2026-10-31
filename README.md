@@ -25,7 +25,7 @@ The main types are:
 - `TBleGattProfile`: base class for typed profiles.
 - `TBleByteChannel`: reusable Write/Notify byte channel.
 - `TNusProfile`: Nordic UART Service, with RX writes and TX notifications.
-- `TBleBatteryProfile`: Battery Service, with an initial read and notifications.
+- `TBleBatteryProfile`: typed Battery Service 1.1 data, reads, and updates.
 - `TLazBleSync`: blocking facade for console applications.
 - `TLazBleComponent`: LCL facade owner, availability checks, and scan controller.
 - `TLazBleLclClient`: persistent LCL wrapper for a selected device.
@@ -250,7 +250,7 @@ with `LazBleErrorGattPropertyNotSupported`. UUID lookup is case-insensitive.
 
 Notify is the default `TLazBleSubscriptionMode` (`lbsmNotify`); Indicate uses
 `lbsmIndicate`. Both modes use the same `OnData`, readiness, and Unsubscribe
-contracts. NUS and Battery profiles use Notify.
+contracts. NUS uses Notify; Battery selects Notify or Indicate for each characteristic.
 
 ### Reconnection
 
@@ -398,6 +398,67 @@ TranslateLazBleLclResourceStrings('languages', Language, FallbackLanguage);
 Deploy the `.po` files with the application. Building `lazblelcl.lpk` updates the
 `.pot` templates through Lazarus package i18n support.
 
+## Battery profile
+
+`TBleBatteryProfile` supports one Battery Service instance, including the
+additional characteristics in [BAS 1.1](https://www.bluetooth.com/specifications/specs/battery-service/).
+Add it to a client before connecting:
+
+```pascal
+Battery := TBleBatteryProfile.Create;
+Battery.OnLevelChanged := @BatteryLevelChanged;
+Battery.OnUpdated := @BatteryUpdated;
+Client.AddProfile(Battery, False);
+```
+
+`LevelPercent` is 0..100 or `UnknownBatteryLevel` before a reading, after detachment,
+or when Battery Level Status reports removal. `OnLevelChanged` reports changed,
+known percentages. `OnUpdated` reports every accepted read or update, including
+repeated values; assigning a handler does not replay previous data.
+
+`AvailableCharacteristics` lists the discovered characteristics. `Data` returns
+a read-only snapshot:
+
+| Property in `Data` | Contents |
+| --- | --- |
+| `LevelStatus` | Presence, external power, charging state, faults, and additional status |
+| `CriticalStatus` | Critical power and immediate service requirements |
+| `EnergyStatus` | Power in W, voltage in V, energy and capacity in kWh |
+| `TimeStatus` | Discharge and recharge estimates in minutes |
+| `HealthStatus` | Health percentage, cycles, temperature in °C, and deep discharges |
+| `HealthInformation` | Designed cycle count and operating temperature limits |
+| `Information` | Battery features, chemistry, dates, capacity, and nominal voltage |
+| `ServiceDaysSince1970` | Estimated service date in UTC days since 1970-01-01 |
+| `ManufacturerName`, `ModelNumber`, `SerialNumber` | UTF-8 battery identity strings |
+
+Check `HasValue` and the applicable `Has...` flags before using record fields.
+Numeric `TBleBatteryValue` fields use `State`: absent, finite, unknown,
+greater/less than a bound, NaN, not at resolution, or positive/negative infinity.
+`Value` is meaningful for finite values and bounds. Manufacture and expiration
+dates also use UTC days since 1970-01-01.
+
+```pascal
+Snapshot := Battery.Data;
+if Snapshot.EnergyStatus.PresentVoltageVolts.State = bbvsFinite then
+  WriteLn(Snapshot.EnergyStatus.PresentVoltageVolts.Value:0:3, ' V');
+
+RefreshOperation := Battery.RefreshAsync;
+RefreshOperation.OnCompleted := @BatteryRefreshCompleted;
+```
+
+A Read-only Battery Level reaches `Ready` without a subscription. `RefreshAsync`
+reads the available data again without resubscribing; retain its `IBleOperation`
+to observe the result. A concurrent refresh fails as busy. Cancellation does not
+undo values already read. There is no automatic polling.
+
+Optional characteristics may be absent. Errors from discovered characteristics
+are profile errors. `Ready` means initial setup completed; reads whose values have
+no meaning while the battery is absent are skipped.
+Partial updates retain previously received fields where applicable; removal
+invalidates battery-specific data, and insertion starts a fresh read.
+Recharge estimates become absent when charging no longer applies. Characteristics
+arrive separately, so the snapshot is not a simultaneous measurement of all fields.
+
 ## Custom profiles
 
 Derive a profile from `TBleGattProfile`. Use its protected Session for GATT
@@ -412,7 +473,7 @@ operations; start work in `DoAttach`, report readiness with
 | [blescan](examples/blescan.lpr) | Discover devices and display scan results |
 | [gattinspect](examples/gattinspect.lpr) | Inspect services and characteristics |
 | [nusterminal](examples/nusterminal.lpr) | Send and receive NUS bytes with interactive input |
-| [batterymonitor](examples/batterymonitor.lpr) | Read and monitor Battery Level |
+| [batterymonitor](examples/batterymonitor.lpr) | Read Battery Service 1.1 data, monitor updates, and refresh with `r` |
 | [LCL demo](examples/lcl/lazblelcldemo.lpi) | Select a device, connect, and close asynchronously |
 
 Build examples with their `.lpi` projects, for example:
