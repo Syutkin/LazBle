@@ -27,3 +27,6 @@ backup/
 /examples/bin/
 /examples/lib/
 /ci-artifacts/
+
+# Local working documentation
+/todo/
