@@ -13,7 +13,7 @@ API access and callbacks run on the main thread.
 
 | Package | Purpose |
 | --- | --- |
-| `lazble.lpk` | Core library, SimpleDelphiBLE backend, NUS and Battery profiles; no LCL dependency |
+| `lazble.lpk` | Core library, SimpleDelphiBLE backend, NUS, Battery, and Device Information profiles; no LCL dependency |
 | `lazblelcl.lpk` | LCL components, device picker, and translations |
 | `lazblelcldesign.lpk` | Design-time registration on the Lazarus component palette |
 
@@ -27,6 +27,7 @@ The main types are:
 - `TNusProfile`: Nordic UART Service, with TX notifications and RX writes
   without response when supported, otherwise with response.
 - `TBleBatteryProfile`: typed Battery Service 1.1 data, reads, and updates.
+- `TBleDeviceInformationProfile`: device identity, revisions, System ID, PnP ID, and UDI.
 - `TLazBleSync`: blocking facade for console applications.
 - `TLazBleComponent`: LCL facade owner, availability checks, and scan controller.
 - `TLazBleLclClient`: persistent LCL wrapper for a selected device.
@@ -417,6 +418,17 @@ Read-only devices are supported. `RefreshAsync` returns an `IBleOperation` for
 explicit updates; there is no automatic polling.
 See [batterymonitor](examples/batterymonitor.lpr) for usage.
 
+## Device Information profile
+
+`TBleDeviceInformationProfile` reads [DIS 1.2](https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/DIS_v1.2/out/en/index-en.html)
+on attachment. Use `Data.PresentFields` to check which optional fields were read;
+an empty service is valid. `RefreshAsync` reads a new complete snapshot, and
+`OnUpdated` fires once after each successful snapshot. The IEEE 11073-20601
+certification list is returned as encoded bytes; its contents are not decoded.
+
+One addressable service instance is supported. See
+[deviceinformation](examples/deviceinformation.lpr) for usage.
+
 ## Custom profiles
 
 Derive a profile from `TBleGattProfile`. Use its protected Session for GATT
@@ -432,6 +444,7 @@ operations; start work in `DoAttach`, report readiness with
 | [gattinspect](examples/gattinspect.lpr) | Inspect services and characteristics |
 | [nusterminal](examples/nusterminal.lpr) | Send and receive NUS bytes with interactive input |
 | [batterymonitor](examples/batterymonitor.lpr) | Read Battery Service 1.1 data, monitor updates, and refresh with `r` |
+| [deviceinformation](examples/deviceinformation.lpr) | Read device identity, revisions, System ID, PnP ID, and UDI |
 | [LCL demo](examples/lcl/lazblelcldemo.lpi) | Select a device, connect, and close asynchronously |
 
 Build examples with their `.lpi` projects, for example:

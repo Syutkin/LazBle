@@ -3,7 +3,8 @@
 ## [Unreleased]
 
 Official SimpleDelphiBLE package integration, configurable runtime loading,
-GATT descriptor and indication support, and an expanded Battery profile.
+GATT descriptor and indication support, an expanded Battery profile, and
+Device Information Service support.
 
 ### Added
 
@@ -15,6 +16,7 @@ GATT descriptor and indication support, and an expanded Battery profile.
 - Automatic splitting of `TBleByteChannel` sends into connection-sized writes,
   preserving send order with one operation per buffer.
 - NUS RX writes with response when writes without response are unavailable.
+- Device Information profile with typed identity data, complete snapshots, and explicit refresh.
 
 ### Changed
 

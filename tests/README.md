@@ -25,7 +25,7 @@ place the PLAIN runtime beside its executable:
 ```sh
 mkdir -p bin/plain lib/plain
 fpc -Fu../src/core -Fu../src/backends -Fu../src/profiles \
-  -Fubackend -Fubattery -Fucore -Funus -Fusupport \
+  -Fubackend -Fubattery -Fucore -Funus -Fudeviceinformation -Fusupport \
   -Fu../../simpledelphible/source -Fi../../simpledelphible/source \
   -FUlib/plain -FEbin/plain lazbletests.lpr
 cp /path/to/plain-runtime/lib/libsimplecble.so bin/plain/

@@ -19,6 +19,7 @@ uses
   LazBleGattReaderTests,
   LazBleByteChannelTests,
   LazBleNusTests,
+  LazBleDeviceInformationTests,
   LazBleBatteryTests;
 
 var

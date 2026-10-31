@@ -471,6 +471,7 @@ jobs:
             tests/lcl/lazblelcltests.lpi \
             examples/blescan.lpi examples/gattinspect.lpi \
             examples/nusterminal.lpi examples/batterymonitor.lpi \
+            examples/deviceinformation.lpi \
             examples/lcl/lazblelcldemo.lpi
           do
             log_name="${project//\//-}"
@@ -489,7 +490,7 @@ jobs:
               "-XR$(xcrun --sdk macosx --show-sdk-path)")
           fi
           fpc -Fu../src/core -Fu../src/backends -Fu../src/profiles \
-            -Fubackend -Fubattery -Fucore -Funus -Fusupport \
+            -Fubackend -Fubattery -Fucore -Funus -Fudeviceinformation -Fusupport \
             -Fu../simpledelphible/source -Fi../simpledelphible/source \
             "${options[@]}" \
             -FUlib/plain -FEbin/plain lazbletests.lpr \
