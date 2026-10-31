@@ -12,13 +12,19 @@ type
   published
     procedure ReadsConsecutiveLittleEndianIntegers;
     procedure SupportsFullUnsigned32BitRange;
+    procedure ReadsWideLittleEndianIntegers;
+    procedure SupportsFullUnsigned64BitRange;
     procedure SignedIntegersPreserveAllWidthBoundaries;
     procedure RejectsInvalidWidthsAndShortBuffers;
+    procedure InvalidWidthsFailWithEnoughData;
+    procedure TruncatedIntegersDoNotConsumePartialFields;
     procedure FailedReaderStaysFailedUntilRecreated;
     procedure SFloatPreservesSignsDecimalScaleAndZero;
     procedure SFloatPreservesSpecialValues;
     procedure ReservedAndTruncatedSFloatFail;
     procedure UnsignedValueIsAbsentAfterFailedRead;
+    procedure UnsignedValuePreservesExactlyRepresentableWideIntegers;
+    procedure UnsignedValueRejectsPrecisionLoss;
     procedure Utf8ReadsRemainingBytesAfterBinaryPrefix;
     procedure Utf8AcceptsEmptyAndUnicodeBoundaries;
     procedure Utf8RejectsMalformedSequencesWithoutAdvancing;
@@ -33,10 +39,10 @@ var
 begin
   Reader := TBleGattReader.Create(TBytes.Create($12, $34, $56, $78, $9A,
     $BC, $DE, $F0, $12, $34));
-  AssertEquals($12, Reader.UInt(1));
-  AssertEquals($5634, Reader.UInt(2));
-  AssertEquals($BC9A78, Reader.UInt(3));
-  AssertEquals($3412F0DE, Reader.UInt(4));
+  AssertEquals(QWord($12), Reader.UInt(1));
+  AssertEquals(QWord($5634), Reader.UInt(2));
+  AssertEquals(QWord($BC9A78), Reader.UInt(3));
+  AssertEquals(QWord($3412F0DE), Reader.UInt(4));
   AssertEquals(10, Reader.Position);
   AssertTrue(Reader.Finished);
 end;
@@ -55,21 +61,32 @@ var
   Reader: TBleGattReader;
   Value: TBytes;
   Width, I: Integer;
+  Minimum, Maximum: Int64;
 begin
-  for Width := 1 to 4 do
+  for Width := 1 to 8 do
   begin
+    if Width = 8 then
+    begin
+      Minimum := Low(Int64);
+      Maximum := High(Int64);
+    end
+    else
+    begin
+      Minimum := -(Int64(1) shl (Width * 8 - 1));
+      Maximum := (Int64(1) shl (Width * 8 - 1)) - 1;
+    end;
     Value := nil;
     SetLength(Value, Width);
     Value[Width - 1] := $80;
     Reader := TBleGattReader.Create(Value);
-    AssertEquals(-(Int64(1) shl (Width * 8 - 1)), Int64(Reader.SInt(Width)));
+    AssertEquals(Minimum, Int64(Reader.SInt(Width)));
     for I := 0 to Width - 1 do Value[I] := $FF;
     Value[Width - 1] := $7F;
     Reader := TBleGattReader.Create(Value);
-    AssertEquals((Int64(1) shl (Width * 8 - 1)) - 1, Int64(Reader.SInt(Width)));
+    AssertEquals(Maximum, Int64(Reader.SInt(Width)));
     Value[Width - 1] := $FF;
     Reader := TBleGattReader.Create(Value);
-    AssertEquals(-1, Reader.SInt(Width));
+    AssertEquals(Int64(-1), Reader.SInt(Width));
     AssertTrue(Reader.Finished);
   end;
 end;
@@ -79,13 +96,192 @@ var
   Reader: TBleGattReader;
   Width: Integer;
 begin
-  for Width := -1 to 5 do
+  for Width := -1 to 9 do
   begin
     Reader := TBleGattReader.Create(TBytes.Create(1));
     if Width = 1 then Continue;
-    AssertEquals(0, Reader.UInt(Width));
+    AssertEquals(QWord(0), Reader.UInt(Width));
     AssertFalse(Reader.Valid);
     AssertEquals(0, Reader.Position);
+  end;
+end;
+
+procedure TLazBleGattReaderTest.ReadsWideLittleEndianIntegers;
+const
+  Expected: array[5..8] of QWord = (
+    $5544332211, $665544332211, $77665544332211, QWord($8877665544332211));
+var
+  Reader: TBleGattReader;
+  Value: TBytes;
+  Width: Integer;
+begin
+  for Width := 5 to 8 do
+  begin
+    Value := TBytes.Create($11, $22, $33, $44, $55, $66, $77, $88);
+    SetLength(Value, Width);
+    Reader := TBleGattReader.Create(Value);
+    AssertEquals(Expected[Width], QWord(Reader.UInt(Width)));
+    AssertTrue(Reader.Finished);
+  end;
+  Reader := TBleGattReader.Create(TBytes.Create($11, $22, $33, $44,
+    $55, $66, $77, $88, $42));
+  AssertEquals(Expected[8], QWord(Reader.UInt(8)));
+  AssertEquals(QWord($42), Reader.UInt(1));
+  AssertTrue(Reader.Finished);
+end;
+
+procedure TLazBleGattReaderTest.SupportsFullUnsigned64BitRange;
+var
+  Reader: TBleGattReader;
+  Value: TBytes;
+  Expected: QWord;
+  Width, I: Integer;
+begin
+  for Width := 1 to 8 do
+  begin
+    Value := nil;
+    SetLength(Value, Width);
+    Reader := TBleGattReader.Create(Value);
+    AssertEquals(QWord(0), QWord(Reader.UInt(Width)));
+    AssertTrue(Reader.Finished);
+    for I := 0 to Width - 1 do Value[I] := $FF;
+    if Width = 8 then Expected := High(QWord)
+    else Expected := (QWord(1) shl (Width * 8)) - 1;
+    Reader := TBleGattReader.Create(Value);
+    AssertEquals(Expected, QWord(Reader.UInt(Width)));
+    AssertTrue(Reader.Finished);
+  end;
+end;
+
+procedure TLazBleGattReaderTest.InvalidWidthsFailWithEnoughData;
+const
+  InvalidWidths: array[0..3] of Integer = (-1, 0, 9, 16);
+var
+  Reader: TBleGattReader;
+  Value: TBytes;
+  Width: Integer;
+begin
+  SetLength(Value, 16);
+  for Width in InvalidWidths do
+  begin
+    Reader := TBleGattReader.Create(Value);
+    AssertEquals(QWord(0), QWord(Reader.UInt(Width)));
+    AssertFalse(Reader.Valid);
+    AssertEquals(0, Reader.Position);
+    Reader := TBleGattReader.Create(Value);
+    AssertEquals(Int64(0), Int64(Reader.SInt(Width)));
+    AssertFalse(Reader.Valid);
+    AssertEquals(0, Reader.Position);
+  end;
+end;
+
+procedure TLazBleGattReaderTest.TruncatedIntegersDoNotConsumePartialFields;
+var
+  Reader: TBleGattReader;
+  Value: TBytes;
+  Width: Integer;
+begin
+  for Width := 1 to 8 do
+  begin
+    SetLength(Value, Width);
+    Value[0] := $42;
+    Reader := TBleGattReader.Create(Value);
+    Reader.UInt(1);
+    AssertEquals(QWord(0), QWord(Reader.UInt(Width)));
+    AssertFalse(Reader.Valid);
+    AssertEquals(1, Reader.Position);
+    Reader := TBleGattReader.Create(Value);
+    Reader.UInt(1);
+    AssertEquals(Int64(0), Int64(Reader.SInt(Width)));
+    AssertFalse(Reader.Valid);
+    AssertEquals(1, Reader.Position);
+  end;
+end;
+
+procedure TLazBleGattReaderTest.UnsignedValuePreservesExactlyRepresentableWideIntegers;
+var
+  Reader: TBleGattReader;
+  Number: TBleGattValue;
+  Value: TBytes;
+  Expected: Double;
+  I: Integer;
+begin
+  for I := 0 to 5 do
+  begin
+    case I of
+      0:
+        begin
+          Value := TBytes.Create($FF, $FF, $FF, $FF, $FF, $FF);
+          Expected := 281474976710655.0;
+        end;
+      1:
+        begin
+          Value := TBytes.Create($FF, $FF, $FF, $FF, $FF, $FF, $1F);
+          Expected := 9007199254740991.0;
+        end;
+      2:
+        begin
+          Value := TBytes.Create(0, 0, 0, 0, 0, 0, $20);
+          Expected := 9007199254740992.0;
+        end;
+      3:
+        begin
+          Value := TBytes.Create(2, 0, 0, 0, 0, 0, $20);
+          Expected := 9007199254740994.0;
+        end;
+      4:
+        begin
+          Value := TBytes.Create(0, 0, 0, 0, 0, 0, 0, $80);
+          Expected := 9223372036854775808.0;
+        end;
+      5:
+        begin
+          Value := TBytes.Create(0, $F8, $FF, $FF, $FF, $FF, $FF, $FF);
+          Expected := 18446744073709549568.0;
+        end;
+    end;
+    Reader := TBleGattReader.Create(Value);
+    Number := Reader.UIntValue(Length(Value));
+    AssertEquals(Ord(lgvsFinite), Ord(Number.State));
+    AssertEquals(Expected, Number.Value, 0.0);
+    AssertTrue(Reader.Finished);
+  end;
+end;
+
+procedure TLazBleGattReaderTest.UnsignedValueRejectsPrecisionLoss;
+var
+  Reader: TBleGattReader;
+  Number: TBleGattValue;
+  Value: TBytes;
+  Expected: QWord;
+  I: Integer;
+begin
+  for I := 0 to 2 do
+  begin
+    case I of
+      0:
+        begin
+          Value := TBytes.Create(1, 0, 0, 0, 0, 0, $20);
+          Expected := $20000000000001;
+        end;
+      1:
+        begin
+          Value := TBytes.Create(2, 0, 0, 0, 0, 0, $40);
+          Expected := $40000000000002;
+        end;
+      2:
+        begin
+          Value := TBytes.Create($FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF);
+          Expected := High(QWord);
+        end;
+    end;
+    Reader := TBleGattReader.Create(Value);
+    AssertEquals(Expected, QWord(Reader.UInt(Length(Value))));
+    AssertTrue(Reader.Finished);
+    Reader := TBleGattReader.Create(Value);
+    Number := Reader.UIntValue(Length(Value));
+    AssertEquals(Ord(lgvsAbsent), Ord(Number.State));
+    AssertFalse(Reader.Valid);
   end;
 end;
 
@@ -95,11 +291,11 @@ var
 begin
   Reader := TBleGattReader.Create(TBytes.Create(42));
   Reader.UInt(2);
-  AssertEquals(0, Reader.UInt(1));
+  AssertEquals(QWord(0), Reader.UInt(1));
   AssertFalse(Reader.Valid);
   AssertFalse(Reader.Finished);
   Reader := TBleGattReader.Create(TBytes.Create(42));
-  AssertEquals(42, Reader.UInt(1));
+  AssertEquals(QWord(42), Reader.UInt(1));
   Reader.Invalidate;
   AssertFalse(Reader.Finished);
 end;
@@ -180,7 +376,7 @@ var
   Text: UTF8String;
 begin
   Reader := TBleGattReader.Create(TBytes.Create($FF, $41, $C3, $A9));
-  AssertEquals($FF, Reader.UInt(1));
+  AssertEquals(QWord($FF), Reader.UInt(1));
   Text := Reader.Utf8Text;
   AssertEquals(3, Length(Text));
   AssertEquals($C3, Ord(Text[2]));

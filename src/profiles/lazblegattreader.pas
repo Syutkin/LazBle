@@ -29,9 +29,11 @@ type
     FValid: Boolean;
   public
     class function Create(const AData: TBytes): TBleGattReader; static;
-    { Integer widths are 1..4 bytes. Failed reads return zero without advancing. }
-    function UInt(const ABytes: Integer): Cardinal;
-    function SInt(const ABytes: Integer): Integer;
+    { Integer widths are 1..8 bytes. Invalid widths and truncated fields return
+      zero without advancing. }
+    function UInt(const ABytes: Integer): QWord;
+    function SInt(const ABytes: Integer): Int64;
+    { Fails if the integer cannot be represented exactly by Value's Double. }
     function UIntValue(const ABytes: Integer): TBleGattValue;
     { IEEE 11073 medfloat16/SFLOAT, not IEEE 754; no characteristic range policy. }
     function SFloat: TBleGattValue;
@@ -55,12 +57,12 @@ begin
   Result.FValid := True;
 end;
 
-function TBleGattReader.UInt(const ABytes: Integer): Cardinal;
+function TBleGattReader.UInt(const ABytes: Integer): QWord;
 var
   I: Integer;
 begin
   Result := 0;
-  if not FValid or (ABytes < 1) or (ABytes > 4) or
+  if not FValid or (ABytes < 1) or (ABytes > 8) or
     (Length(FData) - FPosition < ABytes) then
   begin
     FValid := False;
@@ -68,30 +70,44 @@ begin
   end;
   for I := 0 to ABytes - 1 do
   begin
-    Result := Result or (Cardinal(FData[FPosition]) shl (8 * I));
+    Result := Result or (QWord(FData[FPosition]) shl (8 * I));
     Inc(FPosition);
   end;
 end;
 
-function TBleGattReader.SInt(const ABytes: Integer): Integer;
+function TBleGattReader.SInt(const ABytes: Integer): Int64;
 var
-  Raw: Cardinal;
+  Raw: QWord;
 begin
   Result := 0;
   Raw := UInt(ABytes);
   if not FValid then Exit;
-  if (Raw and (Cardinal(1) shl (8 * ABytes - 1))) <> 0 then
-    Result := Integer(Int64(Raw) - (Int64(1) shl (8 * ABytes)))
-  else Result := Integer(Raw);
+  if (Raw and (QWord(1) shl (8 * ABytes - 1))) <> 0 then
+    { Complement within the field width; avoid a shift by 64 or overflowing
+      a signed conversion at the Int64 boundaries. }
+    Result := -1 - Int64((not Raw) and (High(QWord) shr ((8 - ABytes) * 8)))
+  else Result := Int64(Raw);
 end;
 
 function TBleGattReader.UIntValue(const ABytes: Integer): TBleGattValue;
 var
-  Raw: Cardinal;
+  Raw, Significand: QWord;
 begin
   Result := Default(TBleGattValue);
   Raw := UInt(ABytes);
   if not FValid then Exit;
+  { Double has 53 significant binary digits. Discard only trailing zero bits;
+    identifiers and counters must never be rounded silently. }
+  Significand := Raw;
+  while Significand > $001FFFFFFFFFFFFF do
+  begin
+    if (Significand and 1) <> 0 then
+    begin
+      FValid := False;
+      Exit;
+    end;
+    Significand := Significand shr 1;
+  end;
   Result.State := lgvsFinite;
   Result.Value := Raw;
 end;
