@@ -16,11 +16,13 @@ const
   BatteryCriticalStatusCharacteristicUuid = '00002BE9-0000-1000-8000-00805F9B34FB';
   BatteryEnergyStatusCharacteristicUuid = '00002BF0-0000-1000-8000-00805F9B34FB';
   BatteryTimeStatusCharacteristicUuid = '00002BEE-0000-1000-8000-00805F9B34FB';
+  BatteryHealthStatusCharacteristicUuid = '00002BEA-0000-1000-8000-00805F9B34FB';
+  BatteryHealthInformationCharacteristicUuid = '00002BEB-0000-1000-8000-00805F9B34FB';
   UnknownBatteryLevel = -1;
 
 type
   TBleBatteryCharacteristic = (bbcLevel, bbcLevelStatus, bbcCriticalStatus,
-    bbcEnergyStatus, bbcTimeStatus);
+    bbcEnergyStatus, bbcTimeStatus, bbcHealthStatus, bbcHealthInformation);
   TBleBatteryCharacteristics = set of TBleBatteryCharacteristic;
   TBleBatteryPowerConnection = (bbpcNo, bbpcYes, bbpcUnknown);
   TBleBatteryChargeState = (bbcsUnknown, bbcsCharging,
@@ -75,12 +77,26 @@ type
       UntilRechargedMinutes: TBleBatteryValue;
   end;
 
+  TBleBatteryHealthStatus = record
+    HasValue: Boolean;
+    SummaryPercent, CycleCount, TemperatureCelsius,
+      DeepDischargeCount: TBleBatteryValue;
+  end;
+
+  TBleBatteryHealthInformation = record
+    HasValue: Boolean;
+    DesignedCycleCount, MinTemperatureCelsius,
+      MaxTemperatureCelsius: TBleBatteryValue;
+  end;
+
   { A read-only snapshot. Optional fields retain received values until invalidated. }
   TBleBatteryData = record
     LevelStatus: TBleBatteryLevelStatus;
     CriticalStatus: TBleBatteryCriticalStatus;
     EnergyStatus: TBleBatteryEnergyStatus;
     TimeStatus: TBleBatteryTimeStatus;
+    HealthStatus: TBleBatteryHealthStatus;
+    HealthInformation: TBleBatteryHealthInformation;
   end;
 
   TLazBleBatteryLevelEvent = procedure(Sender: TObject;
@@ -153,10 +169,12 @@ const
   CharacteristicUuids: array[TBleBatteryCharacteristic] of string = (
     BatteryLevelCharacteristicUuid, BatteryLevelStatusCharacteristicUuid,
     BatteryCriticalStatusCharacteristicUuid, BatteryEnergyStatusCharacteristicUuid,
-    BatteryTimeStatusCharacteristicUuid);
+    BatteryTimeStatusCharacteristicUuid, BatteryHealthStatusCharacteristicUuid,
+    BatteryHealthInformationCharacteristicUuid);
   CharacteristicNames: array[TBleBatteryCharacteristic] of string = (
     'Battery Level', 'Battery Level Status', 'Battery Critical Status',
-    'Battery Energy Status', 'Battery Time Status');
+    'Battery Energy Status', 'Battery Time Status', 'Battery Health Status',
+    'Battery Health Information');
 
 type
   { Bounds-checked little-endian reads, without alignment or host-endian assumptions. }
@@ -169,6 +187,8 @@ type
     function SFloat(const AAllowNegative: Boolean;
       const AAllowZero: Boolean = True): TBleBatteryValue;
     function TimeMinutes: TBleBatteryValue;
+    function UIntValue(const ABytes: Integer): TBleBatteryValue;
+    function Temperature: TBleBatteryValue;
   end;
 
   TBatteryRefreshOperation = class(TBleOperation)
@@ -243,6 +263,37 @@ begin
       end;
   else
     Result.State := bbvsFinite;
+    Result.Value := Raw;
+  end;
+end;
+
+function TBatteryReader.UIntValue(const ABytes: Integer): TBleBatteryValue;
+begin
+  Result := Default(TBleBatteryValue);
+  Result.State := bbvsFinite;
+  Result.Value := UInt(ABytes);
+end;
+
+function TBatteryReader.Temperature: TBleBatteryValue;
+var
+  Raw: Integer;
+begin
+  Result := Default(TBleBatteryValue);
+  Raw := UInt(1);
+  case Raw of
+    $7F:
+      begin
+        Result.State := bbvsGreaterThan;
+        Result.Value := 126;
+      end;
+    $80:
+      begin
+        Result.State := bbvsLessThan;
+        Result.Value := -127;
+      end;
+  else
+    Result.State := bbvsFinite;
+    if Raw >= $80 then Dec(Raw, $100);
     Result.Value := Raw;
   end;
 end;
@@ -380,9 +431,10 @@ begin
       CharacteristicUuids[Kind], Characteristic) then Continue;
     Include(FAvailable, Kind);
     if not Characteristic.CanRead or
-      ((Kind in [bbcLevelStatus, bbcEnergyStatus, bbcTimeStatus]) and
+      ((Kind in [bbcLevelStatus, bbcEnergyStatus, bbcTimeStatus, bbcHealthStatus]) and
         not Characteristic.CanNotify) or
-      ((Kind = bbcCriticalStatus) and not Characteristic.CanIndicate) then
+      ((Kind in [bbcCriticalStatus, bbcHealthInformation]) and
+        not Characteristic.CanIndicate) then
     begin
       SetProfileError(CharacteristicNames[Kind] + ': missing required GATT property');
       Exit;
@@ -394,9 +446,12 @@ begin
   end;
   if not (bbcLevel in FAvailable) then
     SetProfileError('Battery Level is missing')
-  else if ((FAvailable * [bbcCriticalStatus, bbcEnergyStatus, bbcTimeStatus]) <> []) and
+  else if ((FAvailable * [bbcCriticalStatus, bbcEnergyStatus, bbcTimeStatus,
+      bbcHealthStatus]) <> []) and
     not (bbcLevelStatus in FAvailable) then
     SetProfileError('Extended Battery characteristics require Battery Level Status')
+  else if (bbcHealthInformation in FAvailable) and not (bbcHealthStatus in FAvailable) then
+    SetProfileError('Battery Health Information requires Battery Health Status')
   else
     Result := True;
 end;
@@ -496,6 +551,38 @@ begin
           UntilDischargedMinutes := Reader.TimeMinutes;
           if (Flags and 1) <> 0 then StandbyDischargeMinutes := Reader.TimeMinutes;
           if (Flags and 2) <> 0 then UntilRechargedMinutes := Reader.TimeMinutes;
+        end;
+        if not Reader.Finished(Flags, 3) then Exit;
+      end;
+    bbcHealthStatus:
+      begin
+        Flags := Reader.UInt(1);
+        with Snapshot.HealthStatus do
+        begin
+          HasValue := True;
+          if (Flags and 1) <> 0 then
+          begin
+            SummaryPercent := Reader.UIntValue(1);
+            if SummaryPercent.Value > 100 then Exit;
+          end;
+          if (Flags and 2) <> 0 then CycleCount := Reader.UIntValue(2);
+          if (Flags and 4) <> 0 then TemperatureCelsius := Reader.Temperature;
+          if (Flags and 8) <> 0 then DeepDischargeCount := Reader.UIntValue(2);
+        end;
+        if not Reader.Finished(Flags, 15) then Exit;
+      end;
+    bbcHealthInformation:
+      begin
+        Flags := Reader.UInt(1);
+        with Snapshot.HealthInformation do
+        begin
+          HasValue := True;
+          if (Flags and 1) <> 0 then DesignedCycleCount := Reader.UIntValue(2);
+          if (Flags and 2) <> 0 then
+          begin
+            MinTemperatureCelsius := Reader.Temperature;
+            MaxTemperatureCelsius := Reader.Temperature;
+          end;
         end;
         if not Reader.Finished(Flags, 3) then Exit;
       end;

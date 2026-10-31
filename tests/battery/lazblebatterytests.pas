@@ -105,6 +105,10 @@ type
     procedure EnergySpecialValuesAndPartialUpdates;
     procedure TimeStatusPreservesUnknownAndSaturation;
     procedure TruncatedEnergyIsAtomic;
+    procedure HealthStatusDecodesAllFields;
+    procedure HealthInformationUsesIndicateAndTemperatureBounds;
+    procedure HealthInformationRequiresHealthStatus;
+    procedure InvalidHealthDoesNotPartiallyApply;
   end;
 
 implementation
@@ -649,6 +653,65 @@ begin
   AssertEquals(Ord(lbgpsError), Ord(FProfile.State));
   AssertEquals(5.0, FProfile.Data.EnergyStatus.ExternalSourcePowerWatts.Value);
   AssertEquals(Ord(bbvsAbsent), Ord(FProfile.Data.EnergyStatus.PresentVoltageVolts.State));
+end;
+
+procedure TLazBleBatteryTest.HealthStatusDecodesAllFields;
+begin
+  PrepareExtension(BatteryHealthStatusCharacteristicUuid);
+  CompleteRead([15, 85, $34, $12, $F6, 7, 0]);
+  CompleteSubscription(43);
+  AssertTrue(FProfile.Ready);
+  AssertEquals(85.0, FProfile.Data.HealthStatus.SummaryPercent.Value);
+  AssertEquals($1234, FProfile.Data.HealthStatus.CycleCount.Value);
+  AssertEquals(-10.0, FProfile.Data.HealthStatus.TemperatureCelsius.Value);
+  AssertEquals(7.0, FProfile.Data.HealthStatus.DeepDischargeCount.Value);
+  EmitEvent(lbekNotification, InvalidBleOperationId, 43, [4, $7F]);
+  AssertEquals(Ord(bbvsGreaterThan), Ord(FProfile.Data.HealthStatus.TemperatureCelsius.State));
+  AssertEquals(126.0, FProfile.Data.HealthStatus.TemperatureCelsius.Value);
+  AssertEquals(85.0, FProfile.Data.HealthStatus.SummaryPercent.Value);
+end;
+
+procedure TLazBleBatteryTest.HealthInformationUsesIndicateAndTemperatureBounds;
+begin
+  AddCharacteristic(BatteryLevelStatusCharacteristicUuid, True, False);
+  AddCharacteristic(BatteryHealthStatusCharacteristicUuid, True, False);
+  AddCharacteristic(BatteryHealthInformationCharacteristicUuid, False, True);
+  CreateFixture;
+  FProfile.AttachProfile;
+  CompleteRead([75]); CompleteSubscription(41);
+  CompleteRead([0, 1, 0]); CompleteSubscription(42);
+  CompleteRead([1, 90]); CompleteSubscription(43);
+  CompleteRead([3, $E8, 3, $80, $7F]);
+  AssertEquals(Ord(lbsmIndicate),
+    Ord(FBackendObject.Commands[FBackendObject.CommandCount - 1].SubscriptionMode));
+  CompleteSubscription(44);
+  AssertTrue(FProfile.Ready);
+  AssertEquals(1000.0, FProfile.Data.HealthInformation.DesignedCycleCount.Value);
+  AssertEquals(Ord(bbvsLessThan),
+    Ord(FProfile.Data.HealthInformation.MinTemperatureCelsius.State));
+  AssertEquals(-127.0, FProfile.Data.HealthInformation.MinTemperatureCelsius.Value);
+  AssertEquals(Ord(bbvsGreaterThan),
+    Ord(FProfile.Data.HealthInformation.MaxTemperatureCelsius.State));
+end;
+
+procedure TLazBleBatteryTest.HealthInformationRequiresHealthStatus;
+begin
+  AddCharacteristic(BatteryLevelStatusCharacteristicUuid, True, False);
+  AddCharacteristic(BatteryHealthInformationCharacteristicUuid, False, True);
+  CreateFixture;
+  FProfile.AttachProfile;
+  AssertEquals(Ord(lbgpsError), Ord(FProfile.State));
+  AssertEquals(2, FBackendObject.CommandCount);
+end;
+
+procedure TLazBleBatteryTest.InvalidHealthDoesNotPartiallyApply;
+begin
+  PrepareExtension(BatteryHealthStatusCharacteristicUuid);
+  CompleteRead([3, 85, 1, 0]); CompleteSubscription(43);
+  EmitEvent(lbekNotification, InvalidBleOperationId, 43, [3, 101, 2, 0]);
+  AssertEquals(Ord(lbgpsError), Ord(FProfile.State));
+  AssertEquals(85.0, FProfile.Data.HealthStatus.SummaryPercent.Value);
+  AssertEquals(1.0, FProfile.Data.HealthStatus.CycleCount.Value);
 end;
 
 initialization
