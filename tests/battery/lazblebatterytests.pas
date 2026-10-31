@@ -74,6 +74,7 @@ type
     procedure AddCharacteristic(const AUuid: string;
       const ANotify, AIndicate: Boolean);
     procedure CompleteSubscription(const AToken: TBleSubscriptionId);
+    procedure PrepareExtension(const AUuid: string; const AIndicate: Boolean = False);
     procedure EmitEvent(const AKind: TLazBleBackendEventKind;
       const AOperationId: TBleOperationId;
       const ASubscriptionId: TBleSubscriptionId;
@@ -100,6 +101,10 @@ type
     procedure LevelStatusMergesOptionalFields;
     procedure InvalidStatusDoesNotPartiallyApply;
     procedure CriticalStatusRequiresLevelStatusAndIndicate;
+    procedure EnergyStatusDecodesDecimalFloatAndSignedRate;
+    procedure EnergySpecialValuesAndPartialUpdates;
+    procedure TimeStatusPreservesUnknownAndSaturation;
+    procedure TruncatedEnergyIsAtomic;
   end;
 
 implementation
@@ -184,6 +189,18 @@ begin
     Ord(FBackendObject.Commands[FBackendObject.CommandCount - 1].Kind));
   EmitEvent(lbekSubscribed, Id, AToken, []);
   AssertTrue(FBackendObject.CompleteOperation(Id, lbekOperationSucceeded));
+end;
+
+procedure TLazBleBatteryTest.PrepareExtension(const AUuid: string; const AIndicate: Boolean);
+begin
+  AddCharacteristic(BatteryLevelStatusCharacteristicUuid, True, False);
+  AddCharacteristic(AUuid, not AIndicate, AIndicate);
+  CreateFixture;
+  FProfile.AttachProfile;
+  CompleteRead([75]);
+  CompleteSubscription(41);
+  CompleteRead([0, 1, 0]);
+  CompleteSubscription(42);
 end;
 
 procedure TNusObserver.DataReceived(Sender: TObject; const ADeviceId: string;
@@ -578,6 +595,60 @@ begin
   CreateFixture;
   FProfile.AttachProfile;
   AssertEquals(Ord(lbgpsError), Ord(FProfile.State));
+end;
+
+procedure TLazBleBatteryTest.EnergyStatusDecodesDecimalFloatAndSignedRate;
+begin
+  PrepareExtension(BatteryEnergyStatusCharacteristicUuid);
+  CompleteRead([$3F, $7D, $F0, $F4, $FF, 5, $F0, $7D, $E0, $85, $FF, 0, 0]);
+  CompleteSubscription(43);
+  AssertTrue(FProfile.Ready);
+  AssertEquals(12.5, FProfile.Data.EnergyStatus.ExternalSourcePowerWatts.Value, 0.00001);
+  AssertEquals(-1.2, FProfile.Data.EnergyStatus.PresentVoltageVolts.Value, 0.00001);
+  AssertEquals(0.5, FProfile.Data.EnergyStatus.AvailableEnergyKWh.Value, 0.00001);
+  AssertEquals(1.25, FProfile.Data.EnergyStatus.AvailableCapacityKWh.Value, 0.00001);
+  AssertEquals(-12.3, FProfile.Data.EnergyStatus.ChargeRateWatts.Value, 0.00001);
+  AssertEquals(Ord(bbvsFinite), Ord(FProfile.Data.EnergyStatus.LastChargeEnergyKWh.State));
+  AssertEquals(0.0, FProfile.Data.EnergyStatus.LastChargeEnergyKWh.Value);
+end;
+
+procedure TLazBleBatteryTest.EnergySpecialValuesAndPartialUpdates;
+begin
+  PrepareExtension(BatteryEnergyStatusCharacteristicUuid);
+  CompleteRead([$3F, $FE, 7, $FF, 7, 0, 8, $FE, 7, 2, 8, $FF, 7]);
+  CompleteSubscription(43);
+  AssertEquals(Ord(bbvsPositiveInfinity), Ord(FProfile.Data.EnergyStatus.ExternalSourcePowerWatts.State));
+  AssertEquals(Ord(bbvsNaN), Ord(FProfile.Data.EnergyStatus.PresentVoltageVolts.State));
+  AssertEquals(Ord(bbvsNotAtResolution), Ord(FProfile.Data.EnergyStatus.AvailableEnergyKWh.State));
+  AssertEquals(Ord(bbvsNegativeInfinity), Ord(FProfile.Data.EnergyStatus.ChargeRateWatts.State));
+  EmitEvent(lbekNotification, InvalidBleOperationId, 43, [1, 10, 0]);
+  AssertEquals(10.0, FProfile.Data.EnergyStatus.ExternalSourcePowerWatts.Value);
+  AssertEquals(Ord(bbvsNaN), Ord(FProfile.Data.EnergyStatus.PresentVoltageVolts.State));
+end;
+
+procedure TLazBleBatteryTest.TimeStatusPreservesUnknownAndSaturation;
+begin
+  PrepareExtension(BatteryTimeStatusCharacteristicUuid);
+  CompleteRead([3, $FF, $FF, $FF, $FE, $FF, $FF, 90, 0, 0]);
+  CompleteSubscription(43);
+  AssertEquals(Ord(bbvsUnknown), Ord(FProfile.Data.TimeStatus.UntilDischargedMinutes.State));
+  AssertEquals(Ord(bbvsGreaterThan), Ord(FProfile.Data.TimeStatus.StandbyDischargeMinutes.State));
+  AssertEquals($FFFFFD, FProfile.Data.TimeStatus.StandbyDischargeMinutes.Value);
+  AssertEquals(90.0, FProfile.Data.TimeStatus.UntilRechargedMinutes.Value);
+  EmitEvent(lbekNotification, InvalidBleOperationId, 43, [0, 0, 0, 0]);
+  AssertEquals(0.0, FProfile.Data.TimeStatus.UntilDischargedMinutes.Value);
+  AssertEquals(90.0, FProfile.Data.TimeStatus.UntilRechargedMinutes.Value);
+end;
+
+procedure TLazBleBatteryTest.TruncatedEnergyIsAtomic;
+begin
+  PrepareExtension(BatteryEnergyStatusCharacteristicUuid);
+  CompleteRead([1, 5, 0]);
+  CompleteSubscription(43);
+  EmitEvent(lbekNotification, InvalidBleOperationId, 43, [3, 10, 0, 5]);
+  AssertEquals(Ord(lbgpsError), Ord(FProfile.State));
+  AssertEquals(5.0, FProfile.Data.EnergyStatus.ExternalSourcePowerWatts.Value);
+  AssertEquals(Ord(bbvsAbsent), Ord(FProfile.Data.EnergyStatus.PresentVoltageVolts.State));
 end;
 
 initialization

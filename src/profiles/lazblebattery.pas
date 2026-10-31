@@ -6,7 +6,7 @@ unit LazBleBattery;
 interface
 
 uses
-  Classes, SysUtils, LazBleTypes, LazBleBackend, LazBleOperation, LazBleGattOperation,
+  Classes, SysUtils, Math, LazBleTypes, LazBleBackend, LazBleOperation, LazBleGattOperation,
   LazBleGattSubscription, LazBleGattSession, LazBleGattProfile;
 
 const
@@ -14,10 +14,13 @@ const
   BatteryLevelCharacteristicUuid = '00002A19-0000-1000-8000-00805F9B34FB';
   BatteryLevelStatusCharacteristicUuid = '00002BED-0000-1000-8000-00805F9B34FB';
   BatteryCriticalStatusCharacteristicUuid = '00002BE9-0000-1000-8000-00805F9B34FB';
+  BatteryEnergyStatusCharacteristicUuid = '00002BF0-0000-1000-8000-00805F9B34FB';
+  BatteryTimeStatusCharacteristicUuid = '00002BEE-0000-1000-8000-00805F9B34FB';
   UnknownBatteryLevel = -1;
 
 type
-  TBleBatteryCharacteristic = (bbcLevel, bbcLevelStatus, bbcCriticalStatus);
+  TBleBatteryCharacteristic = (bbcLevel, bbcLevelStatus, bbcCriticalStatus,
+    bbcEnergyStatus, bbcTimeStatus);
   TBleBatteryCharacteristics = set of TBleBatteryCharacteristic;
   TBleBatteryPowerConnection = (bbpcNo, bbpcYes, bbpcUnknown);
   TBleBatteryChargeState = (bbcsUnknown, bbcsCharging,
@@ -50,10 +53,34 @@ type
     CriticalPowerState, ImmediateServiceRequired: Boolean;
   end;
 
+  TBleBatteryValueState = (bbvsAbsent, bbvsFinite, bbvsUnknown,
+    bbvsGreaterThan, bbvsLessThan, bbvsNaN, bbvsNotAtResolution,
+    bbvsPositiveInfinity, bbvsNegativeInfinity);
+  { Value is meaningful for Finite, GreaterThan and LessThan; otherwise read State. }
+  TBleBatteryValue = record
+    State: TBleBatteryValueState;
+    Value: Double;
+  end;
+
+  TBleBatteryEnergyStatus = record
+    HasValue: Boolean;
+    ExternalSourcePowerWatts, PresentVoltageVolts: TBleBatteryValue;
+    AvailableEnergyKWh, AvailableCapacityKWh: TBleBatteryValue;
+    ChargeRateWatts, LastChargeEnergyKWh: TBleBatteryValue;
+  end;
+
+  TBleBatteryTimeStatus = record
+    HasValue: Boolean;
+    UntilDischargedMinutes, StandbyDischargeMinutes,
+      UntilRechargedMinutes: TBleBatteryValue;
+  end;
+
   { A read-only snapshot. Optional fields retain received values until invalidated. }
   TBleBatteryData = record
     LevelStatus: TBleBatteryLevelStatus;
     CriticalStatus: TBleBatteryCriticalStatus;
+    EnergyStatus: TBleBatteryEnergyStatus;
+    TimeStatus: TBleBatteryTimeStatus;
   end;
 
   TLazBleBatteryLevelEvent = procedure(Sender: TObject;
@@ -125,9 +152,11 @@ implementation
 const
   CharacteristicUuids: array[TBleBatteryCharacteristic] of string = (
     BatteryLevelCharacteristicUuid, BatteryLevelStatusCharacteristicUuid,
-    BatteryCriticalStatusCharacteristicUuid);
+    BatteryCriticalStatusCharacteristicUuid, BatteryEnergyStatusCharacteristicUuid,
+    BatteryTimeStatusCharacteristicUuid);
   CharacteristicNames: array[TBleBatteryCharacteristic] of string = (
-    'Battery Level', 'Battery Level Status', 'Battery Critical Status');
+    'Battery Level', 'Battery Level Status', 'Battery Critical Status',
+    'Battery Energy Status', 'Battery Time Status');
 
 type
   { Bounds-checked little-endian reads, without alignment or host-endian assumptions. }
@@ -137,6 +166,9 @@ type
     Valid: Boolean;
     function UInt(const ABytes: Integer): Cardinal;
     function Finished(const AFlags, AKnownFlags: Cardinal): Boolean;
+    function SFloat(const AAllowNegative: Boolean;
+      const AAllowZero: Boolean = True): TBleBatteryValue;
+    function TimeMinutes: TBleBatteryValue;
   end;
 
   TBatteryRefreshOperation = class(TBleOperation)
@@ -168,6 +200,51 @@ begin
   { New flags may append fields. RFU bits alone do not invalidate known fields. }
   Result := Valid and ((Position = Length(Data)) or
     ((AFlags and not AKnownFlags) <> 0));
+end;
+
+function TBatteryReader.SFloat(const AAllowNegative: Boolean;
+  const AAllowZero: Boolean): TBleBatteryValue;
+var
+  Raw: Cardinal;
+  Mantissa, Exponent: Integer;
+begin
+  Result := Default(TBleBatteryValue);
+  Raw := UInt(2);
+  case Raw of
+    $07FE: Result.State := bbvsPositiveInfinity;
+    $0802: Result.State := bbvsNegativeInfinity;
+    $07FF: Result.State := bbvsNaN;
+    $0800: Result.State := bbvsNotAtResolution;
+    $0801: Valid := False;
+  else
+    Result.State := bbvsFinite;
+    Mantissa := Raw and $FFF;
+    if Mantissa >= $800 then Dec(Mantissa, $1000);
+    Exponent := Raw shr 12;
+    if Exponent >= 8 then Dec(Exponent, 16);
+    Result.Value := Mantissa * IntPower(10.0, Exponent);
+    if (not AAllowNegative and (Result.Value < 0)) or
+      (not AAllowZero and (Result.Value = 0)) then Valid := False;
+  end;
+end;
+
+function TBatteryReader.TimeMinutes: TBleBatteryValue;
+var
+  Raw: Cardinal;
+begin
+  Result := Default(TBleBatteryValue);
+  Raw := UInt(3);
+  case Raw of
+    $FFFFFF: Result.State := bbvsUnknown;
+    $FFFFFE:
+      begin
+        Result.State := bbvsGreaterThan;
+        Result.Value := $FFFFFD;
+      end;
+  else
+    Result.State := bbvsFinite;
+    Result.Value := Raw;
+  end;
 end;
 
 constructor TBatteryRefreshOperation.Create(const ACancel: TLazBleOperationCancelEvent);
@@ -303,7 +380,8 @@ begin
       CharacteristicUuids[Kind], Characteristic) then Continue;
     Include(FAvailable, Kind);
     if not Characteristic.CanRead or
-      ((Kind = bbcLevelStatus) and not Characteristic.CanNotify) or
+      ((Kind in [bbcLevelStatus, bbcEnergyStatus, bbcTimeStatus]) and
+        not Characteristic.CanNotify) or
       ((Kind = bbcCriticalStatus) and not Characteristic.CanIndicate) then
     begin
       SetProfileError(CharacteristicNames[Kind] + ': missing required GATT property');
@@ -316,8 +394,9 @@ begin
   end;
   if not (bbcLevel in FAvailable) then
     SetProfileError('Battery Level is missing')
-  else if (bbcCriticalStatus in FAvailable) and not (bbcLevelStatus in FAvailable) then
-    SetProfileError('Battery Critical Status requires Battery Level Status')
+  else if ((FAvailable * [bbcCriticalStatus, bbcEnergyStatus, bbcTimeStatus]) <> []) and
+    not (bbcLevelStatus in FAvailable) then
+    SetProfileError('Extended Battery characteristics require Battery Level Status')
   else
     Result := True;
 end;
@@ -392,6 +471,33 @@ begin
         Snapshot.CriticalStatus.CriticalPowerState := (Flags and 1) <> 0;
         Snapshot.CriticalStatus.ImmediateServiceRequired := (Flags and 2) <> 0;
         if not Reader.Finished(0, 0) then Exit;
+      end;
+    bbcEnergyStatus:
+      begin
+        Flags := Reader.UInt(1);
+        with Snapshot.EnergyStatus do
+        begin
+          HasValue := True;
+          if (Flags and 1) <> 0 then ExternalSourcePowerWatts := Reader.SFloat(False);
+          if (Flags and 2) <> 0 then PresentVoltageVolts := Reader.SFloat(True);
+          if (Flags and 4) <> 0 then AvailableEnergyKWh := Reader.SFloat(False);
+          if (Flags and 8) <> 0 then AvailableCapacityKWh := Reader.SFloat(False);
+          if (Flags and 16) <> 0 then ChargeRateWatts := Reader.SFloat(True);
+          if (Flags and 32) <> 0 then LastChargeEnergyKWh := Reader.SFloat(False);
+        end;
+        if not Reader.Finished(Flags, $3F) then Exit;
+      end;
+    bbcTimeStatus:
+      begin
+        Flags := Reader.UInt(1);
+        with Snapshot.TimeStatus do
+        begin
+          HasValue := True;
+          UntilDischargedMinutes := Reader.TimeMinutes;
+          if (Flags and 1) <> 0 then StandbyDischargeMinutes := Reader.TimeMinutes;
+          if (Flags and 2) <> 0 then UntilRechargedMinutes := Reader.TimeMinutes;
+        end;
+        if not Reader.Finished(Flags, 3) then Exit;
       end;
   end;
   FData := Snapshot;
