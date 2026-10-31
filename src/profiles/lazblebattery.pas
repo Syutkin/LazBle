@@ -784,6 +784,12 @@ begin
         if not Reader.Valid then Exit;
       end;
   end;
+  { BAS 3.6.1: this estimate is not meaningful when charging has stopped or
+    Battery Information explicitly identifies a non-rechargeable battery. }
+  if (Snapshot.LevelStatus.HasValue and
+      (Snapshot.LevelStatus.ChargeState in [bbcsDischargingActive, bbcsDischargingInactive])) or
+    (Snapshot.Information.HasValue and not Snapshot.Information.Rechargeable) then
+    Snapshot.TimeStatus.UntilRechargedMinutes := Default(TBleBatteryValue);
   if Snapshot.LevelStatus.HasValue and not Snapshot.LevelStatus.BatteryPresent then
   begin
     InvalidateBatteryData(Snapshot);

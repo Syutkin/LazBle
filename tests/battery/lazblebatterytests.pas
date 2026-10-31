@@ -136,6 +136,7 @@ type
     procedure DetachFromAttachingDoesNotStartReads;
     procedure MissingReadAndWrongSubscriptionPropertiesFailLocally;
     procedure ExtendedSubscriptionFailureKeepsNativeError;
+    procedure DischargingInvalidatesRechargeEstimate;
   end;
 
 implementation
@@ -1183,6 +1184,23 @@ begin
   AssertEquals(Ord(lbgpsError), Ord(FProfile.State));
   AssertEquals(0, FProfile.ErrorCode);
   AssertTrue(Pos('Battery Energy Status', FProfile.ErrorMessage) > 0);
+end;
+
+procedure TLazBleBatteryTest.DischargingInvalidatesRechargeEstimate;
+begin
+  PrepareExtension(BatteryTimeStatusCharacteristicUuid);
+  CompleteRead([2, 60, 0, 0, 30, 0, 0]); CompleteSubscription(43);
+  AssertEquals(30.0, FProfile.Data.TimeStatus.UntilRechargedMinutes.Value);
+  EmitEvent(lbekNotification, InvalidBleOperationId, 42, [0, $41, 0]);
+  AssertEquals(Ord(bbvsAbsent), Ord(FProfile.Data.TimeStatus.UntilRechargedMinutes.State));
+  EmitEvent(lbekNotification, InvalidBleOperationId, 43, [0, 50, 0, 0]);
+  AssertEquals(Ord(bbvsAbsent), Ord(FProfile.Data.TimeStatus.UntilRechargedMinutes.State));
+  SetUp;
+  PrepareAll;
+  ActivateAll;
+  EmitEvent(lbekNotification, InvalidBleOperationId,
+    100 + Ord(bbcInformation), [0, 0, 1]);
+  AssertEquals(Ord(bbvsAbsent), Ord(FProfile.Data.TimeStatus.UntilRechargedMinutes.State));
 end;
 
 initialization
