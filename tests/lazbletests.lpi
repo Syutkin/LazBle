@@ -19,7 +19,7 @@
         <PackageName Value="LazBle"/>
       </Item1>
     </RequiredPackages>
-    <Units Count="17">
+    <Units Count="18">
       <Unit0>
         <Filename Value="lazbletests.lpr"/>
         <IsPartOfProject Value="True"/>
@@ -50,12 +50,12 @@
         <UnitName Value="LazBleByteChannelTests"/>
       </Unit5>
       <Unit6>
-        <Filename Value="nus\lazblenustests.pas"/>
+        <Filename Value="profiles\lazblenustests.pas"/>
         <IsPartOfProject Value="True"/>
         <UnitName Value="LazBleNusTests"/>
       </Unit6>
       <Unit7>
-        <Filename Value="battery\lazblebatterytests.pas"/>
+        <Filename Value="profiles\lazblebatterytests.pas"/>
         <IsPartOfProject Value="True"/>
         <UnitName Value="LazBleBatteryTests"/>
       </Unit7>
@@ -100,10 +100,15 @@
         <UnitName Value="LazBleContractTests"/>
       </Unit15>
       <Unit16>
-        <Filename Value="core\lazblegattreadertests.pas"/>
+        <Filename Value="profiles\lazblegattreadertests.pas"/>
         <IsPartOfProject Value="True"/>
         <UnitName Value="LazBleGattReaderTests"/>
       </Unit16>
+      <Unit17>
+        <Filename Value="profiles\lazbledeviceinformationtests.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="LazBleDeviceInformationTests"/>
+      </Unit17>
     </Units>
   </ProjectOptions>
   <CompilerOptions>
@@ -113,7 +118,7 @@
       <Filename Value="bin\lazbletests"/>
     </Target>
     <SearchPaths>
-      <OtherUnitFiles Value="backend;battery;core;nus;support"/>
+      <OtherUnitFiles Value="backend;core;profiles;support"/>
       <UnitOutputDirectory Value="lib\$(TargetOS)-$(TargetCPU)\core"/>
     </SearchPaths>
     <Linking>
