@@ -49,6 +49,10 @@ type
     procedure LevelChanged(Sender: TObject; const ADeviceId: string;
       const ALevelPercent: Integer);
     procedure Updated(Sender: TObject);
+    procedure ReattachOnLevel(Sender: TObject; const ADeviceId: string;
+      const ALevelPercent: Integer);
+    procedure DetachOnUpdate(Sender: TObject);
+    procedure DetachOnAttaching(Sender: TObject; const AState: TLazBleGattProfileState);
     property CallCount: Integer read FCallCount;
     property DeviceId: string read FDeviceId;
     property LevelPercent: Integer read FLevelPercent;
@@ -75,6 +79,9 @@ type
       const ANotify, AIndicate: Boolean);
     procedure CompleteSubscription(const AToken: TBleSubscriptionId);
     procedure PrepareExtension(const AUuid: string; const AIndicate: Boolean = False);
+    procedure PrepareAll;
+    procedure ActivateAll;
+    function SampleValue(const AKind: TBleBatteryCharacteristic): TBytes;
     procedure EmitEvent(const AKind: TLazBleBackendEventKind;
       const AOperationId: TBleOperationId;
       const ASubscriptionId: TBleSubscriptionId;
@@ -115,6 +122,20 @@ type
     procedure InvalidUtf8KeepsPreviousValue;
     procedure RemovalInvalidatesAndInsertionRefreshes;
     procedure AbsentBatteryStillConfiguresSubscriptions;
+    procedure AllCharacteristicsRefreshAndDetachTogether;
+    procedure EveryBinaryPayloadRejectsTruncatedPrefixes;
+    procedure DuplicateServiceAndCharacteristicAreRejected;
+    procedure RefreshFailurePreservesZeroNativeCode;
+    procedure DetachFromUpdateStopsFurtherInitialization;
+    procedure ReattachFromLevelDoesNotContinuePreviousAttach;
+    procedure OldCompletionCannotChangeReattachedProfile;
+    procedure RfuBitsAreIgnoredWithoutLosingKnownFields;
+    procedure Utf8RejectsSurrogatesAndOutOfRangeCodepoints;
+    procedure ReservedAndNegativeEnergyAreRejected;
+    procedure ReturnedStringsAreIndependentSnapshots;
+    procedure DetachFromAttachingDoesNotStartReads;
+    procedure MissingReadAndWrongSubscriptionPropertiesFailLocally;
+    procedure ExtendedSubscriptionFailureKeepsNativeError;
   end;
 
 implementation
@@ -177,6 +198,28 @@ begin
   Inc(FUpdatedCount);
 end;
 
+procedure TBatteryObserver.ReattachOnLevel(Sender: TObject; const ADeviceId: string;
+  const ALevelPercent: Integer);
+var
+  Profile: TTestBatteryProfile;
+begin
+  Profile := TTestBatteryProfile(Sender);
+  Profile.OnLevelChanged := nil;
+  Profile.DetachProfile;
+  Profile.AttachProfile;
+end;
+
+procedure TBatteryObserver.DetachOnUpdate(Sender: TObject);
+begin
+  TTestBatteryProfile(Sender).DetachProfile;
+end;
+
+procedure TBatteryObserver.DetachOnAttaching(Sender: TObject;
+  const AState: TLazBleGattProfileState);
+begin
+  if AState = lbgpsAttaching then TTestBatteryProfile(Sender).DetachProfile;
+end;
+
 procedure TLazBleBatteryTest.AddCharacteristic(const AUuid: string;
   const ANotify, AIndicate: Boolean);
 var
@@ -184,7 +227,7 @@ var
 begin
   Index := Length(FServices[0].Characteristics);
   SetLength(FServices[0].Characteristics, Index + 1);
-  FServices[0].Characteristics[Index].Uuid := AUuid;
+  FServices[0].Characteristics[Index].Uuid := UTF8Decode(AUuid);
   FServices[0].Characteristics[Index].CanRead := True;
   FServices[0].Characteristics[Index].CanNotify := ANotify;
   FServices[0].Characteristics[Index].CanIndicate := AIndicate;
@@ -756,7 +799,11 @@ begin
   PrepareExtension(BatteryManufacturerNameCharacteristicUuid, True);
   CompleteRead([$41, $C3, $A9]); CompleteSubscription(43);
   AssertTrue(FProfile.Data.ManufacturerName.HasValue);
-  AssertEquals(UTF8String(#$41#$C3#$A9), FProfile.Data.ManufacturerName.Value);
+  AssertEquals(3, Length(FProfile.Data.ManufacturerName.Value));
+  AssertEquals($41, Ord(FProfile.Data.ManufacturerName.Value[1]));
+  AssertEquals($C3, Ord(FProfile.Data.ManufacturerName.Value[2]));
+  AssertEquals($A9, Ord(FProfile.Data.ManufacturerName.Value[3]));
+  AssertEquals($E9, Ord(UTF8Decode(FProfile.Data.ManufacturerName.Value)[2]));
   EmitEvent(lbekNotification, InvalidBleOperationId, 43, []);
   AssertTrue(FProfile.Data.ManufacturerName.HasValue);
   AssertEquals('', FProfile.Data.ManufacturerName.Value);
@@ -826,6 +873,316 @@ begin
   AssertEquals(55, FProfile.LevelPercent);
   AssertEquals(95.0, FProfile.Data.HealthStatus.SummaryPercent.Value);
   AssertEquals('A', FProfile.Data.ManufacturerName.Value);
+end;
+
+procedure TLazBleBatteryTest.PrepareAll;
+begin
+  AddCharacteristic(BatteryLevelStatusCharacteristicUuid, True, True);
+  AddCharacteristic(BatteryCriticalStatusCharacteristicUuid, False, True);
+  AddCharacteristic(BatteryEnergyStatusCharacteristicUuid, True, False);
+  AddCharacteristic(BatteryTimeStatusCharacteristicUuid, True, False);
+  AddCharacteristic(BatteryHealthStatusCharacteristicUuid, True, False);
+  AddCharacteristic(BatteryHealthInformationCharacteristicUuid, False, True);
+  AddCharacteristic(BatteryInformationCharacteristicUuid, False, True);
+  AddCharacteristic(EstimatedServiceDateCharacteristicUuid, True, False);
+  AddCharacteristic(BatteryManufacturerNameCharacteristicUuid, False, True);
+  AddCharacteristic(BatteryModelNumberCharacteristicUuid, False, True);
+  AddCharacteristic(BatterySerialNumberCharacteristicUuid, False, True);
+  CreateFixture;
+end;
+
+function TLazBleBatteryTest.SampleValue(const AKind: TBleBatteryCharacteristic): TBytes;
+begin
+  { Independently encoded GSS vectors, not generated by production decoders. }
+  case AKind of
+    bbcLevel: Result := TBytes.Create(75);
+    bbcLevelStatus: Result := TBytes.Create(7, $A3, $12, $34, $12, 75, 5);
+    bbcCriticalStatus: Result := TBytes.Create(3);
+    bbcEnergyStatus: Result := TBytes.Create($3F, $7D, $F0, $F4, $FF,
+      5, $F0, $7D, $E0, $85, $FF, 0, 0);
+    bbcTimeStatus: Result := TBytes.Create(3, 60, 0, 0, 90, 0, 0, 30, 0, 0);
+    bbcHealthStatus: Result := TBytes.Create(15, 90, 3, 0, $FF, 2, 0);
+    bbcHealthInformation: Result := TBytes.Create(3, $E8, 3, $EC, $3C);
+    bbcInformation: Result := TBytes.Create($FF, 0, 3, $20, $4E, 0, 8, $52, 0,
+      $7D, $E0, 1, $F0, 5, $E0, 5, $25, $F0, 0);
+    bbcServiceDate: Result := TBytes.Create($20, $4E, 0);
+    bbcManufacturerName: Result := TBytes.Create($41, $C3, $A9);
+    bbcModelNumber: Result := TBytes.Create($42, $31);
+    bbcSerialNumber: Result := TBytes.Create($53, $31);
+  end;
+end;
+
+procedure TLazBleBatteryTest.ActivateAll;
+var
+  Kind: TBleBatteryCharacteristic;
+begin
+  FProfile.AttachProfile;
+  for Kind in TBleBatteryCharacteristic do
+  begin
+    AssertFalse(FProfile.Ready);
+    CompleteRead(SampleValue(Kind));
+    CompleteSubscription(100 + Ord(Kind));
+  end;
+  AssertTrue(FProfile.Ready);
+end;
+
+procedure TLazBleBatteryTest.AllCharacteristicsRefreshAndDetachTogether;
+var
+  Kind: TBleBatteryCharacteristic;
+  Refresh: IBleOperation;
+  Observer: TBatteryObserver;
+  Before: Integer;
+begin
+  PrepareAll;
+  Observer := TBatteryObserver.Create;
+  try
+    FProfile.OnUpdated := @Observer.Updated;
+    ActivateAll;
+    AssertEquals(12, Observer.FUpdatedCount);
+    AssertEquals('B1', FProfile.Data.ModelNumber.Value);
+    AssertEquals('S1', FProfile.Data.SerialNumber.Value);
+    Before := FBackendObject.CommandCount;
+    Refresh := FProfile.RefreshAsync;
+    for Kind in TBleBatteryCharacteristic do
+    begin
+      AssertEquals(Ord(lbckRead), Ord(FBackendObject.Commands[FBackendObject.CommandCount - 1].Kind));
+      CompleteRead(SampleValue(Kind));
+    end;
+    AssertEquals(Ord(lbopSucceeded), Ord(Refresh.State));
+    AssertEquals(Before + 12, FBackendObject.CommandCount);
+    AssertEquals(24, Observer.FUpdatedCount);
+    Before := FBackendObject.CommandCount;
+    FProfile.DetachProfile;
+    AssertEquals(Before + 12, FBackendObject.CommandCount);
+    for Kind in TBleBatteryCharacteristic do
+    begin
+      AssertEquals(Ord(lbckUnsubscribe), Ord(FBackendObject.Commands[Before + Ord(Kind)].Kind));
+      EmitEvent(lbekNotification, InvalidBleOperationId, 100 + Ord(Kind), SampleValue(Kind));
+    end;
+    AssertEquals(24, Observer.FUpdatedCount);
+    AssertEquals(UnknownBatteryLevel, FProfile.LevelPercent);
+    AssertFalse(FProfile.Data.Information.HasValue);
+  finally
+    FProfile.OnUpdated := nil;
+    Observer.Free;
+  end;
+end;
+
+procedure TLazBleBatteryTest.EveryBinaryPayloadRejectsTruncatedPrefixes;
+var
+  Kind, Prior: TBleBatteryCharacteristic;
+  Value: TBytes;
+  Prefix: SizeInt;
+begin
+  for Kind := bbcLevel to bbcServiceDate do
+  begin
+    Value := SampleValue(Kind);
+    for Prefix := 0 to Length(Value) - 1 do
+    begin
+      SetUp;
+      PrepareAll;
+      FProfile.AttachProfile;
+      for Prior in TBleBatteryCharacteristic do
+      begin
+        if Prior = Kind then Break;
+        CompleteRead(SampleValue(Prior));
+        CompleteSubscription(100 + Ord(Prior));
+      end;
+      CompleteRead(Copy(Value, 0, Prefix));
+      AssertEquals('Truncated characteristic ' + IntToStr(Ord(Kind)) +
+        ', prefix ' + IntToStr(Prefix), Ord(lbgpsError), Ord(FProfile.State));
+      AssertEquals(LazBleErrorInvalidProfileData, FProfile.ErrorCode);
+    end;
+  end;
+end;
+
+procedure TLazBleBatteryTest.DuplicateServiceAndCharacteristicAreRejected;
+begin
+  AddCharacteristic(BatteryLevelCharacteristicUuid, True, False);
+  CreateFixture;
+  FProfile.AttachProfile;
+  AssertEquals(Ord(lbgpsError), Ord(FProfile.State));
+  AssertEquals(2, FBackendObject.CommandCount);
+  SetUp;
+  SetLength(FServices, 3);
+  FServices[2] := FServices[0];
+  CreateFixture;
+  FProfile.AttachProfile;
+  AssertEquals(Ord(lbgpsError), Ord(FProfile.State));
+end;
+
+procedure TLazBleBatteryTest.RefreshFailurePreservesZeroNativeCode;
+var
+  Operation: IBleOperation;
+  ReadId: TBleOperationId;
+begin
+  PrepareExtension(BatteryTimeStatusCharacteristicUuid);
+  CompleteRead([0, 60, 0, 0]); CompleteSubscription(43);
+  Operation := FProfile.RefreshAsync;
+  CompleteRead([64]);
+  ReadId := FBackendObject.OperationIds[FBackendObject.CommandCount - 1];
+  AssertTrue(FBackendObject.CompleteOperation(ReadId, lbekOperationFailed, 0, ''));
+  AssertEquals(Ord(lbopFailed), Ord(Operation.State));
+  AssertEquals(0, Operation.ErrorCode);
+  AssertTrue(Pos('Battery Level Status', Operation.ErrorMessage) > 0);
+  AssertEquals(64, FProfile.LevelPercent);
+  AssertEquals(Ord(lbgpsError), Ord(FProfile.State));
+end;
+
+procedure TLazBleBatteryTest.DetachFromUpdateStopsFurtherInitialization;
+var
+  Observer: TBatteryObserver;
+begin
+  Observer := TBatteryObserver.Create;
+  try
+    FProfile.OnUpdated := @Observer.DetachOnUpdate;
+    FProfile.AttachProfile;
+    CompleteRead([75]);
+    AssertEquals(Ord(lbgpsDetached), Ord(FProfile.State));
+    AssertEquals(3, FBackendObject.CommandCount);
+  finally
+    FProfile.OnUpdated := nil;
+    Observer.Free;
+  end;
+end;
+
+procedure TLazBleBatteryTest.ReattachFromLevelDoesNotContinuePreviousAttach;
+var
+  Observer: TBatteryObserver;
+begin
+  Observer := TBatteryObserver.Create;
+  try
+    FProfile.OnLevelChanged := @Observer.ReattachOnLevel;
+    FProfile.AttachProfile;
+    CompleteRead([75]);
+    AssertEquals(Ord(lbckRead), Ord(FBackendObject.Commands[3].Kind));
+    AssertEquals(4, FBackendObject.CommandCount);
+    CompleteRead([50]); CompleteSubscription(41);
+    AssertTrue(FProfile.Ready);
+    AssertEquals(50, FProfile.LevelPercent);
+  finally
+    Observer.Free;
+  end;
+end;
+
+procedure TLazBleBatteryTest.OldCompletionCannotChangeReattachedProfile;
+var
+  OldId: TBleOperationId;
+begin
+  FProfile.AttachProfile;
+  OldId := FBackendObject.OperationIds[FBackendObject.CommandCount - 1];
+  FProfile.DetachProfile;
+  FProfile.AttachProfile;
+  EmitEvent(lbekReadResult, OldId, InvalidBleSubscriptionId, [99]);
+  AssertTrue(FBackendObject.CompleteOperation(OldId, lbekOperationSucceeded));
+  AssertEquals(UnknownBatteryLevel, FProfile.LevelPercent);
+  CompleteRead([50]); CompleteSubscription(41);
+  AssertEquals(50, FProfile.LevelPercent);
+end;
+
+procedure TLazBleBatteryTest.RfuBitsAreIgnoredWithoutLosingKnownFields;
+begin
+  PrepareExtension(BatteryEnergyStatusCharacteristicUuid);
+  CompleteRead([$81, 5, 0, $CC]); CompleteSubscription(43);
+  AssertTrue(FProfile.Ready);
+  AssertEquals(5.0, FProfile.Data.EnergyStatus.ExternalSourcePowerWatts.Value);
+  EmitEvent(lbekNotification, InvalidBleOperationId, 43, [$41, 6, 0]);
+  AssertEquals(6.0, FProfile.Data.EnergyStatus.ExternalSourcePowerWatts.Value);
+end;
+
+procedure TLazBleBatteryTest.Utf8RejectsSurrogatesAndOutOfRangeCodepoints;
+var
+  I: Integer;
+  Value: TBytes;
+begin
+  for I := 0 to 4 do
+  begin
+    SetUp;
+    PrepareExtension(BatteryManufacturerNameCharacteristicUuid, True);
+    CompleteRead([$41]); CompleteSubscription(43);
+    case I of
+      0: Value := TBytes.Create($ED, $A0, $80);
+      1: Value := TBytes.Create($F4, $90, $80, $80);
+      2: Value := TBytes.Create($E2, $82);
+      3: Value := TBytes.Create($80);
+      4: Value := TBytes.Create($E0, $80, $80);
+    end;
+    EmitEvent(lbekNotification, InvalidBleOperationId, 43, Value);
+    AssertEquals(Ord(lbgpsError), Ord(FProfile.State));
+    AssertEquals('A', FProfile.Data.ManufacturerName.Value);
+  end;
+end;
+
+procedure TLazBleBatteryTest.ReservedAndNegativeEnergyAreRejected;
+var
+  I: Integer;
+begin
+  for I := 0 to 1 do
+  begin
+    SetUp;
+    PrepareExtension(BatteryEnergyStatusCharacteristicUuid);
+    if I = 0 then CompleteRead([1, 1, 8])
+    else CompleteRead([1, $FF, $0F]);
+    AssertEquals(Ord(lbgpsError), Ord(FProfile.State));
+    AssertFalse(FProfile.Data.EnergyStatus.HasValue);
+  end;
+end;
+
+procedure TLazBleBatteryTest.ReturnedStringsAreIndependentSnapshots;
+var
+  Snapshot: TBleBatteryData;
+begin
+  PrepareExtension(BatteryManufacturerNameCharacteristicUuid, True);
+  CompleteRead([$41]); CompleteSubscription(43);
+  Snapshot := FProfile.Data;
+  Snapshot.ManufacturerName.Value[1] := 'X';
+  AssertEquals('A', FProfile.Data.ManufacturerName.Value);
+  EmitEvent(lbekNotification, InvalidBleOperationId, 43, [$42]);
+  AssertEquals('X', Snapshot.ManufacturerName.Value);
+end;
+
+procedure TLazBleBatteryTest.DetachFromAttachingDoesNotStartReads;
+var
+  Observer: TBatteryObserver;
+begin
+  Observer := TBatteryObserver.Create;
+  try
+    FProfile.OnStateChanged := @Observer.DetachOnAttaching;
+    FProfile.AttachProfile;
+    AssertEquals(Ord(lbgpsDetached), Ord(FProfile.State));
+    AssertEquals(2, FBackendObject.CommandCount);
+  finally
+    FProfile.OnStateChanged := nil;
+    Observer.Free;
+  end;
+end;
+
+procedure TLazBleBatteryTest.MissingReadAndWrongSubscriptionPropertiesFailLocally;
+begin
+  FServices[0].Characteristics[0].CanRead := False;
+  CreateFixture;
+  FProfile.AttachProfile;
+  AssertEquals(LazBleErrorGattPropertyNotSupported, FProfile.ErrorCode);
+  AssertEquals(2, FBackendObject.CommandCount);
+  SetUp;
+  AddCharacteristic(BatteryManufacturerNameCharacteristicUuid, True, False);
+  CreateFixture;
+  FProfile.AttachProfile;
+  AssertEquals(LazBleErrorGattPropertyNotSupported, FProfile.ErrorCode);
+  AssertEquals(2, FBackendObject.CommandCount);
+end;
+
+procedure TLazBleBatteryTest.ExtendedSubscriptionFailureKeepsNativeError;
+var
+  Id: TBleOperationId;
+begin
+  PrepareExtension(BatteryEnergyStatusCharacteristicUuid);
+  CompleteRead([1, 5, 0]);
+  Id := FBackendObject.OperationIds[FBackendObject.CommandCount - 1];
+  AssertTrue(FBackendObject.CompleteOperation(Id, lbekOperationFailed, 0, ''));
+  AssertEquals(Ord(lbgpsError), Ord(FProfile.State));
+  AssertEquals(0, FProfile.ErrorCode);
+  AssertTrue(Pos('Battery Energy Status', FProfile.ErrorMessage) > 0);
 end;
 
 initialization

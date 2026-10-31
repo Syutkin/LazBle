@@ -529,7 +529,7 @@ end;
 function TBleBatteryProfile.DiscoverCharacteristics: Boolean;
 var
   Kind: TBleBatteryCharacteristic;
-  Characteristic: TLazBleGattCharacteristic;
+  Characteristic, Candidate: TLazBleGattCharacteristic;
   Service: TLazBleGattService;
   Count: Integer;
 begin
@@ -544,6 +544,17 @@ begin
   end;
   for Kind in TBleBatteryCharacteristic do
   begin
+    Count := 0;
+    for Service in Session.Services do
+      if SameText(UTF8Encode(Service.Uuid), BatteryServiceUuid) then
+        for Candidate in Service.Characteristics do
+          if SameText(UTF8Encode(Candidate.Uuid), CharacteristicUuids[Kind]) then Inc(Count);
+    if Count > 1 then
+    begin
+      SetProfileError(CharacteristicNames[Kind] + ': ambiguous characteristic instance',
+        LazBleErrorInvalidProfileData);
+      Exit;
+    end;
     if not Session.TryGetCharacteristic(BatteryServiceUuid,
       CharacteristicUuids[Kind], Characteristic) then Continue;
     Include(FAvailable, Kind);
@@ -555,7 +566,8 @@ begin
           bbcManufacturerName, bbcModelNumber, bbcSerialNumber]) and
         not Characteristic.CanIndicate) then
     begin
-      SetProfileError(CharacteristicNames[Kind] + ': missing required GATT property');
+      SetProfileError(CharacteristicNames[Kind] + ': missing required GATT property',
+        LazBleErrorGattPropertyNotSupported);
       Exit;
     end;
     if (Kind <> bbcLevel) and Characteristic.CanIndicate then
@@ -564,7 +576,7 @@ begin
       FModes[Kind] := lbsmNotify;
   end;
   if not (bbcLevel in FAvailable) then
-    SetProfileError('Battery Level is missing')
+    SetProfileError('Battery Level is missing', LazBleErrorGattNotFound)
   else if ((FAvailable * [bbcCriticalStatus, bbcEnergyStatus, bbcTimeStatus,
       bbcHealthStatus, bbcInformation, bbcServiceDate, bbcSerialNumber]) <> []) and
     not (bbcLevelStatus in FAvailable) then
@@ -987,6 +999,7 @@ end;
 
 procedure TBleBatteryProfile.DoAttach;
 begin
+  if CurrentState <> lbgpsAttaching then Exit;
   Inc(FEpoch);
   FData := Default(TBleBatteryData);
   FRefreshNeeded := False;
