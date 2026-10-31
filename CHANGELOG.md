@@ -12,6 +12,8 @@ GATT descriptor and indication support, and an expanded Battery profile.
 - Process-wide runtime path configuration through `TLazBle.LibraryPath`.
 - Battery Service 1.1 status, energy, time, health, and identity data through
   `TBleBatteryProfile.Data`, with `OnUpdated` and explicit `RefreshAsync`.
+- Automatic splitting of `TBleByteChannel` sends into connection-sized writes,
+  preserving send order with one operation per buffer.
 
 ### Changed
 

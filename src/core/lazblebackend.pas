@@ -18,6 +18,8 @@ type
     ErrorMessage: string;
     Value: TBytes;
     Services: TLazBleGattServices;
+    { Payload bytes per ordinary write, reported with service discovery. }
+    MaxWriteSize: Word;
     ScanResults: TBleDeviceInfos;
     SubscriptionId: TBleSubscriptionId;
     Availability: TBleAvailability;

@@ -50,6 +50,7 @@ type
     ErrorCode: Integer;
     ErrorMessage: string;
     Services: TLazBleGattServices;
+    MaxWriteSize: Word;
   end;
 
   TFakeLazBleOperation = record
@@ -315,6 +316,7 @@ begin
       begin
         Value := AEvent.Value;
         Services := AEvent.Services;
+        MaxWriteSize := AEvent.MaxWriteSize;
         SubscriptionId := AEvent.SubscriptionId;
         if AEvent.Available then Availability := lbaAvailable else Availability := lbaUnavailable;
         BackendName := AEvent.BackendName;

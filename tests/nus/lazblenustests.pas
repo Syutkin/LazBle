@@ -81,6 +81,7 @@ var
 begin
   BackendEvent := Default(TLazBleBackendEvent);
   BackendEvent.Kind := lbekServicesDiscovered;
+  BackendEvent.MaxWriteSize := 20;
   BackendEvent.OperationId := AOperationId;
   BackendEvent.DeviceId := FSession.DeviceId;
   BackendEvent.Generation := FSession.Generation;

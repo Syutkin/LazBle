@@ -5,7 +5,7 @@ unit LazBleByteChannel;
 interface
 
 uses
-  SysUtils,
+  Classes, SysUtils,
   LazBleTypes,
   LazBleOperation,
   LazBleGattOperation,
@@ -36,6 +36,11 @@ type
     FSubscription: IBleSubscription;
     FDetachOperation: IBleGattOperation;
     FOnData: TLazBleByteChannelDataEvent;
+    FSends: TInterfaceList;
+    FStoppingSends: Boolean;
+    procedure StartNextSend;
+    procedure SendFinished(Sender: TObject);
+    procedure StopSending(const AForce: Boolean);
     function GetSubscription: IBleSubscription;
     function GetState: TLazBleByteChannelState;
     function GetReady: Boolean;
@@ -53,7 +58,9 @@ type
     function Attach: IBleSubscription;
     { Stop notifications and report the result through an operation. }
     function Detach: IBleGattOperation;
-    { Write bytes to the configured characteristic using WriteMode. }
+    { Send an owned byte snapshot in sequential connection-sized writes.
+      Sends do not interleave. Failure/cancellation stops the remaining bytes;
+      completed writes cannot be rolled back. Empty sends succeed locally. }
     function SendAsync(const AValue: TBytes): IBleGattOperation;
     property ServiceUuid: string read FServiceUuid;
     property WriteCharacteristicUuid: string read FWriteCharacteristicUuid;
@@ -75,6 +82,103 @@ type
       const AErrorMessage: string);
   end;
 
+  TBleByteChannelSend = class(TBleGattOperation)
+  private
+    FChannel: TBleByteChannel;
+    FData: TBytes;
+    FOffset: SizeInt;
+    FCurrent: IBleGattOperation;
+    procedure CancelSend(Sender: TObject);
+    procedure ChunkCompleted(Sender: TObject);
+  public
+    constructor Create(AChannel: TBleByteChannel; const AData: TBytes);
+    procedure Start;
+    procedure Abort;
+  end;
+
+constructor TBleByteChannelSend.Create(AChannel: TBleByteChannel;
+  const AData: TBytes);
+begin
+  inherited CreateRequest(lbckWrite, @CancelSend, AChannel.FSession.Generation);
+  FChannel := AChannel;
+  FData := Copy(AData);
+  OnFinishing := @AChannel.SendFinished;
+end;
+
+procedure TBleByteChannelSend.Start;
+var Count: SizeInt; KeepAlive: IBleGattOperation;
+begin
+  KeepAlive := Self;
+  if (State <> lbopPending) or Assigned(FCurrent) then Exit;
+  if CancelRequested then
+  begin
+    Complete(lbopCancelled);
+    Exit;
+  end;
+  if (FChannel.FSession.Generation <> OperationGeneration) or
+    not FChannel.Ready then
+  begin
+    Complete(lbopFailed, LazBleErrorDeviceDisconnected,
+      'BLE byte channel connection ended');
+    Exit;
+  end;
+  if FOffset = Length(FData) then
+  begin
+    Complete(lbopSucceeded);
+    Exit;
+  end;
+  Count := FChannel.FSession.MaxWriteSize;
+  if Count = 0 then
+  begin
+    Complete(lbopFailed, LazBleErrorInvalidNativeData,
+      'BLE write payload size is unavailable');
+    Exit;
+  end;
+  if Count > Length(FData) - FOffset then Count := Length(FData) - FOffset;
+  FCurrent := FChannel.FSession.WriteAsync(FChannel.FServiceUuid,
+    FChannel.FWriteCharacteristicUuid, Copy(FData, FOffset, Count),
+    FChannel.FWriteMode);
+  Inc(FOffset, Count);
+  FCurrent.OnCompleted := @ChunkCompleted;
+end;
+
+procedure TBleByteChannelSend.ChunkCompleted(Sender: TObject);
+var Current, KeepAlive: IBleGattOperation;
+begin
+  KeepAlive := Self;
+  Current := FCurrent;
+  FCurrent := nil;
+  Current.OnCompleted := nil;
+  if Current.State <> lbopSucceeded then
+    Complete(Current.State, Current.ErrorCode, Current.ErrorMessage)
+  else if FOffset = Length(FData) then
+    Complete(lbopSucceeded) { an in-flight final write retains its outcome }
+  else
+    Start;
+end;
+
+procedure TBleByteChannelSend.CancelSend(Sender: TObject);
+var KeepAlive: IBleGattOperation;
+begin
+  KeepAlive := Self;
+  if Assigned(FCurrent) then FCurrent.Cancel
+  else Complete(lbopCancelled);
+end;
+
+procedure TBleByteChannelSend.Abort;
+var Current, KeepAlive: IBleGattOperation;
+begin
+  KeepAlive := Self;
+  Current := FCurrent;
+  FCurrent := nil;
+  if Assigned(Current) then
+  begin
+    Current.OnCompleted := nil;
+    Current.Cancel;
+  end;
+  Complete(lbopCancelled);
+end;
+
 constructor TBleGattOperationAccess.CreateTerminal(
   const AState: TLazBleOperationState; const AErrorMessage: string);
 begin
@@ -93,11 +197,14 @@ begin
   FWriteCharacteristicUuid := AWriteCharacteristicUuid;
   FNotifyCharacteristicUuid := ANotifyCharacteristicUuid;
   FWriteMode := AWriteMode;
+  FSends := TInterfaceList.Create;
 end;
 
 destructor TBleByteChannel.Destroy;
 begin
   Detach;
+  StopSending(True);
+  FSends.Free;
   SetOnData(nil);
   FSession := nil;
   FSubscription := nil;
@@ -187,6 +294,7 @@ var
   CurrentSubscription: IBleSubscription;
 begin
   LazBleRequireMainThread;
+  StopSending(False);
   Result := FDetachOperation;
   CurrentSubscription := FSubscription;
   if Assigned(Result) then
@@ -203,13 +311,50 @@ begin
 end;
 
 function TBleByteChannel.SendAsync(const AValue: TBytes): IBleGattOperation;
+var Operation: TBleByteChannelSend;
 begin
   LazBleRequireMainThread;
-  if not Ready or not Assigned(FSession) then
+  if FStoppingSends or not Ready or not Assigned(FSession) then
     Exit(TBleGattOperationAccess.CreateTerminal(lbopFailed,
       'BLE byte channel is not ready'));
-  Result := FSession.WriteAsync(FServiceUuid, FWriteCharacteristicUuid,
-    AValue, FWriteMode);
+  Operation := TBleByteChannelSend.Create(Self, AValue);
+  Result := Operation;
+  FSends.Add(Result);
+  StartNextSend;
+end;
+
+procedure TBleByteChannel.StartNextSend;
+var Operation: IBleGattOperation;
+begin
+  if FStoppingSends or (FSends.Count = 0) then Exit;
+  Operation := FSends[0] as IBleGattOperation;
+  (Operation as TBleByteChannelSend).Start;
+end;
+
+procedure TBleByteChannel.SendFinished(Sender: TObject);
+var Operation: TBleByteChannelSend;
+begin
+  Operation := TBleByteChannelSend(Sender);
+  Operation.FChannel := nil;
+  Operation.FData := nil;
+  FSends.Remove(Operation as IBleGattOperation);
+  StartNextSend;
+end;
+
+procedure TBleByteChannel.StopSending(const AForce: Boolean);
+var Snapshot: array of IBleGattOperation; I: Integer;
+begin
+  if FStoppingSends or (FSends = nil) then Exit;
+  SetLength(Snapshot, FSends.Count);
+  for I := 0 to High(Snapshot) do Snapshot[I] := FSends[I] as IBleGattOperation;
+  FStoppingSends := True;
+  try
+    for I := 0 to High(Snapshot) do
+      if AForce then (Snapshot[I] as TBleByteChannelSend).Abort
+      else Snapshot[I].Cancel;
+  finally
+    FStoppingSends := False;
+  end;
 end;
 
 end.

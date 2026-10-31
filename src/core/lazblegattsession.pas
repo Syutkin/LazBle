@@ -57,6 +57,7 @@ type
     FOperations: TList;
     FSubscriptions: TList;
     FServices: TLazBleGattServices;
+    FMaxWriteSize: Word;
     FConnectionEstablished, FLastOperationCancelled, FLastOperationFailed: Boolean;
     FErrorCode: Integer;
     FErrorMessage: string;
@@ -66,6 +67,7 @@ type
     function GetState: TLazBleSessionState;
     function GetGeneration: QWord;
     function GetServices: TLazBleGattServices;
+    function GetMaxWriteSize: Word;
     function GetErrorCode: Integer;
     function GetErrorMessage: string;
     function GetOnStateChanged: TLazBleSessionStateChangedEvent;
@@ -124,6 +126,8 @@ type
     property Generation: QWord read GetGeneration;
     property State: TLazBleSessionState read GetState;
     property Services: TLazBleGattServices read GetServices;
+    { Maximum ordinary write payload; zero until discovery or after link loss. }
+    property MaxWriteSize: Word read GetMaxWriteSize;
     property LastOperationFailed: Boolean read FLastOperationFailed;
     property LastOperationCancelled: Boolean read FLastOperationCancelled;
     property ErrorCode: Integer read GetErrorCode;
@@ -315,6 +319,7 @@ begin
       if (S.State = lbssDiscovering) and S.FConnectionEstablished then
       begin
         S.FServices := R.Services;
+        S.FMaxWriteSize := R.MaxWriteSize;
         S.SetState(lbssConnected);
         if (S.State = lbssConnected) and (S.Generation = FGeneration) then
         begin
@@ -434,6 +439,12 @@ function TBleGattSession.GetServices: TLazBleGattServices;
 begin
   LazBleRequireMainThread;
   Result := FServices;
+end;
+
+function TBleGattSession.GetMaxWriteSize: Word;
+begin
+  LazBleRequireMainThread;
+  Result := FMaxWriteSize;
 end;
 
 function TBleGattSession.HasService(const AServiceUuid: string): Boolean;
@@ -828,6 +839,7 @@ var
 begin
   LazBleRequireMainThread;
   FServices := nil;
+  FMaxWriteSize := 0;
   SetLength(Operations,FOperations.Count); SetLength(Instances,FOperations.Count);
   for I := 0 to FOperations.Count - 1 do
   begin
@@ -884,6 +896,7 @@ begin
   else
   begin
     FServices := nil;
+    FMaxWriteSize := 0;
     FErrorCode := 0; FErrorMessage := '';
     FLastOperationFailed := False; FLastOperationCancelled := False;
     FConnectionEstablished := False;

@@ -475,6 +475,8 @@ begin
     lbckDiscoverServices:
       begin
         Task.ResultData.Services := Task.Peer.Native.Services;
+        { SimpleBLE Mtu already excludes ATT overhead. }
+        Task.ResultData.MaxWriteSize := Task.Peer.Native.Mtu;
       end;
     lbckStartScan:
       if not Worker.FStopScan then Task.Adapter.ScanStart

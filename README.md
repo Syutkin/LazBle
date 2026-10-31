@@ -123,6 +123,12 @@ first in their uses clause.
 
 ## Console usage
 
+`TBleByteChannel.SendAsync` splits byte buffers into sequential writes
+that fit the connection's payload limit. Each send returns one operation, and
+consecutive sends do not interleave. Failure or cancellation stops the remaining
+bytes; already transmitted bytes cannot be recalled. Message framing belongs to
+the application protocol.
+
 This program scans, connects to a NUS device, waits for profile readiness,
 sends one byte, and completes shutdown before releasing the facade. Pass the
 device ID as its command-line argument.

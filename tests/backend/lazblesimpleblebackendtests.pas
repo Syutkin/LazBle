@@ -105,6 +105,7 @@ type
     procedure TwoSubscriptionsKeepTheirOwnIdentity;
     procedure AddressedAvailabilityHasOneRecipient;
     procedure AddressedReadReturnsPayloadWithStatus;
+    procedure DiscoveryReportsWritePayloadLimit;
     procedure RaisingCompletionDoesNotStrandShutdown;
     procedure BackendReleasesCompletedRecipient;
     procedure ActiveFacadeReleaseDrainsNativeCleanup;
@@ -306,6 +307,21 @@ begin
   AssertEquals(1, Observer.Count);
   AssertEquals(Ord(lbrsSucceeded), Ord(Observer.ResultData.Status));
   AssertTrue(Length(Observer.ResultData.Value) > 0);
+end;
+
+procedure TLazBleSimpleBleBackendTest.DiscoveryReportsWritePayloadLimit;
+var Target: ILazBleRequestCompletion; Observer: TNativeRequestCompletion;
+  Deadline: QWord;
+begin
+  Connect;
+  Observer := TNativeRequestCompletion.Create; Target := Observer;
+  FBackend.Submit(Request(lbckDiscoverServices), Target);
+  Deadline := GetTickCount64 + 8000;
+  while (Observer.Count = 0) and (GetTickCount64 < Deadline) do CheckSynchronize(10);
+  AssertEquals(1, Observer.Count);
+  AssertEquals(Ord(lbrsSucceeded), Ord(Observer.ResultData.Status));
+  AssertTrue('Discovery must expose the native write payload limit',
+    Observer.ResultData.MaxWriteSize > 0);
 end;
 
 const
