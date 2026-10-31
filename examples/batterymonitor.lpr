@@ -14,6 +14,7 @@ uses
   LazBleClient,
   LazBleSync,
   LazBleBattery,
+  LazBleGattReader,
   BleExampleUtils;
 
 type
@@ -42,15 +43,15 @@ begin
   StopOnException := True;
 end;
 
-procedure PrintValue(const AName: string; const AValue: TBleBatteryValue);
+procedure PrintValue(const AName: string; const AValue: TBleGattValue);
 const
-  StateNames: array[TBleBatteryValueState] of string = (
+  StateNames: array[TBleGattValueState] of string = (
     'absent', 'finite', 'unknown', 'greater than', 'less than',
     'NaN', 'not at resolution', '+infinity', '-infinity');
 begin
-  if AValue.State = bbvsAbsent then Exit;
-  if AValue.State = bbvsFinite then WriteLn('  ', AName, ': ', AValue.Value:0:3)
-  else if AValue.State in [bbvsGreaterThan, bbvsLessThan] then
+  if AValue.State = lgvsAbsent then Exit;
+  if AValue.State = lgvsFinite then WriteLn('  ', AName, ': ', AValue.Value:0:3)
+  else if AValue.State in [lgvsGreaterThan, lgvsLessThan] then
     WriteLn('  ', AName, ': ', StateNames[AValue.State], ' ', AValue.Value:0:0)
   else WriteLn('  ', AName, ': ', StateNames[AValue.State]);
 end;

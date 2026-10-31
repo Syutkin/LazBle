@@ -19,7 +19,7 @@
         <PackageName Value="LazBle"/>
       </Item1>
     </RequiredPackages>
-    <Units Count="16">
+    <Units Count="17">
       <Unit0>
         <Filename Value="lazbletests.lpr"/>
         <IsPartOfProject Value="True"/>
@@ -99,6 +99,11 @@
         <IsPartOfProject Value="True"/>
         <UnitName Value="LazBleContractTests"/>
       </Unit15>
+      <Unit16>
+        <Filename Value="core\lazblegattreadertests.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="LazBleGattReaderTests"/>
+      </Unit16>
     </Units>
   </ProjectOptions>
   <CompilerOptions>

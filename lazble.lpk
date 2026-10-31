@@ -72,6 +72,10 @@
         <UnitName Value="LazBleBattery"/>
       </Item>
       <Item>
+        <Filename Value="src\profiles\lazblegattreader.pas"/>
+        <UnitName Value="LazBleGattReader"/>
+      </Item>
+      <Item>
         <Filename Value="src\backends\lazblesimpleblebackend.pas"/>
         <UnitName Value="LazBleSimpleBleBackend"/>
       </Item>

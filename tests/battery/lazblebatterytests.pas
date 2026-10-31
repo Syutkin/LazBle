@@ -18,6 +18,7 @@ uses
   LazBleByteChannel,
   LazBleNus,
   LazBleBattery,
+  LazBleGattReader,
   FakeLazBleBackend,
   TestLazBleAccess;
 
@@ -662,7 +663,7 @@ begin
   AssertEquals(0.5, FProfile.Data.EnergyStatus.AvailableEnergyKWh.Value, 0.00001);
   AssertEquals(1.25, FProfile.Data.EnergyStatus.AvailableCapacityKWh.Value, 0.00001);
   AssertEquals(-12.3, FProfile.Data.EnergyStatus.ChargeRateWatts.Value, 0.00001);
-  AssertEquals(Ord(bbvsFinite), Ord(FProfile.Data.EnergyStatus.LastChargeEnergyKWh.State));
+  AssertEquals(Ord(lgvsFinite), Ord(FProfile.Data.EnergyStatus.LastChargeEnergyKWh.State));
   AssertEquals(0.0, FProfile.Data.EnergyStatus.LastChargeEnergyKWh.Value);
 end;
 
@@ -671,13 +672,13 @@ begin
   PrepareExtension(BatteryEnergyStatusCharacteristicUuid);
   CompleteRead([$3F, $FE, 7, $FF, 7, 0, 8, $FE, 7, 2, 8, $FF, 7]);
   CompleteSubscription(43);
-  AssertEquals(Ord(bbvsPositiveInfinity), Ord(FProfile.Data.EnergyStatus.ExternalSourcePowerWatts.State));
-  AssertEquals(Ord(bbvsNaN), Ord(FProfile.Data.EnergyStatus.PresentVoltageVolts.State));
-  AssertEquals(Ord(bbvsNotAtResolution), Ord(FProfile.Data.EnergyStatus.AvailableEnergyKWh.State));
-  AssertEquals(Ord(bbvsNegativeInfinity), Ord(FProfile.Data.EnergyStatus.ChargeRateWatts.State));
+  AssertEquals(Ord(lgvsPositiveInfinity), Ord(FProfile.Data.EnergyStatus.ExternalSourcePowerWatts.State));
+  AssertEquals(Ord(lgvsNaN), Ord(FProfile.Data.EnergyStatus.PresentVoltageVolts.State));
+  AssertEquals(Ord(lgvsNotAtResolution), Ord(FProfile.Data.EnergyStatus.AvailableEnergyKWh.State));
+  AssertEquals(Ord(lgvsNegativeInfinity), Ord(FProfile.Data.EnergyStatus.ChargeRateWatts.State));
   EmitEvent(lbekNotification, InvalidBleOperationId, 43, [1, 10, 0]);
   AssertEquals(10.0, FProfile.Data.EnergyStatus.ExternalSourcePowerWatts.Value);
-  AssertEquals(Ord(bbvsNaN), Ord(FProfile.Data.EnergyStatus.PresentVoltageVolts.State));
+  AssertEquals(Ord(lgvsNaN), Ord(FProfile.Data.EnergyStatus.PresentVoltageVolts.State));
 end;
 
 procedure TLazBleBatteryTest.TimeStatusPreservesUnknownAndSaturation;
@@ -685,8 +686,8 @@ begin
   PrepareExtension(BatteryTimeStatusCharacteristicUuid);
   CompleteRead([3, $FF, $FF, $FF, $FE, $FF, $FF, 90, 0, 0]);
   CompleteSubscription(43);
-  AssertEquals(Ord(bbvsUnknown), Ord(FProfile.Data.TimeStatus.UntilDischargedMinutes.State));
-  AssertEquals(Ord(bbvsGreaterThan), Ord(FProfile.Data.TimeStatus.StandbyDischargeMinutes.State));
+  AssertEquals(Ord(lgvsUnknown), Ord(FProfile.Data.TimeStatus.UntilDischargedMinutes.State));
+  AssertEquals(Ord(lgvsGreaterThan), Ord(FProfile.Data.TimeStatus.StandbyDischargeMinutes.State));
   AssertEquals($FFFFFD, FProfile.Data.TimeStatus.StandbyDischargeMinutes.Value);
   AssertEquals(90.0, FProfile.Data.TimeStatus.UntilRechargedMinutes.Value);
   EmitEvent(lbekNotification, InvalidBleOperationId, 43, [0, 0, 0, 0]);
@@ -702,7 +703,7 @@ begin
   EmitEvent(lbekNotification, InvalidBleOperationId, 43, [3, 10, 0, 5]);
   AssertEquals(Ord(lbgpsError), Ord(FProfile.State));
   AssertEquals(5.0, FProfile.Data.EnergyStatus.ExternalSourcePowerWatts.Value);
-  AssertEquals(Ord(bbvsAbsent), Ord(FProfile.Data.EnergyStatus.PresentVoltageVolts.State));
+  AssertEquals(Ord(lgvsAbsent), Ord(FProfile.Data.EnergyStatus.PresentVoltageVolts.State));
 end;
 
 procedure TLazBleBatteryTest.HealthStatusDecodesAllFields;
@@ -716,7 +717,7 @@ begin
   AssertEquals(-10.0, FProfile.Data.HealthStatus.TemperatureCelsius.Value);
   AssertEquals(7.0, FProfile.Data.HealthStatus.DeepDischargeCount.Value);
   EmitEvent(lbekNotification, InvalidBleOperationId, 43, [4, $7F]);
-  AssertEquals(Ord(bbvsGreaterThan), Ord(FProfile.Data.HealthStatus.TemperatureCelsius.State));
+  AssertEquals(Ord(lgvsGreaterThan), Ord(FProfile.Data.HealthStatus.TemperatureCelsius.State));
   AssertEquals(126.0, FProfile.Data.HealthStatus.TemperatureCelsius.Value);
   AssertEquals(85.0, FProfile.Data.HealthStatus.SummaryPercent.Value);
 end;
@@ -737,10 +738,10 @@ begin
   CompleteSubscription(44);
   AssertTrue(FProfile.Ready);
   AssertEquals(1000.0, FProfile.Data.HealthInformation.DesignedCycleCount.Value);
-  AssertEquals(Ord(bbvsLessThan),
+  AssertEquals(Ord(lgvsLessThan),
     Ord(FProfile.Data.HealthInformation.MinTemperatureCelsius.State));
   AssertEquals(-127.0, FProfile.Data.HealthInformation.MinTemperatureCelsius.Value);
-  AssertEquals(Ord(bbvsGreaterThan),
+  AssertEquals(Ord(lgvsGreaterThan),
     Ord(FProfile.Data.HealthInformation.MaxTemperatureCelsius.State));
 end;
 
@@ -787,7 +788,7 @@ procedure TLazBleBatteryTest.ServiceDatePreservesUnknown;
 begin
   PrepareExtension(EstimatedServiceDateCharacteristicUuid);
   CompleteRead([0, 0, 0]); CompleteSubscription(43);
-  AssertEquals(Ord(bbvsUnknown), Ord(FProfile.Data.ServiceDaysSince1970.State));
+  AssertEquals(Ord(lgvsUnknown), Ord(FProfile.Data.ServiceDaysSince1970.State));
   EmitEvent(lbekNotification, InvalidBleOperationId, 43, [1, 0, 0]);
   AssertEquals(1.0, FProfile.Data.ServiceDaysSince1970.Value);
   EmitEvent(lbekNotification, InvalidBleOperationId, 43, [$FF, $FF, $FF]);
@@ -835,7 +836,7 @@ begin
   AssertFalse(FProfile.Data.LevelStatus.HasLevelPercent);
   AssertEquals(UnknownBatteryLevel, FProfile.LevelPercent);
   AssertFalse(FProfile.Data.ManufacturerName.HasValue);
-  AssertEquals(Ord(bbvsAbsent), Ord(FProfile.Data.EnergyStatus.AvailableCapacityKWh.State));
+  AssertEquals(Ord(lgvsAbsent), Ord(FProfile.Data.EnergyStatus.AvailableCapacityKWh.State));
   AssertEquals(5.0, FProfile.Data.EnergyStatus.ExternalSourcePowerWatts.Value);
   EmitEvent(lbekNotification, InvalidBleOperationId, 44, [$42]);
   AssertFalse(FProfile.Data.ManufacturerName.HasValue);
@@ -848,7 +849,7 @@ begin
   AssertTrue(FProfile.Ready);
   AssertEquals(55, FProfile.LevelPercent);
   AssertEquals('C', FProfile.Data.ManufacturerName.Value);
-  AssertEquals(Ord(bbvsAbsent), Ord(FProfile.Data.EnergyStatus.AvailableCapacityKWh.State));
+  AssertEquals(Ord(lgvsAbsent), Ord(FProfile.Data.EnergyStatus.AvailableCapacityKWh.State));
 end;
 
 procedure TLazBleBatteryTest.AbsentBatteryStillConfiguresSubscriptions;
@@ -1192,15 +1193,15 @@ begin
   CompleteRead([2, 60, 0, 0, 30, 0, 0]); CompleteSubscription(43);
   AssertEquals(30.0, FProfile.Data.TimeStatus.UntilRechargedMinutes.Value);
   EmitEvent(lbekNotification, InvalidBleOperationId, 42, [0, $41, 0]);
-  AssertEquals(Ord(bbvsAbsent), Ord(FProfile.Data.TimeStatus.UntilRechargedMinutes.State));
+  AssertEquals(Ord(lgvsAbsent), Ord(FProfile.Data.TimeStatus.UntilRechargedMinutes.State));
   EmitEvent(lbekNotification, InvalidBleOperationId, 43, [0, 50, 0, 0]);
-  AssertEquals(Ord(bbvsAbsent), Ord(FProfile.Data.TimeStatus.UntilRechargedMinutes.State));
+  AssertEquals(Ord(lgvsAbsent), Ord(FProfile.Data.TimeStatus.UntilRechargedMinutes.State));
   SetUp;
   PrepareAll;
   ActivateAll;
   EmitEvent(lbekNotification, InvalidBleOperationId,
     100 + Ord(bbcInformation), [0, 0, 1]);
-  AssertEquals(Ord(bbvsAbsent), Ord(FProfile.Data.TimeStatus.UntilRechargedMinutes.State));
+  AssertEquals(Ord(lgvsAbsent), Ord(FProfile.Data.TimeStatus.UntilRechargedMinutes.State));
 end;
 
 initialization

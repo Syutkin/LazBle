@@ -16,6 +16,7 @@ uses
   LazBleReconnectTests,
   LazBleGattSessionTests,
   LazBleGattProfileTests,
+  LazBleGattReaderTests,
   LazBleByteChannelTests,
   LazBleNusTests,
   LazBleBatteryTests;

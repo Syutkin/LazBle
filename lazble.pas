@@ -11,7 +11,7 @@ uses
   LazBleTypes, LazBleBackend, LazBleOperation, LazBleGattOperation,
   LazBleGattSubscription, LazBleGattSession, LazBleGattProfile,
   LazBleByteChannel, LazBleClient, LazBleFacade, LazBleSync, LazBleNus,
-  LazBleBattery, LazBleSimpleBleBackend;
+  LazBleBattery, LazBleGattReader, LazBleSimpleBleBackend;
 
 implementation
 

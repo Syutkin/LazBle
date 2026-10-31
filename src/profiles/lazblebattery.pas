@@ -1,13 +1,12 @@
 unit LazBleBattery;
 
 {$mode objfpc}{$H+}
-{$modeswitch advancedrecords}
 
 interface
 
 uses
-  Classes, SysUtils, Math, LazBleTypes, LazBleBackend, LazBleOperation, LazBleGattOperation,
-  LazBleGattSubscription, LazBleGattSession, LazBleGattProfile;
+  Classes, SysUtils, LazBleTypes, LazBleBackend, LazBleOperation, LazBleGattOperation,
+  LazBleGattSubscription, LazBleGattSession, LazBleGattProfile, LazBleGattReader;
 
 const
   BatteryServiceUuid = '0000180F-0000-1000-8000-00805F9B34FB';
@@ -61,38 +60,29 @@ type
     CriticalPowerState, ImmediateServiceRequired: Boolean;
   end;
 
-  TBleBatteryValueState = (bbvsAbsent, bbvsFinite, bbvsUnknown,
-    bbvsGreaterThan, bbvsLessThan, bbvsNaN, bbvsNotAtResolution,
-    bbvsPositiveInfinity, bbvsNegativeInfinity);
-  { Value is meaningful for Finite, GreaterThan and LessThan; otherwise read State. }
-  TBleBatteryValue = record
-    State: TBleBatteryValueState;
-    Value: Double;
-  end;
-
   TBleBatteryEnergyStatus = record
     HasValue: Boolean;
-    ExternalSourcePowerWatts, PresentVoltageVolts: TBleBatteryValue;
-    AvailableEnergyKWh, AvailableCapacityKWh: TBleBatteryValue;
-    ChargeRateWatts, LastChargeEnergyKWh: TBleBatteryValue;
+    ExternalSourcePowerWatts, PresentVoltageVolts: TBleGattValue;
+    AvailableEnergyKWh, AvailableCapacityKWh: TBleGattValue;
+    ChargeRateWatts, LastChargeEnergyKWh: TBleGattValue;
   end;
 
   TBleBatteryTimeStatus = record
     HasValue: Boolean;
     UntilDischargedMinutes, StandbyDischargeMinutes,
-      UntilRechargedMinutes: TBleBatteryValue;
+      UntilRechargedMinutes: TBleGattValue;
   end;
 
   TBleBatteryHealthStatus = record
     HasValue: Boolean;
     SummaryPercent, CycleCount, TemperatureCelsius,
-      DeepDischargeCount: TBleBatteryValue;
+      DeepDischargeCount: TBleGattValue;
   end;
 
   TBleBatteryHealthInformation = record
     HasValue: Boolean;
     DesignedCycleCount, MinTemperatureCelsius,
-      MaxTemperatureCelsius: TBleBatteryValue;
+      MaxTemperatureCelsius: TBleGattValue;
   end;
 
   TBleBatteryChemistry = (bbchUnknown, bbchAlkaline, bbchLeadAcid,
@@ -103,9 +93,9 @@ type
 
   TBleBatteryInformation = record
     HasValue, Replaceable, Rechargeable: Boolean;
-    ManufactureDaysSince1970, ExpirationDaysSince1970: TBleBatteryValue;
+    ManufactureDaysSince1970, ExpirationDaysSince1970: TBleGattValue;
     DesignedCapacityKWh, LowEnergyKWh, CriticalEnergyKWh,
-      NominalVoltageVolts: TBleBatteryValue;
+      NominalVoltageVolts: TBleGattValue;
     HasChemistry: Boolean;
     Chemistry: TBleBatteryChemistry;
     HasAggregationGroup: Boolean;
@@ -126,7 +116,7 @@ type
     HealthStatus: TBleBatteryHealthStatus;
     HealthInformation: TBleBatteryHealthInformation;
     Information: TBleBatteryInformation;
-    ServiceDaysSince1970: TBleBatteryValue;
+    ServiceDaysSince1970: TBleGattValue;
     ManufacturerName, ModelNumber, SerialNumber: TBleBatteryString;
   end;
 
@@ -214,22 +204,6 @@ const
     'Manufacturer Name', 'Model Number', 'Serial Number');
 
 type
-  { Bounds-checked little-endian reads, without alignment or host-endian assumptions. }
-  TBatteryReader = record
-    Data: TBytes;
-    Position: SizeInt;
-    Valid: Boolean;
-    function UInt(const ABytes: Integer): Cardinal;
-    function Finished(const AFlags, AKnownFlags: Cardinal): Boolean;
-    function SFloat(const AAllowNegative: Boolean;
-      const AAllowZero: Boolean = True): TBleBatteryValue;
-    function TimeMinutes: TBleBatteryValue;
-    function UIntValue(const ABytes: Integer): TBleBatteryValue;
-    function Temperature: TBleBatteryValue;
-    function DateUTC: TBleBatteryValue;
-    function Utf8Text: UTF8String;
-  end;
-
   TBatteryRefreshOperation = class(TBleOperation)
   public
     constructor Create(const ACancel: TLazBleOperationCancelEvent);
@@ -237,179 +211,98 @@ type
       const ACode: Integer; const AMessage: string);
   end;
 
-function TBatteryReader.UInt(const ABytes: Integer): Cardinal;
-var
-  I: Integer;
+function BatteryValueFinished(const Reader: TBleGattReader;
+  const AFlags, AKnownFlags: Cardinal): Boolean;
 begin
-  Result := 0;
-  if not Valid or (Length(Data) - Position < ABytes) then
-  begin
-    Valid := False;
-    Exit;
-  end;
-  for I := 0 to ABytes - 1 do
-  begin
-    Result := Result or (Cardinal(Data[Position]) shl (8 * I));
-    Inc(Position);
-  end;
-end;
-
-function TBatteryReader.Finished(const AFlags, AKnownFlags: Cardinal): Boolean;
-begin
-  { New flags may append fields. RFU bits alone do not invalidate known fields. }
-  Result := Valid and ((Position = Length(Data)) or
+  { BAS may append fields under new flags. This is not a general reader policy. }
+  Result := Reader.Valid and (Reader.Finished or
     ((AFlags and not AKnownFlags) <> 0));
 end;
 
-function TBatteryReader.SFloat(const AAllowNegative: Boolean;
-  const AAllowZero: Boolean): TBleBatteryValue;
-var
-  Raw: Cardinal;
-  Mantissa, Exponent: Integer;
+function ReadNonnegativeSFloat(var Reader: TBleGattReader;
+  const AAllowZero: Boolean = True): TBleGattValue;
 begin
-  Result := Default(TBleBatteryValue);
-  Raw := UInt(2);
-  case Raw of
-    $07FE: Result.State := bbvsPositiveInfinity;
-    $0802: Result.State := bbvsNegativeInfinity;
-    $07FF: Result.State := bbvsNaN;
-    $0800: Result.State := bbvsNotAtResolution;
-    $0801: Valid := False;
-  else
-    Result.State := bbvsFinite;
-    Mantissa := Raw and $FFF;
-    if Mantissa >= $800 then Dec(Mantissa, $1000);
-    Exponent := Raw shr 12;
-    if Exponent >= 8 then Dec(Exponent, 16);
-    Result.Value := Mantissa * IntPower(10.0, Exponent);
-    if (not AAllowNegative and (Result.Value < 0)) or
-      (not AAllowZero and (Result.Value = 0)) then Valid := False;
-  end;
+  Result := Reader.SFloat;
+  if (Result.State = lgvsFinite) and ((Result.Value < 0) or
+    (not AAllowZero and (Result.Value = 0))) then Reader.Invalidate;
 end;
 
-function TBatteryReader.TimeMinutes: TBleBatteryValue;
+function ReadBatteryTime(var Reader: TBleGattReader): TBleGattValue;
 var
   Raw: Cardinal;
 begin
-  Result := Default(TBleBatteryValue);
-  Raw := UInt(3);
+  Result := Default(TBleGattValue);
+  Raw := Reader.UInt(3);
+  if not Reader.Valid then Exit;
   case Raw of
-    $FFFFFF: Result.State := bbvsUnknown;
+    $FFFFFF: Result.State := lgvsUnknown;
     $FFFFFE:
       begin
-        Result.State := bbvsGreaterThan;
+        Result.State := lgvsGreaterThan;
         Result.Value := $FFFFFD;
       end;
   else
-    Result.State := bbvsFinite;
+    Result.State := lgvsFinite;
     Result.Value := Raw;
   end;
 end;
 
-function TBatteryReader.UIntValue(const ABytes: Integer): TBleBatteryValue;
-begin
-  Result := Default(TBleBatteryValue);
-  Result.State := bbvsFinite;
-  Result.Value := UInt(ABytes);
-end;
-
-function TBatteryReader.Temperature: TBleBatteryValue;
+function ReadBatteryTemperature(var Reader: TBleGattReader): TBleGattValue;
 var
   Raw: Integer;
 begin
-  Result := Default(TBleBatteryValue);
-  Raw := UInt(1);
+  Result := Default(TBleGattValue);
+  Raw := Reader.UInt(1);
+  if not Reader.Valid then Exit;
   case Raw of
     $7F:
       begin
-        Result.State := bbvsGreaterThan;
+        Result.State := lgvsGreaterThan;
         Result.Value := 126;
       end;
     $80:
       begin
-        Result.State := bbvsLessThan;
+        Result.State := lgvsLessThan;
         Result.Value := -127;
       end;
   else
-    Result.State := bbvsFinite;
+    Result.State := lgvsFinite;
     if Raw >= $80 then Dec(Raw, $100);
     Result.Value := Raw;
   end;
 end;
 
-function TBatteryReader.DateUTC: TBleBatteryValue;
+function ReadBatteryDateUTC(var Reader: TBleGattReader): TBleGattValue;
 var
   Raw: Cardinal;
 begin
-  Result := Default(TBleBatteryValue);
-  Raw := UInt(3);
-  if Raw = 0 then Result.State := bbvsUnknown
-  else if Raw = $FFFFFF then Valid := False
+  Result := Default(TBleGattValue);
+  Raw := Reader.UInt(3);
+  if not Reader.Valid then Exit;
+  if Raw = 0 then Result.State := lgvsUnknown
+  else if Raw = $FFFFFF then Reader.Invalidate
   else
   begin
-    Result.State := bbvsFinite;
+    Result.State := lgvsFinite;
     Result.Value := Raw;
   end;
 end;
 
-function TBatteryReader.Utf8Text: UTF8String;
-var
-  I, J, Continuations: SizeInt;
-  First, Next: Byte;
-begin
-  Result := '';
-  I := 0;
-  while I < Length(Data) do
-  begin
-    First := Data[I];
-    if First <= $7F then Continuations := 0
-    else if (First >= $C2) and (First <= $DF) then Continuations := 1
-    else if (First >= $E0) and (First <= $EF) then Continuations := 2
-    else if (First >= $F0) and (First <= $F4) then Continuations := 3
-    else
-    begin
-      Valid := False;
-      Exit;
-    end;
-    if Length(Data) - I <= Continuations then
-    begin
-      Valid := False;
-      Exit;
-    end;
-    for J := 1 to Continuations do
-    begin
-      Next := Data[I + J];
-      if (Next < $80) or (Next > $BF) or
-        ((J = 1) and (((First = $E0) and (Next < $A0)) or
-          ((First = $ED) and (Next > $9F)) or
-          ((First = $F0) and (Next < $90)) or
-          ((First = $F4) and (Next > $8F)))) then
-      begin
-        Valid := False;
-        Exit;
-      end;
-    end;
-    Inc(I, Continuations + 1);
-  end;
-  if Length(Data) <> 0 then SetString(Result, PAnsiChar(@Data[0]), Length(Data));
-  Position := Length(Data);
-end;
-
 procedure InvalidateBatteryData(var ASnapshot: TBleBatteryData);
 var
-  ExternalPower: TBleBatteryValue;
+  ExternalPower: TBleGattValue;
 begin
   ASnapshot.LevelStatus.HasLevelPercent := False;
   ASnapshot.LevelStatus.LevelPercent := 0;
   ExternalPower := ASnapshot.EnergyStatus.ExternalSourcePowerWatts;
   ASnapshot.EnergyStatus := Default(TBleBatteryEnergyStatus);
   ASnapshot.EnergyStatus.ExternalSourcePowerWatts := ExternalPower;
-  ASnapshot.EnergyStatus.HasValue := ExternalPower.State <> bbvsAbsent;
+  ASnapshot.EnergyStatus.HasValue := ExternalPower.State <> lgvsAbsent;
   ASnapshot.TimeStatus := Default(TBleBatteryTimeStatus);
   ASnapshot.HealthStatus := Default(TBleBatteryHealthStatus);
   ASnapshot.HealthInformation := Default(TBleBatteryHealthInformation);
   ASnapshot.Information := Default(TBleBatteryInformation);
-  ASnapshot.ServiceDaysSince1970 := Default(TBleBatteryValue);
+  ASnapshot.ServiceDaysSince1970 := Default(TBleGattValue);
   ASnapshot.ManufacturerName := Default(TBleBatteryString);
   ASnapshot.ModelNumber := Default(TBleBatteryString);
   ASnapshot.SerialNumber := Default(TBleBatteryString);
@@ -590,7 +483,7 @@ end;
 function TBleBatteryProfile.ApplyValue(const AKind: TBleBatteryCharacteristic;
   const AValue: TBytes): Boolean;
 var
-  Reader: TBatteryReader;
+  Reader: TBleGattReader;
   Snapshot: TBleBatteryData;
   Flags, Power, Additional, RawChemistry: Cardinal;
   NewLevel: Integer;
@@ -598,9 +491,7 @@ var
   Inserted: Boolean;
   Fault: TBleBatteryChargingFault;
 begin
-  Reader := Default(TBatteryReader);
-  Reader.Data := AValue;
-  Reader.Valid := True;
+  Reader := TBleGattReader.Create(AValue);
   Snapshot := FData;
   NewLevel := FLevelPercent;
   Inserted := False;
@@ -609,7 +500,7 @@ begin
     bbcLevel:
       begin
         NewLevel := Reader.UInt(1);
-        if (NewLevel > 100) or not Reader.Finished(0, 0) then Exit;
+        if (NewLevel > 100) or not Reader.Finished then Exit;
       end;
     bbcLevelStatus:
       begin
@@ -660,7 +551,7 @@ begin
             HasAdditionalStatus := True;
           end;
         end;
-        if not Reader.Finished(Flags, 7) then Exit;
+        if not BatteryValueFinished(Reader, Flags, 7) then Exit;
       end;
     bbcCriticalStatus:
       begin
@@ -668,7 +559,7 @@ begin
         Snapshot.CriticalStatus.HasValue := True;
         Snapshot.CriticalStatus.CriticalPowerState := (Flags and 1) <> 0;
         Snapshot.CriticalStatus.ImmediateServiceRequired := (Flags and 2) <> 0;
-        if not Reader.Finished(0, 0) then Exit;
+        if not Reader.Finished then Exit;
       end;
     bbcEnergyStatus:
       begin
@@ -676,14 +567,14 @@ begin
         with Snapshot.EnergyStatus do
         begin
           HasValue := True;
-          if (Flags and 1) <> 0 then ExternalSourcePowerWatts := Reader.SFloat(False);
-          if (Flags and 2) <> 0 then PresentVoltageVolts := Reader.SFloat(True);
-          if (Flags and 4) <> 0 then AvailableEnergyKWh := Reader.SFloat(False);
-          if (Flags and 8) <> 0 then AvailableCapacityKWh := Reader.SFloat(False);
-          if (Flags and 16) <> 0 then ChargeRateWatts := Reader.SFloat(True);
-          if (Flags and 32) <> 0 then LastChargeEnergyKWh := Reader.SFloat(False);
+          if (Flags and 1) <> 0 then ExternalSourcePowerWatts := ReadNonnegativeSFloat(Reader);
+          if (Flags and 2) <> 0 then PresentVoltageVolts := Reader.SFloat;
+          if (Flags and 4) <> 0 then AvailableEnergyKWh := ReadNonnegativeSFloat(Reader);
+          if (Flags and 8) <> 0 then AvailableCapacityKWh := ReadNonnegativeSFloat(Reader);
+          if (Flags and 16) <> 0 then ChargeRateWatts := Reader.SFloat;
+          if (Flags and 32) <> 0 then LastChargeEnergyKWh := ReadNonnegativeSFloat(Reader);
         end;
-        if not Reader.Finished(Flags, $3F) then Exit;
+        if not BatteryValueFinished(Reader, Flags, $3F) then Exit;
       end;
     bbcTimeStatus:
       begin
@@ -691,11 +582,11 @@ begin
         with Snapshot.TimeStatus do
         begin
           HasValue := True;
-          UntilDischargedMinutes := Reader.TimeMinutes;
-          if (Flags and 1) <> 0 then StandbyDischargeMinutes := Reader.TimeMinutes;
-          if (Flags and 2) <> 0 then UntilRechargedMinutes := Reader.TimeMinutes;
+          UntilDischargedMinutes := ReadBatteryTime(Reader);
+          if (Flags and 1) <> 0 then StandbyDischargeMinutes := ReadBatteryTime(Reader);
+          if (Flags and 2) <> 0 then UntilRechargedMinutes := ReadBatteryTime(Reader);
         end;
-        if not Reader.Finished(Flags, 3) then Exit;
+        if not BatteryValueFinished(Reader, Flags, 3) then Exit;
       end;
     bbcHealthStatus:
       begin
@@ -709,10 +600,10 @@ begin
             if SummaryPercent.Value > 100 then Exit;
           end;
           if (Flags and 2) <> 0 then CycleCount := Reader.UIntValue(2);
-          if (Flags and 4) <> 0 then TemperatureCelsius := Reader.Temperature;
+          if (Flags and 4) <> 0 then TemperatureCelsius := ReadBatteryTemperature(Reader);
           if (Flags and 8) <> 0 then DeepDischargeCount := Reader.UIntValue(2);
         end;
-        if not Reader.Finished(Flags, 15) then Exit;
+        if not BatteryValueFinished(Reader, Flags, 15) then Exit;
       end;
     bbcHealthInformation:
       begin
@@ -723,11 +614,11 @@ begin
           if (Flags and 1) <> 0 then DesignedCycleCount := Reader.UIntValue(2);
           if (Flags and 2) <> 0 then
           begin
-            MinTemperatureCelsius := Reader.Temperature;
-            MaxTemperatureCelsius := Reader.Temperature;
+            MinTemperatureCelsius := ReadBatteryTemperature(Reader);
+            MaxTemperatureCelsius := ReadBatteryTemperature(Reader);
           end;
         end;
-        if not Reader.Finished(Flags, 3) then Exit;
+        if not BatteryValueFinished(Reader, Flags, 3) then Exit;
       end;
     bbcInformation:
       begin
@@ -738,11 +629,11 @@ begin
           HasValue := True;
           Replaceable := (Power and 1) <> 0;
           Rechargeable := (Power and 2) <> 0;
-          if (Flags and 1) <> 0 then ManufactureDaysSince1970 := Reader.DateUTC;
-          if (Flags and 2) <> 0 then ExpirationDaysSince1970 := Reader.DateUTC;
-          if (Flags and 4) <> 0 then DesignedCapacityKWh := Reader.SFloat(False, False);
-          if (Flags and 8) <> 0 then LowEnergyKWh := Reader.SFloat(False, False);
-          if (Flags and 16) <> 0 then CriticalEnergyKWh := Reader.SFloat(False, False);
+          if (Flags and 1) <> 0 then ManufactureDaysSince1970 := ReadBatteryDateUTC(Reader);
+          if (Flags and 2) <> 0 then ExpirationDaysSince1970 := ReadBatteryDateUTC(Reader);
+          if (Flags and 4) <> 0 then DesignedCapacityKWh := ReadNonnegativeSFloat(Reader, False);
+          if (Flags and 8) <> 0 then LowEnergyKWh := ReadNonnegativeSFloat(Reader, False);
+          if (Flags and 16) <> 0 then CriticalEnergyKWh := ReadNonnegativeSFloat(Reader, False);
           if (Flags and 32) <> 0 then
           begin
             RawChemistry := Reader.UInt(1);
@@ -750,7 +641,7 @@ begin
             HasChemistry := True;
             Chemistry := TBleBatteryChemistry(RawChemistry);
           end;
-          if (Flags and 64) <> 0 then NominalVoltageVolts := Reader.SFloat(True);
+          if (Flags and 64) <> 0 then NominalVoltageVolts := Reader.SFloat;
           if (Flags and 128) <> 0 then
           begin
             AggregationGroup := Reader.UInt(1);
@@ -758,12 +649,12 @@ begin
             HasAggregationGroup := True;
           end;
         end;
-        if not Reader.Finished(Flags, $FF) then Exit;
+        if not BatteryValueFinished(Reader, Flags, $FF) then Exit;
       end;
     bbcServiceDate:
       begin
-        Snapshot.ServiceDaysSince1970 := Reader.DateUTC;
-        if not Reader.Finished(0, 0) then Exit;
+        Snapshot.ServiceDaysSince1970 := ReadBatteryDateUTC(Reader);
+        if not Reader.Finished then Exit;
       end;
     bbcManufacturerName:
       begin
@@ -789,7 +680,7 @@ begin
   if (Snapshot.LevelStatus.HasValue and
       (Snapshot.LevelStatus.ChargeState in [bbcsDischargingActive, bbcsDischargingInactive])) or
     (Snapshot.Information.HasValue and not Snapshot.Information.Rechargeable) then
-    Snapshot.TimeStatus.UntilRechargedMinutes := Default(TBleBatteryValue);
+    Snapshot.TimeStatus.UntilRechargedMinutes := Default(TBleGattValue);
   if Snapshot.LevelStatus.HasValue and not Snapshot.LevelStatus.BatteryPresent then
   begin
     InvalidateBatteryData(Snapshot);
