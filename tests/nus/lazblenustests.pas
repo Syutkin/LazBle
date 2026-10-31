@@ -25,6 +25,7 @@ type
   public
     procedure BindToSession(const ASession: TBleGattSession);
     procedure AttachProfile;
+    procedure DetachProfile;
     function TestChannel: TBleByteChannel;
   end;
 
@@ -47,6 +48,7 @@ type
     FBackendObject: TFakeLazBleBackend;
     FSession: TBleGattSession;
     FProfile: TTestNusProfile;
+    FCanWriteCommand, FCanWriteRequest: Boolean;
     procedure EmitEvent(const AKind: TLazBleBackendEventKind;
       const AOperationId: TBleOperationId;
       const ASubscriptionId: TBleSubscriptionId;
@@ -54,6 +56,7 @@ type
     procedure EmitServicesDiscovered(const AOperationId: TBleOperationId;
       const AIncludeNus: Boolean);
     procedure ActivateProfile;
+    procedure ReconnectWithRxProperties(const ACommand, ARequest: Boolean);
   protected
     procedure SetUp; override;
     procedure TearDown; override;
@@ -65,6 +68,12 @@ type
     procedure MissingServiceFailsWithoutSubscription;
     procedure SubscriptionFailurePreservesBackendDiagnostic;
     procedure SendBeforeBindingReturnsFailedOperation;
+    procedure RequestOnlyRxUsesWriteWithResponse;
+    procedure BothWriteModesPreferCommand;
+    procedure NonWritableRxFailsWithoutSubscription;
+    procedure ReconnectSelectsWriteModeAgain;
+    procedure RequestModeIsUsedForEveryChunk;
+    procedure SendBeforeAttachReturnsFailedOperation;
   end;
 
 implementation
@@ -92,7 +101,8 @@ begin
     SetLength(BackendEvent.Services[0].Characteristics, 2);
     BackendEvent.Services[0].Characteristics[0].Uuid :=
       NusRxCharacteristicUuid;
-    BackendEvent.Services[0].Characteristics[0].CanWriteCommand := True;
+    BackendEvent.Services[0].Characteristics[0].CanWriteCommand := FCanWriteCommand;
+    BackendEvent.Services[0].Characteristics[0].CanWriteRequest := FCanWriteRequest;
     BackendEvent.Services[0].Characteristics[1].Uuid :=
       NusTxCharacteristicUuid;
     BackendEvent.Services[0].Characteristics[1].CanNotify := True;
@@ -104,6 +114,11 @@ end;
 procedure TTestNusProfile.AttachProfile;
 begin
   Attach;
+end;
+
+procedure TTestNusProfile.DetachProfile;
+begin
+  Detach;
 end;
 
 function TTestNusProfile.TestChannel: TBleByteChannel;
@@ -158,6 +173,8 @@ procedure TLazBleNusTest.SetUp;
 var
   ConnectId: TBleOperationId;
 begin
+  FCanWriteCommand := True;
+  FCanWriteRequest := False;
   FBackendObject := TFakeLazBleBackend.Create;
   FBackend := FBackendObject;
   FSession := LazBleTestCreateSession('entime-1', @FBackendObject.Submit, @FBackendObject.Cancel);
@@ -297,6 +314,108 @@ begin
   finally
     Profile.Free;
   end;
+end;
+
+procedure TLazBleNusTest.ReconnectWithRxProperties(const ACommand,
+  ARequest: Boolean);
+var Id: TBleOperationId;
+begin
+  FProfile.DetachProfile;
+  Id := LazBleTestDisconnect(FSession);
+  EmitEvent(lbekDisconnected, Id, InvalidBleSubscriptionId, []);
+  AssertTrue(FBackendObject.CompleteOperation(Id, lbekOperationSucceeded));
+  FCanWriteCommand := ACommand;
+  FCanWriteRequest := ARequest;
+  Id := LazBleTestConnect(FSession);
+  EmitEvent(lbekConnected, Id, InvalidBleSubscriptionId, []);
+  AssertTrue(FBackendObject.CompleteOperation(Id, lbekOperationSucceeded));
+  EmitServicesDiscovered(FBackendObject.OperationIds[
+    FBackendObject.CommandCount - 1], True);
+end;
+
+procedure TLazBleNusTest.RequestOnlyRxUsesWriteWithResponse;
+var Operation: IBleGattOperation; Index: Integer;
+begin
+  ReconnectWithRxProperties(False, True);
+  ActivateProfile;
+  Index := FBackendObject.CommandCount;
+  Operation := FProfile.SendAsync([$41, $42]);
+  AssertEquals(NusRxCharacteristicUuid, FBackendObject.Commands[Index].CharacteristicUuid);
+  AssertEquals(Ord(lbwmRequest), Ord(FBackendObject.Commands[Index].WriteMode));
+  AssertTrue(FBackendObject.CompleteOperation(FBackendObject.OperationIds[Index], lbekOperationSucceeded));
+  AssertEquals(Ord(lbopSucceeded), Ord(Operation.State));
+end;
+
+procedure TLazBleNusTest.BothWriteModesPreferCommand;
+var Operation: IBleGattOperation; Index: Integer;
+begin
+  ReconnectWithRxProperties(True, True);
+  ActivateProfile;
+  Index := FBackendObject.CommandCount;
+  Operation := FProfile.SendAsync([$01]);
+  AssertEquals(Ord(lbwmCommand), Ord(FBackendObject.Commands[Index].WriteMode));
+  AssertTrue(FBackendObject.CompleteOperation(FBackendObject.OperationIds[Index], lbekOperationSucceeded));
+  AssertEquals(Ord(lbopSucceeded), Ord(Operation.State));
+end;
+
+procedure TLazBleNusTest.NonWritableRxFailsWithoutSubscription;
+var Operation: IBleGattOperation; Count: Integer;
+begin
+  ReconnectWithRxProperties(False, False);
+  Count := FBackendObject.CommandCount;
+  FProfile.AttachProfile;
+  AssertEquals(Ord(lbgpsError), Ord(FProfile.State));
+  AssertEquals(LazBleErrorGattPropertyNotSupported, FProfile.ErrorCode);
+  AssertEquals('NUS RX characteristic does not support writes', FProfile.ErrorMessage);
+  Operation := FProfile.SendAsync([$01]);
+  AssertEquals(Ord(lbopFailed), Ord(Operation.State));
+  AssertEquals(Count, FBackendObject.CommandCount);
+end;
+
+procedure TLazBleNusTest.ReconnectSelectsWriteModeAgain;
+var Operation: IBleGattOperation; Index: Integer;
+begin
+  ReconnectWithRxProperties(False, True);
+  ActivateProfile;
+  Index := FBackendObject.CommandCount;
+  Operation := FProfile.SendAsync([$01]);
+  AssertEquals(Ord(lbwmRequest), Ord(FBackendObject.Commands[Index].WriteMode));
+  AssertTrue(FBackendObject.CompleteOperation(FBackendObject.OperationIds[Index], lbekOperationSucceeded));
+  ReconnectWithRxProperties(True, False);
+  ActivateProfile;
+  Index := FBackendObject.CommandCount;
+  Operation := FProfile.SendAsync([$02]);
+  AssertEquals(Ord(lbwmCommand), Ord(FBackendObject.Commands[Index].WriteMode));
+  AssertTrue(FBackendObject.CompleteOperation(FBackendObject.OperationIds[Index], lbekOperationSucceeded));
+  AssertEquals(Ord(lbopSucceeded), Ord(Operation.State));
+end;
+
+procedure TLazBleNusTest.RequestModeIsUsedForEveryChunk;
+var Operation: IBleGattOperation; Data: TBytes; Index, I: Integer;
+begin
+  ReconnectWithRxProperties(False, True);
+  ActivateProfile;
+  SetLength(Data, 41);
+  Index := FBackendObject.CommandCount;
+  Operation := FProfile.SendAsync(Data);
+  for I := 0 to 2 do
+  begin
+    AssertEquals(Index + I + 1, FBackendObject.CommandCount);
+    AssertEquals(Ord(lbwmRequest), Ord(FBackendObject.Commands[Index + I].WriteMode));
+    if I < 2 then AssertEquals(20, Length(FBackendObject.Commands[Index + I].Value))
+    else AssertEquals(1, Length(FBackendObject.Commands[Index + I].Value));
+    AssertTrue(FBackendObject.CompleteOperation(FBackendObject.OperationIds[Index + I], lbekOperationSucceeded));
+  end;
+  AssertEquals(Ord(lbopSucceeded), Ord(Operation.State));
+end;
+
+procedure TLazBleNusTest.SendBeforeAttachReturnsFailedOperation;
+var Operation: IBleGattOperation;
+begin
+  Operation := FProfile.SendAsync([$01]);
+  AssertEquals(Ord(lbopFailed), Ord(Operation.State));
+  AssertEquals(LazBleErrorInvalidState, Operation.ErrorCode);
+  AssertEquals(2, FBackendObject.CommandCount);
 end;
 
 initialization

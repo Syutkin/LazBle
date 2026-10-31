@@ -24,7 +24,8 @@ The main types are:
 - `TBleGattSession`: shared GATT access for a client's operations and profiles.
 - `TBleGattProfile`: base class for typed profiles.
 - `TBleByteChannel`: reusable Write/Notify byte channel.
-- `TNusProfile`: Nordic UART Service, with RX writes and TX notifications.
+- `TNusProfile`: Nordic UART Service, with TX notifications and RX writes
+  without response when supported, otherwise with response.
 - `TBleBatteryProfile`: typed Battery Service 1.1 data, reads, and updates.
 - `TLazBleSync`: blocking facade for console applications.
 - `TLazBleComponent`: LCL facade owner, availability checks, and scan controller.

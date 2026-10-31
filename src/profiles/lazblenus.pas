@@ -23,7 +23,8 @@ type
     const AValue: TBytes) of object;
 
   { Nordic UART Service profile. Register with TBleClient.AddProfile before
-    connecting; RX writes use command mode and TX delivers notifications. }
+    connecting; RX prefers write commands and falls back to write requests.
+    TX delivers notifications. }
   TNusProfile = class(TBleGattProfile)
   private
     FChannel: TBleByteChannel;
@@ -35,7 +36,6 @@ type
       const AState: TLazBleSubscriptionState);
     procedure MarkSubscriptionError;
   protected
-    procedure DoBind; override;
     procedure DoAttach; override;
     procedure DoDetach; override;
     procedure RefreshState; override;
@@ -66,14 +66,6 @@ end;
 constructor TNusProfile.Create;
 begin
   inherited Create;
-end;
-
-procedure TNusProfile.DoBind;
-begin
-  LazBleRequireMainThread;
-  FChannel := TBleByteChannel.Create(Session, NusServiceUuid,
-    NusRxCharacteristicUuid, NusTxCharacteristicUuid, lbwmCommand);
-  FChannel.OnData := @ChannelDataReceived;
 end;
 
 destructor TNusProfile.Destroy;
@@ -120,9 +112,10 @@ end;
 procedure TNusProfile.DoAttach;
 var
   Characteristic: TLazBleGattCharacteristic;
+  WriteMode: TLazBleWriteMode;
 begin
   LazBleRequireMainThread;
-  if not Assigned(FChannel) then
+  if not Bound then
   begin
     MarkError('NUS profile is not bound to a client');
     Exit;
@@ -139,9 +132,13 @@ begin
       LazBleErrorGattNotFound);
     Exit;
   end;
-  if not (Characteristic.CanWriteCommand) then
+  if Characteristic.CanWriteCommand then
+    WriteMode := lbwmCommand
+  else if Characteristic.CanWriteRequest then
+    WriteMode := lbwmRequest
+  else
   begin
-    MarkError('NUS RX characteristic does not support write commands',
+    MarkError('NUS RX characteristic does not support writes',
       LazBleErrorGattPropertyNotSupported);
     Exit;
   end;
@@ -158,6 +155,10 @@ begin
       LazBleErrorGattPropertyNotSupported);
     Exit;
   end;
+  FreeAndNil(FChannel);
+  FChannel := TBleByteChannel.Create(Session, NusServiceUuid,
+    NusRxCharacteristicUuid, NusTxCharacteristicUuid, WriteMode);
+  FChannel.OnData := @ChannelDataReceived;
   FChannel.Attach;
   if Assigned(FChannel.Subscription) then
     FChannel.Subscription.OnStateChanged := @SubscriptionStateChanged;
@@ -207,6 +208,8 @@ begin
   LazBleRequireMainThread;
   if Assigned(FChannel) then
     Result := FChannel.SendAsync(AValue)
+  else if Bound then
+    Result := TBleGattOperationAccess.CreateTerminal('NUS profile is not ready')
   else
     Result := TBleGattOperationAccess.CreateTerminal(
       'NUS profile is not bound to a client');

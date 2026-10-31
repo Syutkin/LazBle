@@ -14,6 +14,7 @@ GATT descriptor and indication support, and an expanded Battery profile.
   `TBleBatteryProfile.Data`, with `OnUpdated` and explicit `RefreshAsync`.
 - Automatic splitting of `TBleByteChannel` sends into connection-sized writes,
   preserving send order with one operation per buffer.
+- NUS RX writes with response when writes without response are unavailable.
 
 ### Changed
 
