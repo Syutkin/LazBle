@@ -68,32 +68,32 @@ begin
   if Snapshot.CriticalStatus.HasValue then
     WriteLn('  critical=', Snapshot.CriticalStatus.CriticalPowerState,
       ' immediate_service=', Snapshot.CriticalStatus.ImmediateServiceRequired);
-  PrintValue('external power (W)', Snapshot.EnergyStatus.ExternalSourcePowerWatts);
-  PrintValue('voltage (V)', Snapshot.EnergyStatus.PresentVoltageVolts);
+  PrintValue('external source power (W)', Snapshot.EnergyStatus.ExternalSourcePowerWatts);
+  PrintValue('present voltage (V)', Snapshot.EnergyStatus.PresentVoltageVolts);
   PrintValue('available energy (kWh)', Snapshot.EnergyStatus.AvailableEnergyKWh);
-  PrintValue('available capacity (kWh)', Snapshot.EnergyStatus.AvailableCapacityKWh);
+  PrintValue('available battery capacity (kWh)', Snapshot.EnergyStatus.AvailableBatteryCapacityKWh);
   PrintValue('charge rate (W)', Snapshot.EnergyStatus.ChargeRateWatts);
-  PrintValue('last charge energy (kWh)', Snapshot.EnergyStatus.LastChargeEnergyKWh);
-  PrintValue('until discharged (min)', Snapshot.TimeStatus.UntilDischargedMinutes);
-  PrintValue('standby discharge (min)', Snapshot.TimeStatus.StandbyDischargeMinutes);
-  PrintValue('until recharged (min)', Snapshot.TimeStatus.UntilRechargedMinutes);
-  PrintValue('health (%)', Snapshot.HealthStatus.SummaryPercent);
-  PrintValue('cycles', Snapshot.HealthStatus.CycleCount);
-  PrintValue('temperature (C)', Snapshot.HealthStatus.TemperatureCelsius);
-  PrintValue('deep discharges', Snapshot.HealthStatus.DeepDischargeCount);
-  PrintValue('designed cycles', Snapshot.HealthInformation.DesignedCycleCount);
-  PrintValue('min temperature (C)', Snapshot.HealthInformation.MinTemperatureCelsius);
-  PrintValue('max temperature (C)', Snapshot.HealthInformation.MaxTemperatureCelsius);
+  PrintValue('available energy at last charge (kWh)', Snapshot.EnergyStatus.AvailableEnergyAtLastChargeKWh);
+  PrintValue('time until discharged (min)', Snapshot.TimeStatus.TimeUntilDischargedMinutes);
+  PrintValue('time until discharged on standby (min)', Snapshot.TimeStatus.TimeUntilDischargedOnStandbyMinutes);
+  PrintValue('time until recharged (min)', Snapshot.TimeStatus.TimeUntilRechargedMinutes);
+  PrintValue('battery health summary (%)', Snapshot.HealthStatus.HealthSummaryPercent);
+  PrintValue('cycle count', Snapshot.HealthStatus.CycleCount);
+  PrintValue('current temperature (C)', Snapshot.HealthStatus.CurrentTemperatureCelsius);
+  PrintValue('deep discharge count', Snapshot.HealthStatus.DeepDischargeCount);
+  PrintValue('cycle count designed lifetime', Snapshot.HealthInformation.CycleCountDesignedLifetime);
+  PrintValue('min designed operating temperature (C)', Snapshot.HealthInformation.MinDesignedOperatingTemperatureCelsius);
+  PrintValue('max designed operating temperature (C)', Snapshot.HealthInformation.MaxDesignedOperatingTemperatureCelsius);
   if Snapshot.Information.HasValue then
     WriteLn('  replaceable=', Snapshot.Information.Replaceable,
       ' rechargeable=', Snapshot.Information.Rechargeable);
-  PrintValue('manufacture (UTC days since 1970)', Snapshot.Information.ManufactureDaysSince1970);
-  PrintValue('expiration (UTC days since 1970)', Snapshot.Information.ExpirationDaysSince1970);
-  PrintValue('designed capacity (kWh)', Snapshot.Information.DesignedCapacityKWh);
+  PrintValue('battery manufacture date (UTC days since 1970)', Snapshot.Information.ManufactureDateDaysSince1970);
+  PrintValue('battery expiration date (UTC days since 1970)', Snapshot.Information.ExpirationDateDaysSince1970);
+  PrintValue('battery designed capacity (kWh)', Snapshot.Information.DesignedCapacityKWh);
   PrintValue('low energy (kWh)', Snapshot.Information.LowEnergyKWh);
   PrintValue('critical energy (kWh)', Snapshot.Information.CriticalEnergyKWh);
   PrintValue('nominal voltage (V)', Snapshot.Information.NominalVoltageVolts);
-  PrintValue('service date (UTC days since 1970)', Snapshot.ServiceDaysSince1970);
+  PrintValue('estimated service date (UTC days since 1970)', Snapshot.EstimatedServiceDateDaysSince1970);
   if Snapshot.Information.HasChemistry then
     WriteLn('  chemistry code: ', Ord(Snapshot.Information.Chemistry));
   if Snapshot.ManufacturerName.HasValue then WriteLn('  manufacturer: ', Snapshot.ManufacturerName.Value);

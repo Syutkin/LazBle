@@ -42,11 +42,12 @@ type
   TBleBatteryLevelStatus = record
     HasValue: Boolean;
     BatteryPresent: Boolean;
-    WiredExternalPower, WirelessExternalPower: TBleBatteryPowerConnection;
+    WiredExternalPowerSourceConnected,
+      WirelessExternalPowerSourceConnected: TBleBatteryPowerConnection;
     ChargeState: TBleBatteryChargeState;
     ChargeLevel: TBleBatteryChargeLevel;
     ChargingType: TBleBatteryChargingType;
-    ChargingFaults: TBleBatteryChargingFaults;
+    ChargingFaultReasons: TBleBatteryChargingFaults;
     HasIdentifier, HasLevelPercent, HasAdditionalStatus: Boolean;
     Identifier: Word;
     LevelPercent: Byte;
@@ -63,26 +64,27 @@ type
   TBleBatteryEnergyStatus = record
     HasValue: Boolean;
     ExternalSourcePowerWatts, PresentVoltageVolts: TBleGattValue;
-    AvailableEnergyKWh, AvailableCapacityKWh: TBleGattValue;
-    ChargeRateWatts, LastChargeEnergyKWh: TBleGattValue;
+    AvailableEnergyKWh, AvailableBatteryCapacityKWh: TBleGattValue;
+    ChargeRateWatts, AvailableEnergyAtLastChargeKWh: TBleGattValue;
   end;
 
   TBleBatteryTimeStatus = record
     HasValue: Boolean;
-    UntilDischargedMinutes, StandbyDischargeMinutes,
-      UntilRechargedMinutes: TBleGattValue;
+    TimeUntilDischargedMinutes, TimeUntilDischargedOnStandbyMinutes,
+      TimeUntilRechargedMinutes: TBleGattValue;
   end;
 
   TBleBatteryHealthStatus = record
     HasValue: Boolean;
-    SummaryPercent, CycleCount, TemperatureCelsius,
+    HealthSummaryPercent, CycleCount, CurrentTemperatureCelsius,
       DeepDischargeCount: TBleGattValue;
   end;
 
   TBleBatteryHealthInformation = record
     HasValue: Boolean;
-    DesignedCycleCount, MinTemperatureCelsius,
-      MaxTemperatureCelsius: TBleGattValue;
+    CycleCountDesignedLifetime,
+      MinDesignedOperatingTemperatureCelsius,
+      MaxDesignedOperatingTemperatureCelsius: TBleGattValue;
   end;
 
   TBleBatteryChemistry = (bbchUnknown, bbchAlkaline, bbchLeadAcid,
@@ -93,7 +95,8 @@ type
 
   TBleBatteryInformation = record
     HasValue, Replaceable, Rechargeable: Boolean;
-    ManufactureDaysSince1970, ExpirationDaysSince1970: TBleGattValue;
+    ManufactureDateDaysSince1970,
+      ExpirationDateDaysSince1970: TBleGattValue;
     DesignedCapacityKWh, LowEnergyKWh, CriticalEnergyKWh,
       NominalVoltageVolts: TBleGattValue;
     HasChemistry: Boolean;
@@ -116,7 +119,7 @@ type
     HealthStatus: TBleBatteryHealthStatus;
     HealthInformation: TBleBatteryHealthInformation;
     Information: TBleBatteryInformation;
-    ServiceDaysSince1970: TBleGattValue;
+    EstimatedServiceDateDaysSince1970: TBleGattValue;
     ManufacturerName, ModelNumber, SerialNumber: TBleBatteryString;
   end;
 
@@ -302,7 +305,7 @@ begin
   ASnapshot.HealthStatus := Default(TBleBatteryHealthStatus);
   ASnapshot.HealthInformation := Default(TBleBatteryHealthInformation);
   ASnapshot.Information := Default(TBleBatteryInformation);
-  ASnapshot.ServiceDaysSince1970 := Default(TBleGattValue);
+  ASnapshot.EstimatedServiceDateDaysSince1970 := Default(TBleGattValue);
   ASnapshot.ManufacturerName := Default(TBleBatteryString);
   ASnapshot.ModelNumber := Default(TBleBatteryString);
   ASnapshot.SerialNumber := Default(TBleBatteryString);
@@ -522,15 +525,15 @@ begin
         begin
           HasValue := True;
           BatteryPresent := (Power and 1) <> 0;
-          WiredExternalPower := TBleBatteryPowerConnection((Power shr 1) and 3);
-          WirelessExternalPower := TBleBatteryPowerConnection((Power shr 3) and 3);
+          WiredExternalPowerSourceConnected := TBleBatteryPowerConnection((Power shr 1) and 3);
+          WirelessExternalPowerSourceConnected := TBleBatteryPowerConnection((Power shr 3) and 3);
           ChargeState := TBleBatteryChargeState((Power shr 5) and 3);
           ChargeLevel := TBleBatteryChargeLevel((Power shr 7) and 3);
           ChargingType := TBleBatteryChargingType((Power shr 9) and 7);
-          ChargingFaults := [];
+          ChargingFaultReasons := [];
           for Fault in TBleBatteryChargingFault do
             if (Power and (Cardinal(1) shl (12 + Ord(Fault)))) <> 0 then
-              Include(ChargingFaults, Fault);
+              Include(ChargingFaultReasons, Fault);
           if (Flags and 1) <> 0 then
           begin
             Identifier := Reader.UInt(2);
@@ -570,9 +573,9 @@ begin
           if (Flags and 1) <> 0 then ExternalSourcePowerWatts := ReadNonnegativeSFloat(Reader);
           if (Flags and 2) <> 0 then PresentVoltageVolts := Reader.SFloat;
           if (Flags and 4) <> 0 then AvailableEnergyKWh := ReadNonnegativeSFloat(Reader);
-          if (Flags and 8) <> 0 then AvailableCapacityKWh := ReadNonnegativeSFloat(Reader);
+          if (Flags and 8) <> 0 then AvailableBatteryCapacityKWh := ReadNonnegativeSFloat(Reader);
           if (Flags and 16) <> 0 then ChargeRateWatts := Reader.SFloat;
-          if (Flags and 32) <> 0 then LastChargeEnergyKWh := ReadNonnegativeSFloat(Reader);
+          if (Flags and 32) <> 0 then AvailableEnergyAtLastChargeKWh := ReadNonnegativeSFloat(Reader);
         end;
         if not BatteryValueFinished(Reader, Flags, $3F) then Exit;
       end;
@@ -582,9 +585,9 @@ begin
         with Snapshot.TimeStatus do
         begin
           HasValue := True;
-          UntilDischargedMinutes := ReadBatteryTime(Reader);
-          if (Flags and 1) <> 0 then StandbyDischargeMinutes := ReadBatteryTime(Reader);
-          if (Flags and 2) <> 0 then UntilRechargedMinutes := ReadBatteryTime(Reader);
+          TimeUntilDischargedMinutes := ReadBatteryTime(Reader);
+          if (Flags and 1) <> 0 then TimeUntilDischargedOnStandbyMinutes := ReadBatteryTime(Reader);
+          if (Flags and 2) <> 0 then TimeUntilRechargedMinutes := ReadBatteryTime(Reader);
         end;
         if not BatteryValueFinished(Reader, Flags, 3) then Exit;
       end;
@@ -596,11 +599,11 @@ begin
           HasValue := True;
           if (Flags and 1) <> 0 then
           begin
-            SummaryPercent := Reader.UIntValue(1);
-            if SummaryPercent.Value > 100 then Exit;
+            HealthSummaryPercent := Reader.UIntValue(1);
+            if HealthSummaryPercent.Value > 100 then Exit;
           end;
           if (Flags and 2) <> 0 then CycleCount := Reader.UIntValue(2);
-          if (Flags and 4) <> 0 then TemperatureCelsius := ReadBatteryTemperature(Reader);
+          if (Flags and 4) <> 0 then CurrentTemperatureCelsius := ReadBatteryTemperature(Reader);
           if (Flags and 8) <> 0 then DeepDischargeCount := Reader.UIntValue(2);
         end;
         if not BatteryValueFinished(Reader, Flags, 15) then Exit;
@@ -611,11 +614,11 @@ begin
         with Snapshot.HealthInformation do
         begin
           HasValue := True;
-          if (Flags and 1) <> 0 then DesignedCycleCount := Reader.UIntValue(2);
+          if (Flags and 1) <> 0 then CycleCountDesignedLifetime := Reader.UIntValue(2);
           if (Flags and 2) <> 0 then
           begin
-            MinTemperatureCelsius := ReadBatteryTemperature(Reader);
-            MaxTemperatureCelsius := ReadBatteryTemperature(Reader);
+            MinDesignedOperatingTemperatureCelsius := ReadBatteryTemperature(Reader);
+            MaxDesignedOperatingTemperatureCelsius := ReadBatteryTemperature(Reader);
           end;
         end;
         if not BatteryValueFinished(Reader, Flags, 3) then Exit;
@@ -629,8 +632,8 @@ begin
           HasValue := True;
           Replaceable := (Power and 1) <> 0;
           Rechargeable := (Power and 2) <> 0;
-          if (Flags and 1) <> 0 then ManufactureDaysSince1970 := ReadBatteryDateUTC(Reader);
-          if (Flags and 2) <> 0 then ExpirationDaysSince1970 := ReadBatteryDateUTC(Reader);
+          if (Flags and 1) <> 0 then ManufactureDateDaysSince1970 := ReadBatteryDateUTC(Reader);
+          if (Flags and 2) <> 0 then ExpirationDateDaysSince1970 := ReadBatteryDateUTC(Reader);
           if (Flags and 4) <> 0 then DesignedCapacityKWh := ReadNonnegativeSFloat(Reader, False);
           if (Flags and 8) <> 0 then LowEnergyKWh := ReadNonnegativeSFloat(Reader, False);
           if (Flags and 16) <> 0 then CriticalEnergyKWh := ReadNonnegativeSFloat(Reader, False);
@@ -653,7 +656,7 @@ begin
       end;
     bbcServiceDate:
       begin
-        Snapshot.ServiceDaysSince1970 := ReadBatteryDateUTC(Reader);
+        Snapshot.EstimatedServiceDateDaysSince1970 := ReadBatteryDateUTC(Reader);
         if not Reader.Finished then Exit;
       end;
     bbcManufacturerName:
@@ -680,7 +683,7 @@ begin
   if (Snapshot.LevelStatus.HasValue and
       (Snapshot.LevelStatus.ChargeState in [bbcsDischargingActive, bbcsDischargingInactive])) or
     (Snapshot.Information.HasValue and not Snapshot.Information.Rechargeable) then
-    Snapshot.TimeStatus.UntilRechargedMinutes := Default(TBleGattValue);
+    Snapshot.TimeStatus.TimeUntilRechargedMinutes := Default(TBleGattValue);
   if Snapshot.LevelStatus.HasValue and not Snapshot.LevelStatus.BatteryPresent then
   begin
     InvalidateBatteryData(Snapshot);
