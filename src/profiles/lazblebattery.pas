@@ -18,11 +18,17 @@ const
   BatteryTimeStatusCharacteristicUuid = '00002BEE-0000-1000-8000-00805F9B34FB';
   BatteryHealthStatusCharacteristicUuid = '00002BEA-0000-1000-8000-00805F9B34FB';
   BatteryHealthInformationCharacteristicUuid = '00002BEB-0000-1000-8000-00805F9B34FB';
+  BatteryInformationCharacteristicUuid = '00002BEC-0000-1000-8000-00805F9B34FB';
+  EstimatedServiceDateCharacteristicUuid = '00002BEF-0000-1000-8000-00805F9B34FB';
+  BatteryManufacturerNameCharacteristicUuid = '00002A29-0000-1000-8000-00805F9B34FB';
+  BatteryModelNumberCharacteristicUuid = '00002A24-0000-1000-8000-00805F9B34FB';
+  BatterySerialNumberCharacteristicUuid = '00002A25-0000-1000-8000-00805F9B34FB';
   UnknownBatteryLevel = -1;
 
 type
   TBleBatteryCharacteristic = (bbcLevel, bbcLevelStatus, bbcCriticalStatus,
-    bbcEnergyStatus, bbcTimeStatus, bbcHealthStatus, bbcHealthInformation);
+    bbcEnergyStatus, bbcTimeStatus, bbcHealthStatus, bbcHealthInformation,
+    bbcInformation, bbcServiceDate, bbcManufacturerName, bbcModelNumber, bbcSerialNumber);
   TBleBatteryCharacteristics = set of TBleBatteryCharacteristic;
   TBleBatteryPowerConnection = (bbpcNo, bbpcYes, bbpcUnknown);
   TBleBatteryChargeState = (bbcsUnknown, bbcsCharging,
@@ -89,6 +95,28 @@ type
       MaxTemperatureCelsius: TBleBatteryValue;
   end;
 
+  TBleBatteryChemistry = (bbchUnknown, bbchAlkaline, bbchLeadAcid,
+    bbchLithiumIronDisulfide, bbchLithiumManganeseDioxide, bbchLithiumIon,
+    bbchLithiumPolymer, bbchNickelOxyhydroxide, bbchNickelCadmium,
+    bbchNickelMetalHydride, bbchSilverOxide, bbchZincChloride, bbchZincAir,
+    bbchZincCarbon, bbchOther = 255);
+
+  TBleBatteryInformation = record
+    HasValue, Replaceable, Rechargeable: Boolean;
+    ManufactureDaysSince1970, ExpirationDaysSince1970: TBleBatteryValue;
+    DesignedCapacityKWh, LowEnergyKWh, CriticalEnergyKWh,
+      NominalVoltageVolts: TBleBatteryValue;
+    HasChemistry: Boolean;
+    Chemistry: TBleBatteryChemistry;
+    HasAggregationGroup: Boolean;
+    AggregationGroup: Byte;
+  end;
+
+  TBleBatteryString = record
+    HasValue: Boolean;
+    Value: UTF8String;
+  end;
+
   { A read-only snapshot. Optional fields retain received values until invalidated. }
   TBleBatteryData = record
     LevelStatus: TBleBatteryLevelStatus;
@@ -97,6 +125,9 @@ type
     TimeStatus: TBleBatteryTimeStatus;
     HealthStatus: TBleBatteryHealthStatus;
     HealthInformation: TBleBatteryHealthInformation;
+    Information: TBleBatteryInformation;
+    ServiceDaysSince1970: TBleBatteryValue;
+    ManufacturerName, ModelNumber, SerialNumber: TBleBatteryString;
   end;
 
   TLazBleBatteryLevelEvent = procedure(Sender: TObject;
@@ -118,10 +149,13 @@ type
     FReadOperation, FDetachOperation: IBleGattOperation;
     FRefreshOperation: IBleOperation;
     FRefreshObject: TBleOperation;
+    FRefreshNeeded: Boolean;
     FOnLevelChanged: TLazBleBatteryLevelEvent;
     FOnUpdated: TNotifyEvent;
     function DiscoverCharacteristics: Boolean;
     procedure StartNextRead;
+    procedure SubscribeCurrent;
+    procedure RefreshIfNeeded;
     procedure ReadCompleted(Sender: TObject);
     procedure NotificationReceived(Sender: TObject; const AValue: TBytes);
     procedure SubscriptionStateChanged(Sender: TObject;
@@ -170,11 +204,14 @@ const
     BatteryLevelCharacteristicUuid, BatteryLevelStatusCharacteristicUuid,
     BatteryCriticalStatusCharacteristicUuid, BatteryEnergyStatusCharacteristicUuid,
     BatteryTimeStatusCharacteristicUuid, BatteryHealthStatusCharacteristicUuid,
-    BatteryHealthInformationCharacteristicUuid);
+    BatteryHealthInformationCharacteristicUuid, BatteryInformationCharacteristicUuid,
+    EstimatedServiceDateCharacteristicUuid, BatteryManufacturerNameCharacteristicUuid,
+    BatteryModelNumberCharacteristicUuid, BatterySerialNumberCharacteristicUuid);
   CharacteristicNames: array[TBleBatteryCharacteristic] of string = (
     'Battery Level', 'Battery Level Status', 'Battery Critical Status',
     'Battery Energy Status', 'Battery Time Status', 'Battery Health Status',
-    'Battery Health Information');
+    'Battery Health Information', 'Battery Information', 'Estimated Service Date',
+    'Manufacturer Name', 'Model Number', 'Serial Number');
 
 type
   { Bounds-checked little-endian reads, without alignment or host-endian assumptions. }
@@ -189,6 +226,8 @@ type
     function TimeMinutes: TBleBatteryValue;
     function UIntValue(const ABytes: Integer): TBleBatteryValue;
     function Temperature: TBleBatteryValue;
+    function DateUTC: TBleBatteryValue;
+    function Utf8Text: UTF8String;
   end;
 
   TBatteryRefreshOperation = class(TBleOperation)
@@ -296,6 +335,84 @@ begin
     if Raw >= $80 then Dec(Raw, $100);
     Result.Value := Raw;
   end;
+end;
+
+function TBatteryReader.DateUTC: TBleBatteryValue;
+var
+  Raw: Cardinal;
+begin
+  Result := Default(TBleBatteryValue);
+  Raw := UInt(3);
+  if Raw = 0 then Result.State := bbvsUnknown
+  else if Raw = $FFFFFF then Valid := False
+  else
+  begin
+    Result.State := bbvsFinite;
+    Result.Value := Raw;
+  end;
+end;
+
+function TBatteryReader.Utf8Text: UTF8String;
+var
+  I, J, Continuations: SizeInt;
+  First, Next: Byte;
+begin
+  Result := '';
+  I := 0;
+  while I < Length(Data) do
+  begin
+    First := Data[I];
+    if First <= $7F then Continuations := 0
+    else if (First >= $C2) and (First <= $DF) then Continuations := 1
+    else if (First >= $E0) and (First <= $EF) then Continuations := 2
+    else if (First >= $F0) and (First <= $F4) then Continuations := 3
+    else
+    begin
+      Valid := False;
+      Exit;
+    end;
+    if Length(Data) - I <= Continuations then
+    begin
+      Valid := False;
+      Exit;
+    end;
+    for J := 1 to Continuations do
+    begin
+      Next := Data[I + J];
+      if (Next < $80) or (Next > $BF) or
+        ((J = 1) and (((First = $E0) and (Next < $A0)) or
+          ((First = $ED) and (Next > $9F)) or
+          ((First = $F0) and (Next < $90)) or
+          ((First = $F4) and (Next > $8F)))) then
+      begin
+        Valid := False;
+        Exit;
+      end;
+    end;
+    Inc(I, Continuations + 1);
+  end;
+  if Length(Data) <> 0 then SetString(Result, PAnsiChar(@Data[0]), Length(Data));
+  Position := Length(Data);
+end;
+
+procedure InvalidateBatteryData(var ASnapshot: TBleBatteryData);
+var
+  ExternalPower: TBleBatteryValue;
+begin
+  ASnapshot.LevelStatus.HasLevelPercent := False;
+  ASnapshot.LevelStatus.LevelPercent := 0;
+  ExternalPower := ASnapshot.EnergyStatus.ExternalSourcePowerWatts;
+  ASnapshot.EnergyStatus := Default(TBleBatteryEnergyStatus);
+  ASnapshot.EnergyStatus.ExternalSourcePowerWatts := ExternalPower;
+  ASnapshot.EnergyStatus.HasValue := ExternalPower.State <> bbvsAbsent;
+  ASnapshot.TimeStatus := Default(TBleBatteryTimeStatus);
+  ASnapshot.HealthStatus := Default(TBleBatteryHealthStatus);
+  ASnapshot.HealthInformation := Default(TBleBatteryHealthInformation);
+  ASnapshot.Information := Default(TBleBatteryInformation);
+  ASnapshot.ServiceDaysSince1970 := Default(TBleBatteryValue);
+  ASnapshot.ManufacturerName := Default(TBleBatteryString);
+  ASnapshot.ModelNumber := Default(TBleBatteryString);
+  ASnapshot.SerialNumber := Default(TBleBatteryString);
 end;
 
 constructor TBatteryRefreshOperation.Create(const ACancel: TLazBleOperationCancelEvent);
@@ -431,9 +548,11 @@ begin
       CharacteristicUuids[Kind], Characteristic) then Continue;
     Include(FAvailable, Kind);
     if not Characteristic.CanRead or
-      ((Kind in [bbcLevelStatus, bbcEnergyStatus, bbcTimeStatus, bbcHealthStatus]) and
+      ((Kind in [bbcLevelStatus, bbcEnergyStatus, bbcTimeStatus, bbcHealthStatus,
+          bbcServiceDate]) and
         not Characteristic.CanNotify) or
-      ((Kind in [bbcCriticalStatus, bbcHealthInformation]) and
+      ((Kind in [bbcCriticalStatus, bbcHealthInformation, bbcInformation,
+          bbcManufacturerName, bbcModelNumber, bbcSerialNumber]) and
         not Characteristic.CanIndicate) then
     begin
       SetProfileError(CharacteristicNames[Kind] + ': missing required GATT property');
@@ -447,7 +566,7 @@ begin
   if not (bbcLevel in FAvailable) then
     SetProfileError('Battery Level is missing')
   else if ((FAvailable * [bbcCriticalStatus, bbcEnergyStatus, bbcTimeStatus,
-      bbcHealthStatus]) <> []) and
+      bbcHealthStatus, bbcInformation, bbcServiceDate, bbcSerialNumber]) <> []) and
     not (bbcLevelStatus in FAvailable) then
     SetProfileError('Extended Battery characteristics require Battery Level Status')
   else if (bbcHealthInformation in FAvailable) and not (bbcHealthStatus in FAvailable) then
@@ -461,9 +580,10 @@ function TBleBatteryProfile.ApplyValue(const AKind: TBleBatteryCharacteristic;
 var
   Reader: TBatteryReader;
   Snapshot: TBleBatteryData;
-  Flags, Power, Additional: Cardinal;
+  Flags, Power, Additional, RawChemistry: Cardinal;
   NewLevel: Integer;
   Epoch: QWord;
+  Inserted: Boolean;
   Fault: TBleBatteryChargingFault;
 begin
   Reader := Default(TBatteryReader);
@@ -471,6 +591,7 @@ begin
   Reader.Valid := True;
   Snapshot := FData;
   NewLevel := FLevelPercent;
+  Inserted := False;
   Result := False;
   case AKind of
     bbcLevel:
@@ -484,6 +605,16 @@ begin
         Power := Reader.UInt(2);
         if (((Power shr 1) and 3) = 3) or
           (((Power shr 3) and 3) = 3) or (((Power shr 9) and 7) > 4) then Exit;
+        Inserted := Snapshot.LevelStatus.HasValue and
+          not Snapshot.LevelStatus.BatteryPresent and ((Power and 1) <> 0);
+        if Snapshot.LevelStatus.HasValue and
+          (Snapshot.LevelStatus.BatteryPresent <> ((Power and 1) <> 0)) then
+        begin
+          InvalidateBatteryData(Snapshot);
+          Snapshot.LevelStatus.HasAdditionalStatus := False;
+          Snapshot.LevelStatus.ServiceRequired := bbsrUnknown;
+          Snapshot.LevelStatus.BatteryFaultDetected := False;
+        end;
         with Snapshot.LevelStatus do
         begin
           HasValue := True;
@@ -586,13 +717,73 @@ begin
         end;
         if not Reader.Finished(Flags, 3) then Exit;
       end;
+    bbcInformation:
+      begin
+        Flags := Reader.UInt(2);
+        Power := Reader.UInt(1);
+        with Snapshot.Information do
+        begin
+          HasValue := True;
+          Replaceable := (Power and 1) <> 0;
+          Rechargeable := (Power and 2) <> 0;
+          if (Flags and 1) <> 0 then ManufactureDaysSince1970 := Reader.DateUTC;
+          if (Flags and 2) <> 0 then ExpirationDaysSince1970 := Reader.DateUTC;
+          if (Flags and 4) <> 0 then DesignedCapacityKWh := Reader.SFloat(False, False);
+          if (Flags and 8) <> 0 then LowEnergyKWh := Reader.SFloat(False, False);
+          if (Flags and 16) <> 0 then CriticalEnergyKWh := Reader.SFloat(False, False);
+          if (Flags and 32) <> 0 then
+          begin
+            RawChemistry := Reader.UInt(1);
+            if (RawChemistry > 13) and (RawChemistry <> 255) then Exit;
+            HasChemistry := True;
+            Chemistry := TBleBatteryChemistry(RawChemistry);
+          end;
+          if (Flags and 64) <> 0 then NominalVoltageVolts := Reader.SFloat(True);
+          if (Flags and 128) <> 0 then
+          begin
+            AggregationGroup := Reader.UInt(1);
+            if AggregationGroup = 255 then Exit;
+            HasAggregationGroup := True;
+          end;
+        end;
+        if not Reader.Finished(Flags, $FF) then Exit;
+      end;
+    bbcServiceDate:
+      begin
+        Snapshot.ServiceDaysSince1970 := Reader.DateUTC;
+        if not Reader.Finished(0, 0) then Exit;
+      end;
+    bbcManufacturerName:
+      begin
+        Snapshot.ManufacturerName.Value := Reader.Utf8Text;
+        Snapshot.ManufacturerName.HasValue := True;
+        if not Reader.Valid then Exit;
+      end;
+    bbcModelNumber:
+      begin
+        Snapshot.ModelNumber.Value := Reader.Utf8Text;
+        Snapshot.ModelNumber.HasValue := True;
+        if not Reader.Valid then Exit;
+      end;
+    bbcSerialNumber:
+      begin
+        Snapshot.SerialNumber.Value := Reader.Utf8Text;
+        Snapshot.SerialNumber.HasValue := True;
+        if not Reader.Valid then Exit;
+      end;
+  end;
+  if Snapshot.LevelStatus.HasValue and not Snapshot.LevelStatus.BatteryPresent then
+  begin
+    InvalidateBatteryData(Snapshot);
+    NewLevel := UnknownBatteryLevel;
   end;
   FData := Snapshot;
+  if Inserted then FRefreshNeeded := True;
   Epoch := FEpoch;
   if NewLevel <> FLevelPercent then
   begin
     FLevelPercent := NewLevel;
-    if Assigned(FOnLevelChanged) then
+    if (NewLevel <> UnknownBatteryLevel) and Assigned(FOnLevelChanged) then
       try FOnLevelChanged(Self, DeviceId, NewLevel);
       except LazBleReportCallbackException; end;
   end;
@@ -603,18 +794,41 @@ begin
 end;
 
 procedure TBleBatteryProfile.StartNextRead;
+var
+  Epoch: QWord;
 begin
   Inc(FIndex);
   while (FIndex <= Ord(High(TBleBatteryCharacteristic))) and
     not (TBleBatteryCharacteristic(FIndex) in FAvailable) do Inc(FIndex);
   if FIndex > Ord(High(TBleBatteryCharacteristic)) then
   begin
-    if FPhase = bpRefreshing then FinishRefresh(lbopSucceeded)
+    if FPhase = bpRefreshing then
+    begin
+      if FRefreshNeeded then
+      begin
+        FRefreshNeeded := False;
+        FIndex := -1;
+        StartNextRead;
+      end
+      else FinishRefresh(lbopSucceeded);
+    end
     else
     begin
       FPhase := bpReady;
+      Epoch := FEpoch;
       MarkReady;
+      if Epoch = FEpoch then RefreshIfNeeded;
     end;
+    Exit;
+  end;
+  { These values have no meaning while the battery is removed. Keep their
+    subscriptions so insertion and subsequent updates still work. }
+  if FData.LevelStatus.HasValue and not FData.LevelStatus.BatteryPresent and
+    (TBleBatteryCharacteristic(FIndex) in [bbcTimeStatus, bbcHealthStatus,
+      bbcHealthInformation, bbcInformation, bbcServiceDate, bbcManufacturerName,
+      bbcModelNumber, bbcSerialNumber]) then
+  begin
+    if FPhase = bpRefreshing then StartNextRead else SubscribeCurrent;
     Exit;
   end;
   FReadOperation := Session.ReadAsync(BatteryServiceUuid,
@@ -626,7 +840,6 @@ procedure TBleBatteryProfile.ReadCompleted(Sender: TObject);
 var
   Operation: IBleGattOperation;
   Kind: TBleBatteryCharacteristic;
-  Characteristic: TLazBleGattCharacteristic;
   Epoch: QWord;
 begin
   if not (FPhase in [bpReading, bpRefreshing]) or not Assigned(FReadOperation) then Exit;
@@ -656,6 +869,15 @@ begin
     else StartNextRead;
     Exit;
   end;
+  SubscribeCurrent;
+end;
+
+procedure TBleBatteryProfile.SubscribeCurrent;
+var
+  Kind: TBleBatteryCharacteristic;
+  Characteristic: TLazBleGattCharacteristic;
+begin
+  Kind := TBleBatteryCharacteristic(FIndex);
   Session.TryGetCharacteristic(BatteryServiceUuid, CharacteristicUuids[Kind], Characteristic);
   if (Kind = bbcLevel) and not Characteristic.CanNotify then
   begin
@@ -679,7 +901,8 @@ begin
     if Assigned(FSubscriptions[Kind]) and ((FSubscriptions[Kind] as TObject) = Sender) then
     begin
       if not ApplyValue(Kind, AValue) then
-        SetProfileError(CharacteristicNames[Kind] + ': invalid value', LazBleErrorInvalidProfileData);
+        SetProfileError(CharacteristicNames[Kind] + ': invalid value', LazBleErrorInvalidProfileData)
+      else RefreshIfNeeded;
       Exit;
     end;
 end;
@@ -730,8 +953,16 @@ begin
   FRefreshOperation := Result;
   FRefreshObject := Operation;
   FPhase := bpRefreshing;
+  FRefreshNeeded := False;
   FIndex := -1;
   StartNextRead;
+end;
+
+procedure TBleBatteryProfile.RefreshIfNeeded;
+var
+  Operation: IBleOperation;
+begin
+  if FRefreshNeeded and (FPhase = bpReady) then Operation := RefreshAsync;
 end;
 
 procedure TBleBatteryProfile.RefreshCancelled(Sender: TObject);
@@ -758,6 +989,7 @@ procedure TBleBatteryProfile.DoAttach;
 begin
   Inc(FEpoch);
   FData := Default(TBleBatteryData);
+  FRefreshNeeded := False;
   FAvailable := [];
   FLevelPercent := UnknownBatteryLevel;
   FDetachOperation := nil;
@@ -770,6 +1002,7 @@ procedure TBleBatteryProfile.DoDetach;
 begin
   Inc(FEpoch);
   FPhase := bpDetached;
+  FRefreshNeeded := False;
   if Assigned(FReadOperation) then
   begin
     FReadOperation.OnCompleted := nil;

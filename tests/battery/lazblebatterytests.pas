@@ -109,6 +109,12 @@ type
     procedure HealthInformationUsesIndicateAndTemperatureBounds;
     procedure HealthInformationRequiresHealthStatus;
     procedure InvalidHealthDoesNotPartiallyApply;
+    procedure BatteryInformationDecodesAllFields;
+    procedure ServiceDatePreservesUnknown;
+    procedure BatteryStringsAreUtf8AndMayBeEmpty;
+    procedure InvalidUtf8KeepsPreviousValue;
+    procedure RemovalInvalidatesAndInsertionRefreshes;
+    procedure AbsentBatteryStillConfiguresSubscriptions;
   end;
 
 implementation
@@ -712,6 +718,114 @@ begin
   AssertEquals(Ord(lbgpsError), Ord(FProfile.State));
   AssertEquals(85.0, FProfile.Data.HealthStatus.SummaryPercent.Value);
   AssertEquals(1.0, FProfile.Data.HealthStatus.CycleCount.Value);
+end;
+
+procedure TLazBleBatteryTest.BatteryInformationDecodesAllFields;
+begin
+  PrepareExtension(BatteryInformationCharacteristicUuid, True);
+  CompleteRead([$FF, 0, 3, $20, $4E, 0, 8, $52, 0,
+    $7D, $E0, 1, $F0, 5, $E0, 5, $25, $F0, 0]);
+  CompleteSubscription(43);
+  AssertTrue(FProfile.Ready);
+  AssertTrue(FProfile.Data.Information.Replaceable);
+  AssertTrue(FProfile.Data.Information.Rechargeable);
+  AssertEquals(20000.0, FProfile.Data.Information.ManufactureDaysSince1970.Value);
+  AssertEquals(21000.0, FProfile.Data.Information.ExpirationDaysSince1970.Value);
+  AssertEquals(1.25, FProfile.Data.Information.DesignedCapacityKWh.Value, 0.00001);
+  AssertEquals(0.1, FProfile.Data.Information.LowEnergyKWh.Value, 0.00001);
+  AssertEquals(0.05, FProfile.Data.Information.CriticalEnergyKWh.Value, 0.00001);
+  AssertEquals(Ord(bbchLithiumIon), Ord(FProfile.Data.Information.Chemistry));
+  AssertEquals(3.7, FProfile.Data.Information.NominalVoltageVolts.Value, 0.00001);
+  AssertTrue(FProfile.Data.Information.HasAggregationGroup);
+end;
+
+procedure TLazBleBatteryTest.ServiceDatePreservesUnknown;
+begin
+  PrepareExtension(EstimatedServiceDateCharacteristicUuid);
+  CompleteRead([0, 0, 0]); CompleteSubscription(43);
+  AssertEquals(Ord(bbvsUnknown), Ord(FProfile.Data.ServiceDaysSince1970.State));
+  EmitEvent(lbekNotification, InvalidBleOperationId, 43, [1, 0, 0]);
+  AssertEquals(1.0, FProfile.Data.ServiceDaysSince1970.Value);
+  EmitEvent(lbekNotification, InvalidBleOperationId, 43, [$FF, $FF, $FF]);
+  AssertEquals(Ord(lbgpsError), Ord(FProfile.State));
+  AssertEquals(1.0, FProfile.Data.ServiceDaysSince1970.Value);
+end;
+
+procedure TLazBleBatteryTest.BatteryStringsAreUtf8AndMayBeEmpty;
+begin
+  PrepareExtension(BatteryManufacturerNameCharacteristicUuid, True);
+  CompleteRead([$41, $C3, $A9]); CompleteSubscription(43);
+  AssertTrue(FProfile.Data.ManufacturerName.HasValue);
+  AssertEquals(UTF8String(#$41#$C3#$A9), FProfile.Data.ManufacturerName.Value);
+  EmitEvent(lbekNotification, InvalidBleOperationId, 43, []);
+  AssertTrue(FProfile.Data.ManufacturerName.HasValue);
+  AssertEquals('', FProfile.Data.ManufacturerName.Value);
+end;
+
+procedure TLazBleBatteryTest.InvalidUtf8KeepsPreviousValue;
+begin
+  PrepareExtension(BatteryManufacturerNameCharacteristicUuid, True);
+  CompleteRead([$41]); CompleteSubscription(43);
+  EmitEvent(lbekNotification, InvalidBleOperationId, 43, [$C0, $80]);
+  AssertEquals(Ord(lbgpsError), Ord(FProfile.State));
+  AssertEquals('A', FProfile.Data.ManufacturerName.Value);
+end;
+
+procedure TLazBleBatteryTest.RemovalInvalidatesAndInsertionRefreshes;
+begin
+  AddCharacteristic(BatteryLevelStatusCharacteristicUuid, True, False);
+  AddCharacteristic(BatteryEnergyStatusCharacteristicUuid, True, False);
+  AddCharacteristic(BatteryManufacturerNameCharacteristicUuid, False, True);
+  CreateFixture;
+  FProfile.AttachProfile;
+  CompleteRead([75]); CompleteSubscription(41);
+  CompleteRead([2, 1, 0, 75]); CompleteSubscription(42);
+  CompleteRead([9, 5, 0, 10, 0]); CompleteSubscription(43);
+  CompleteRead([$41]); CompleteSubscription(44);
+  EmitEvent(lbekNotification, InvalidBleOperationId, 42, [0, 0, 0]);
+  AssertFalse(FProfile.Data.LevelStatus.BatteryPresent);
+  AssertFalse(FProfile.Data.LevelStatus.HasLevelPercent);
+  AssertEquals(UnknownBatteryLevel, FProfile.LevelPercent);
+  AssertFalse(FProfile.Data.ManufacturerName.HasValue);
+  AssertEquals(Ord(bbvsAbsent), Ord(FProfile.Data.EnergyStatus.AvailableCapacityKWh.State));
+  AssertEquals(5.0, FProfile.Data.EnergyStatus.ExternalSourcePowerWatts.Value);
+  EmitEvent(lbekNotification, InvalidBleOperationId, 44, [$42]);
+  AssertFalse(FProfile.Data.ManufacturerName.HasValue);
+  EmitEvent(lbekNotification, InvalidBleOperationId, 42, [0, 1, 0]);
+  AssertEquals(Ord(lbckRead), Ord(FBackendObject.Commands[FBackendObject.CommandCount - 1].Kind));
+  CompleteRead([55]);
+  CompleteRead([0, 1, 0]);
+  CompleteRead([1, 4, 0]);
+  CompleteRead([$43]);
+  AssertTrue(FProfile.Ready);
+  AssertEquals(55, FProfile.LevelPercent);
+  AssertEquals('C', FProfile.Data.ManufacturerName.Value);
+  AssertEquals(Ord(bbvsAbsent), Ord(FProfile.Data.EnergyStatus.AvailableCapacityKWh.State));
+end;
+
+procedure TLazBleBatteryTest.AbsentBatteryStillConfiguresSubscriptions;
+begin
+  AddCharacteristic(BatteryLevelStatusCharacteristicUuid, True, False);
+  AddCharacteristic(BatteryHealthStatusCharacteristicUuid, True, False);
+  AddCharacteristic(BatteryManufacturerNameCharacteristicUuid, False, True);
+  CreateFixture;
+  FProfile.AttachProfile;
+  CompleteRead([0]); CompleteSubscription(41);
+  CompleteRead([0, 0, 0]); CompleteSubscription(42);
+  CompleteSubscription(43);
+  CompleteSubscription(44);
+  AssertTrue(FProfile.Ready);
+  AssertEquals(UnknownBatteryLevel, FProfile.LevelPercent);
+  AssertFalse(FProfile.Data.HealthStatus.HasValue);
+  AssertFalse(FProfile.Data.ManufacturerName.HasValue);
+  EmitEvent(lbekNotification, InvalidBleOperationId, 42, [0, 1, 0]);
+  CompleteRead([55]);
+  CompleteRead([0, 1, 0]);
+  CompleteRead([1, 95]);
+  CompleteRead([$41]);
+  AssertEquals(55, FProfile.LevelPercent);
+  AssertEquals(95.0, FProfile.Data.HealthStatus.SummaryPercent.Value);
+  AssertEquals('A', FProfile.Data.ManufacturerName.Value);
 end;
 
 initialization
