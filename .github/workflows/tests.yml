@@ -2,12 +2,12 @@ name: Tests
 
 on:
   push:
-    branches: [master]
+    branches: ['**']
   pull_request:
   workflow_dispatch:
     inputs:
       binding_release:
-        description: 'SimpleDelphiBLE release tag (empty: project default)'
+        description: 'SimpleDelphiBLE release tag (empty: stable on master, latest on other branches)'
         type: string
         required: false
         default: ''
@@ -21,7 +21,6 @@ concurrency:
 
 env:
   LAZARUS_VERSION: '4.8'
-  SIMPLEDELPHIBLE_RELEASE: 'v1.4.0'
 
 jobs:
   binding:
@@ -37,12 +36,21 @@ jobs:
         id: release
         env:
           GH_TOKEN: ${{ github.token }}
-          BINDING_RELEASE: ${{ inputs.binding_release || env.SIMPLEDELPHIBLE_RELEASE }}
+          BINDING_RELEASE: ${{ inputs.binding_release }}
         run: |
           set -euo pipefail
-          endpoint="repos/simpleble/simpledelphible/releases/tags/$BINDING_RELEASE"
+          if [[ -n "$BINDING_RELEASE" ]]; then
+            endpoint="repos/simpleble/simpledelphible/releases/tags/$BINDING_RELEASE"
+          elif [[ "${GITHUB_HEAD_REF:-$GITHUB_REF_NAME}" == master ]]; then
+            endpoint='repos/simpleble/simpledelphible/releases/latest'
+          else
+            endpoint='repos/simpleble/simpledelphible/releases?per_page=100'
+          fi
           gh api "$endpoint" --jq '
-            . as $release |
+            (if type == "array" then
+              map(select(.draft == false)) | max_by(.published_at)
+            else . end
+              // error("No published SimpleDelphiBLE release found")) as $release |
             (($release.body | capture("simpleble/simpleble@(?<sha>[0-9a-f]{40})").sha)
               // error("Release description does not identify the SimpleBLE source commit")) as $sha |
             (first($release.assets[] |
