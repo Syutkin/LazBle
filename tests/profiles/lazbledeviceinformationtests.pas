@@ -183,7 +183,9 @@ begin
   AssertTrue(FProfile.Data.PresentFields = []);
   CompleteRead([$31, $2E, $30]);
   AssertTrue(FProfile.Ready);
-  AssertEquals(UTF8String(#$D0#$A2), FProfile.Data.ManufacturerName);
+  AssertEquals(2, Length(FProfile.Data.ManufacturerName));
+  AssertEquals($D0, Ord(FProfile.Data.ManufacturerName[1]));
+  AssertEquals($A2, Ord(FProfile.Data.ManufacturerName[2]));
   AssertEquals('1.0', FProfile.Data.FirmwareRevision);
   AssertTrue(FProfile.Data.PresentFields = [dicManufacturerName, dicFirmwareRevision]);
   AssertEquals(4, FNative.CommandCount);
