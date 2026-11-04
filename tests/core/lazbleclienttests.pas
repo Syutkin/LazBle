@@ -546,7 +546,7 @@ var
   Diagnostic: TLazBleDiagnosticInfo;
 begin
   AssertEquals('LazBle', TLazBle.Info.Name);
-  AssertEquals('2.0.0', TLazBle.Info.Version);
+  AssertEquals('2.1.0', TLazBle.Info.Version);
   AssertTrue(TLazBle.Info.About <> '');
 
   Diagnostic := FBle.DiagnosticInfo;

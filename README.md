@@ -36,9 +36,9 @@ The main types are:
 ## Dependencies and native libraries
 
 Use Free Pascal 3.2.2 or later and, for LCL components, Lazarus. LazBle
-requires the SimpleDelphiBLE 1.3.1 API. Use the official
-[1.3.1-dev.25 distribution](https://github.com/simpleble/simpledelphible/releases/tag/v1.3.1-dev.25)
-supplied separately from LazBle.
+requires [SimpleDelphiBLE 1.4.0](https://github.com/simpleble/simpledelphible/releases/tag/v1.4.0),
+supplied separately from LazBle. Use its sources and native runtime from the
+same distribution.
 
 Extract it to a convenient directory. The commands below use this layout:
 

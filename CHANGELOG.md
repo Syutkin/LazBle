@@ -2,9 +2,13 @@
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-11-04
+
 Official SimpleDelphiBLE package integration, configurable runtime loading,
 GATT descriptor and indication support, an expanded Battery profile, and
 Device Information Service support.
+
+See the [release notes](docs/releases/2.1.0.md) for upgrading from 2.0.0.
 
 ### Added
 
@@ -20,7 +24,7 @@ Device Information Service support.
 
 ### Changed
 
-- Requires the SimpleDelphiBLE 1.3.1 API and official Lazarus runtime package.
+- Requires SimpleDelphiBLE 1.4.0 and its official Lazarus runtime package.
 - One native SimpleCBLE library, loaded on demand from the executable directory, system search path, or `TLazBle.LibraryPath`.
 - Missing native runtime is reported as an operation failure; compilation and application startup do not require it.
 - Subscriptions validate the discovered characteristic and its Notify/Indicate capability.
@@ -97,6 +101,7 @@ See the [release notes](docs/releases/2.0.0.md) for upgrading from 1.0.0.
 
 - Target SimpleBlePascal and SimpleCBLE 1.1.0.
 
-[Unreleased]: https://github.com/Syutkin/LazBle/compare/v2.0.0...HEAD
+[Unreleased]: https://github.com/Syutkin/LazBle/compare/v2.1.0...HEAD
+[2.1.0]: https://github.com/Syutkin/LazBle/releases/tag/v2.1.0
 [2.0.0]: https://github.com/Syutkin/LazBle/releases/tag/v2.0.0
 [1.0.0]: https://github.com/Syutkin/LazBle/releases/tag/v1.0.0

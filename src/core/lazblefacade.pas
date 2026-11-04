@@ -60,7 +60,7 @@ type
       Keep Version aligned with core/LCL/design package metadata. }
     const Info: TLazBleInfo = (
       Name: 'LazBle';
-      Version: '2.0.0';
+      Version: '2.1.0';
       About: 'Asynchronous BLE and GATT client library for Free Pascal'
     );
     constructor Create; overload;
